@@ -30,6 +30,7 @@ import os
 import re
 import struct
 import sys
+import threading
 import urllib.parse
 import urllib.request
 import wave
@@ -43,6 +44,9 @@ WS = re.compile(r"[ \t\r\f\v]+")
 BLANK = re.compile(r"\n{3,}")
 CHUNK_TARGET = 3500  # characters per TTS request
 
+# page chrome that survives tag-stripping and would otherwise be read aloud
+_CHROME = re.compile(r"(?i)^(skip to (main )?(content|footer)|jump to content|toggle navigation|menu|search|search for:)$")
+
 
 def _text_of(xhtml: str) -> str:
     """Tags out, readable text back. Block tags become newlines."""
@@ -53,7 +57,7 @@ def _text_of(xhtml: str) -> str:
     s = html.unescape(s)
     s = WS.sub(" ", s)
     lines = [ln.strip() for ln in s.split("\n")]
-    s = "\n".join(ln for ln in lines if ln)
+    s = "\n".join(ln for ln in lines if ln and not _CHROME.match(ln))
     return BLANK.sub("\n\n", s).strip()
 
 
@@ -156,7 +160,7 @@ def _clean_fragment(frag: str) -> str:
     s = html.unescape(s)
     s = WS.sub(" ", s)
     lines = [ln.strip() for ln in s.split("\n")]
-    s = "\n".join(ln for ln in lines if ln)
+    s = "\n".join(ln for ln in lines if ln and not _CHROME.match(ln))
     return BLANK.sub("\n\n", s).strip()
 
 
@@ -233,18 +237,23 @@ def voices_azure(key: str, region: str):
     for v in data:
         if "Neural" not in v.get("VoiceType", ""):
             continue
+        tag = v.get("VoiceTag") or {}
+        pers = tag.get("VoicePersonalities") or []
+        local = v.get("LocalName") or v.get("ShortName", "")
+        locale = v.get("Locale", "")
+        gender = v.get("Gender", "")
+        if pers:
+            label = "%s - %s (%s, %s)" % (local, pers[0], locale, gender)
+        else:
+            label = "%s (%s, %s)" % (local, locale, gender)
         out.append({
             "id": v.get("ShortName", ""),
-            "label": "%s %s (%s, %s)" % (
-                v.get("LocalName", v.get("ShortName", "")),
-                "- %s" % v.get("VoiceTag", {}).get("VoicePersonalities", [""])[0] if v.get("VoiceTag", {}).get("VoicePersonalities") else "",
-                v.get("Locale", ""),
-                v.get("Gender", ""),
-            ).replace(" ()", ""),
-            "locale": v.get("Locale", ""),
-            "gender": v.get("Gender", ""),
+            "label": label,
+            "locale": locale,
+            "gender": gender,
         })
-    out.sort(key=lambda x: (x["locale"], x["id"]))
+    # English first (that is what gets read here), then everything else; both alphabetical
+    out.sort(key=lambda x: (0 if x["locale"].startswith("en") else 1, x["locale"], x["id"]))
     return out
 
 
@@ -334,6 +343,21 @@ PROVIDERS = {
 
 # --------------------------------------------------------------------- storage
 
+# render progress, so a long chapter shows movement instead of a hung button
+PROGRESS = {}
+PROGRESS_LOCK = threading.Lock()
+
+
+def _prog_set(book_id, idx, **kw):
+    with PROGRESS_LOCK:
+        PROGRESS.setdefault((book_id, idx), {}).update(kw)
+
+
+def _prog_get(book_id, idx):
+    with PROGRESS_LOCK:
+        return dict(PROGRESS.get((book_id, idx), {}))
+
+
 def book_dir(root: str, book_id: str) -> str:
     return os.path.join(root, book_id)
 
@@ -383,6 +407,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if u.path.startswith("/audio/"):
             return self._serve_audio(u.path[len("/audio/"):])
+        if u.path == "/api/progress":
+            q = urllib.parse.parse_qs(u.query)
+            return self._json({"ok": True, **_prog_get(q.get("book", [""])[0], int(q.get("chapter", ["0"])[0]))})
         if u.path == "/api/books":
             books = []
             for bid in os.listdir(self.root):
@@ -517,17 +544,27 @@ class Handler(BaseHTTPRequestHandler):
             synth_local(ch["text"], out)
         else:
             parts = chunk_text(ch["text"])
-            blob = b""
-            for p in parts:
-                if provider == "azure":
-                    blob += synth_azure(p, voice, key, body.get("region", "eastus"), body.get("rate", "0%"))
-                elif provider == "minimax":
-                    blob += synth_minimax(p, voice, key, body.get("group", ""),
-                                          body.get("model", "speech-02-hd"), float(body.get("speed", 1.0)))
-                else:
-                    return self._err("unknown provider")
-            with open(out, "wb") as f:
-                f.write(blob)
+            tmp = out + ".part"
+            _prog_set(book_id, idx, done=0, total=len(parts), error=None)
+            try:
+                with open(tmp, "wb") as f:
+                    for n, p in enumerate(parts, 1):
+                        if provider == "azure":
+                            piece = synth_azure(p, voice, key, body.get("region", "eastus"), body.get("rate", "0%"))
+                        elif provider == "minimax":
+                            piece = synth_minimax(p, voice, key, body.get("group", ""),
+                                                  body.get("model", "speech-02-hd"), float(body.get("speed", 1.0)))
+                        else:
+                            return self._err("unknown provider")
+                        f.write(piece)
+                        f.flush()
+                        _prog_set(book_id, idx, done=n)
+                os.replace(tmp, out)
+            except Exception as e:
+                _prog_set(book_id, idx, error="%s: %s" % (type(e).__name__, e))
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+                raise
         return self._json({"ok": True, "cached": False, "url": "/audio/%s/audio/%s" % (book_id, os.path.basename(out)),
                            "bytes": os.path.getsize(out)})
 
@@ -558,4 +595,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

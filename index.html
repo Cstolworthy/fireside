@@ -82,6 +82,7 @@
       </div>
 
       <label>Voice</label>
+      <input id="vfilter" placeholder="filter, e.g. en-US or Jenny" autocomplete="off">
       <select id="voice"><option value="tone">Offline tone (no speech)</option></select>
       <div class="row" style="margin-top:8px">
         <button id="loadvoices">Load voices</button>
@@ -198,6 +199,13 @@ function renderList() {
 async function play(i, btn) {
   $('#err').textContent = '';
   btn.disabled = true; btn.textContent = '…';
+  // long chapters render in chunks; show the count instead of a dead button
+  const tick = setInterval(async () => {
+    try {
+      const s = await (await fetch('/api/progress?book=' + encodeURIComponent(book.id) + '&chapter=' + i)).json();
+      if (s.total) btn.textContent = s.done + '/' + s.total;
+    } catch (_) {}
+  }, 1500);
   try {
     const body = {
       bookId: book.id, chapter: i, provider: $('#provider').value, voice: $('#voice').value,
@@ -215,6 +223,7 @@ async function play(i, btn) {
     document.querySelectorAll('.ch').forEach(e => e.classList.toggle('playing', +e.dataset.i === i));
     markResume();
   } catch (e) { $('#err').textContent = String(e); btn.textContent = 'Play'; btn.disabled = false; }
+  finally { clearInterval(tick); }
 }
 
 // resume: remember book + chapter + position
@@ -232,6 +241,21 @@ $('#audio').addEventListener('loadedmetadata', () => {
   if (p && p.chapter === cur && p.t > 3) $('#audio').currentTime = p.t;
 });
 
+function applyVoiceFilter() {
+  const q = $('#vfilter').value.trim().toLowerCase();
+  const sel = $('#voice');
+  [...sel.options].forEach(o => {
+    const hit = !q || (o.value + ' ' + o.textContent).toLowerCase().includes(q);
+    o.hidden = !hit; o.disabled = !hit;
+  });
+  const cur = sel.selectedOptions[0];
+  if (!cur || cur.disabled) {
+    const first = [...sel.options].find(o => !o.disabled);
+    if (first) sel.value = first.value;
+  }
+}
+$('#vfilter').oninput = applyVoiceFilter;
+
 $('#loadvoices').onclick = async () => {
   $('#err').textContent = '';
   try {
@@ -242,6 +266,8 @@ $('#loadvoices').onclick = async () => {
     const sel = $('#voice'); sel.innerHTML = '';
     d.voices.forEach(v => { const o = document.createElement('option'); o.value = v.id; o.textContent = v.label || v.id; sel.append(o); });
     const want = saved.voice; if (want) [...sel.options].forEach(o => { if (o.value === want) sel.value = want; });
+    $('#vfilter').value = '';
+    applyVoiceFilter();
   } catch (e) { $('#err').textContent = String(e); }
 };
 
@@ -250,4 +276,5 @@ if (saved.voice) setTimeout(() => { const s = $('#voice'); if ([...s.options].so
 </script>
 </body>
 </html>
+
 
