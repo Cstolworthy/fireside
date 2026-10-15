@@ -415,6 +415,84 @@ def load_book(root: str, book_id: str) -> dict:
         return json.load(f)
 
 
+def chapter_path(root: str, book_id: str, provider: str, voice: str, model: str, idx: int) -> str:
+    """Where one chapter's audio for one voice lives. Same rule the player uses."""
+    sig = voice_sig(provider, voice, model)
+    return os.path.join(book_dir(root, book_id), "audio", sig, "ch%03d%s" % (idx, PROVIDERS[provider]["ext"]))
+
+
+def render_chapter_file(root: str, book_id: str, book: dict, idx: int, provider: str, body: dict) -> str:
+    """Synthesize one chapter to its cached file, or return it if it is already there.
+
+    One code path so the single-chapter Play button and Render-all cannot drift
+    apart: both end up with the same bytes in the same file.
+    """
+    ch = book["chapters"][idx]
+    out = chapter_path(root, book_id, provider, body.get("voice", ""), body.get("model", ""), idx)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    if body.get("force") and os.path.exists(out):
+        os.remove(out)
+    if os.path.exists(out):
+        return out
+    if provider == "local":
+        synth_local(ch["text"], out)
+        return out
+    parts = chunk_text(ch["text"])
+    tmp = out + ".part"
+    _prog_set(book_id, idx, done=0, total=len(parts), error=None)
+    try:
+        with open(tmp, "wb") as f:
+            for n, p in enumerate(parts, 1):
+                if provider == "azure":
+                    piece = synth_azure(p, body.get("voice", ""), body.get("key", ""),
+                                        body.get("region", "eastus"), body.get("rate", "0%"))
+                elif provider == "minimax":
+                    piece = synth_minimax(p, body.get("voice", ""), body.get("key", ""), body.get("group", ""),
+                                          body.get("model") or "speech-02-hd", float(body.get("speed", 1.0) or 1.0))
+                else:
+                    raise ValueError("unknown provider")
+                f.write(piece)
+                f.flush()
+                _prog_set(book_id, idx, done=n)
+        os.replace(tmp, out)
+    except Exception as e:
+        _prog_set(book_id, idx, error="%s: %s" % (type(e).__name__, e))
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    return out
+
+
+# Whole-book renders run in the background and report on chapter index -1, so a
+# long book does not hold one HTTP request open for ten minutes. One at a time
+# per book; a second click joins the run instead of starting a rival one.
+RENDER_RUNNING = set()
+RENDER_GUARD = threading.Lock()
+
+
+def _render_all_worker(root: str, book_id: str, provider: str, body: dict) -> None:
+    try:
+        book = load_book(root, book_id)
+        n = len(book["chapters"])
+        _prog_set(book_id, -1, done=0, total=n, current=0, error=None, running=True)
+        for i in range(n):
+            _prog_set(book_id, -1, current=i, error=None)
+            render_chapter_file(root, book_id, book, i, provider, body)
+            _prog_set(book_id, -1, done=i + 1)
+        _prog_set(book_id, -1, current=None, running=False, done=n)
+    except Exception as e:
+        _prog_set(book_id, -1, running=False, error="%s: %s" % (type(e).__name__, e))
+    finally:
+        with RENDER_GUARD:
+            RENDER_RUNNING.discard(book_id)
+
+
+def _title_slug(title: str) -> str:
+    s = re.sub(r"[^A-Za-z0-9._ -]+", "", title or "book").strip()
+    s = re.sub(r"\s+", "_", s)
+    return s[:60] or "book"
+
+
 # ---------------------------------------------------------------------- server
 
 class Handler(BaseHTTPRequestHandler):
@@ -459,6 +537,12 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/progress":
             q = urllib.parse.parse_qs(u.query)
             return self._json({"ok": True, **_prog_get(q.get("book", [""])[0], int(q.get("chapter", ["0"])[0]))})
+        if u.path == "/api/rendered":
+            q = urllib.parse.parse_qs(u.query)
+            return self._rendered(q)
+        if u.path == "/api/save":
+            q = urllib.parse.parse_qs(u.query)
+            return self._save(q)
         if u.path == "/api/book":
             q = urllib.parse.parse_qs(u.query)
             bid = (q.get("id", [""])[0])
@@ -534,6 +618,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._voices()
             if u.path == "/api/render":
                 return self._render()
+            if u.path == "/api/render-all":
+                return self._render_all()
             if u.path == "/api/say":
                 return self._say()
         except Exception as e:
@@ -649,50 +735,116 @@ class Handler(BaseHTTPRequestHandler):
         book_id = body["bookId"]
         idx = int(body["chapter"])
         provider = body.get("provider", "local")
-        key = body.get("key", "")
-        voice = body.get("voice", "")
+        if provider not in PROVIDERS:
+            return self._err("unknown provider")
         book = load_book(self.root, book_id)
         if idx < 0 or idx >= len(book["chapters"]):
             return self._err("chapter out of range")
-        ch = book["chapters"][idx]
+        out = chapter_path(self.root, book_id, provider, body.get("voice", ""),
+                           body.get("model", ""), idx)
+        rel = os.path.relpath(out, self.root).replace(os.sep, "/")
+        cached = os.path.exists(out)
+        render_chapter_file(self.root, book_id, book, idx, provider, body)
+        return self._json({"ok": True, "cached": cached, "url": "/audio/" + rel,
+                           "voice": body.get("voice", ""), "bytes": os.path.getsize(out)})
+
+    def _render_all(self):
+        """Kick off a whole-book render in the background; poll /api/progress?chapter=-1."""
+        body = json.loads(self._body() or b"{}")
+        book_id = body["bookId"]
+        provider = body.get("provider", "local")
+        if provider not in PROVIDERS:
+            return self._err("unknown provider")
+        if provider != "local" and not body.get("key"):
+            return self._err("need a key for %s" % provider)
+        book = load_book(self.root, book_id)
+        with RENDER_GUARD:
+            if book_id in RENDER_RUNNING:
+                return self._json({"ok": True, "already": True, "total": len(book["chapters"])})
+            RENDER_RUNNING.add(book_id)
+        _prog_set(book_id, -1, done=0, total=len(book["chapters"]), current=0, error=None, running=True)
+        threading.Thread(target=_render_all_worker, args=(self.root, book_id, provider, body),
+                         daemon=True).start()
+        return self._json({"ok": True, "total": len(book["chapters"])})
+
+    def _rendered(self, q):
+        """How much of this book already exists in the chosen voice."""
+        bid = q.get("id", [""])[0]
+        provider = q.get("provider", ["local"])[0]
+        if provider not in PROVIDERS:
+            return self._err("unknown provider")
+        try:
+            book = load_book(self.root, bid)
+        except Exception:
+            return self._err("no such book", 404)
+        present = [i for i in range(len(book["chapters"]))
+                   if os.path.isfile(chapter_path(self.root, bid, provider, q.get("voice", [""])[0],
+                                                  q.get("model", [""])[0], i))]
+        return self._json({"ok": True, "total": len(book["chapters"]), "done": len(present),
+                           "have": present,
+                           "sig": voice_sig(provider, q.get("voice", [""])[0], q.get("model", [""])[0])})
+
+    def _save(self, q):
+        """Hand back what has been rendered: as=mp3 stitches the chapters into one
+        file, as=zip gives the per-chapter files. Built once, then cached."""
+        bid = q.get("id", [""])[0]
+        provider = q.get("provider", ["local"])[0]
+        if provider not in PROVIDERS:
+            return self._err("unknown provider")
+        try:
+            book = load_book(self.root, bid)
+        except Exception:
+            return self._err("no such book", 404)
+        voice, model = q.get("voice", [""])[0], q.get("model", [""])[0]
         ext = PROVIDERS[provider]["ext"]
-        sig = voice_sig(provider, voice, body.get("model", ""))
-        adir = os.path.join(book_dir(self.root, book_id), "audio", sig)
-        os.makedirs(adir, exist_ok=True)
-        out = os.path.join(adir, "ch%03d%s" % (idx, ext))
-        rel = "%s/audio/%s/%s" % (book_id, sig, os.path.basename(out))
-        if body.get("force") and os.path.exists(out):
-            os.remove(out)
-        if os.path.exists(out):
-            return self._json({"ok": True, "cached": True, "url": "/audio/" + rel,
-                               "voice": voice, "bytes": os.path.getsize(out)})
-        if provider == "local":
-            synth_local(ch["text"], out)
-        else:
-            parts = chunk_text(ch["text"])
-            tmp = out + ".part"
-            _prog_set(book_id, idx, done=0, total=len(parts), error=None)
-            try:
-                with open(tmp, "wb") as f:
-                    for n, p in enumerate(parts, 1):
-                        if provider == "azure":
-                            piece = synth_azure(p, voice, key, body.get("region", "eastus"), body.get("rate", "0%"))
-                        elif provider == "minimax":
-                            piece = synth_minimax(p, voice, key, body.get("group", ""),
-                                                  body.get("model", "speech-02-hd"), float(body.get("speed", 1.0)))
-                        else:
-                            return self._err("unknown provider")
-                        f.write(piece)
-                        f.flush()
-                        _prog_set(book_id, idx, done=n)
+        present = [(i, chapter_path(self.root, bid, provider, voice, model, i))
+                   for i in range(len(book["chapters"]))
+                   if os.path.isfile(chapter_path(self.root, bid, provider, voice, model, i))]
+        if not present:
+            return self._err("nothing rendered in this voice yet", 404)
+        want = (q.get("as", ["mp3"])[0] or "mp3").lower()
+        sigdir = os.path.join(book_dir(self.root, bid), "audio", voice_sig(provider, voice, model))
+        title = _title_slug(book["title"])
+        if want == "zip":
+            out = os.path.join(sigdir, "_book.zip")
+            stale = (not os.path.isfile(out)) or any(os.path.getmtime(p) > os.path.getmtime(out)
+                                                     for _, p in present)
+            if stale:
+                tmp = out + ".part"
+                with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
+                    for i, p in present:
+                        z.write(p, "%s/ch%03d%s" % (title, i + 1, ext))
                 os.replace(tmp, out)
-            except Exception as e:
-                _prog_set(book_id, idx, error="%s: %s" % (type(e).__name__, e))
-                if os.path.exists(tmp):
-                    os.remove(tmp)
-                raise
-        return self._json({"ok": True, "cached": False, "url": "/audio/" + rel,
-                           "voice": voice, "bytes": os.path.getsize(out)})
+            return self._send_download(out, "application/zip", title + ".zip")
+        out = os.path.join(sigdir, "_book" + ext)
+        stale = (not os.path.isfile(out)) or any(os.path.getmtime(p) > os.path.getmtime(out)
+                                                 for _, p in present)
+        if stale:
+            tmp = out + ".part"
+            with open(tmp, "wb") as w:
+                for _, p in present:
+                    with open(p, "rb") as f:
+                        while True:
+                            b = f.read(1 << 20)
+                            if not b:
+                                break
+                            w.write(b)
+            os.replace(tmp, out)
+        return self._send_download(out, PROVIDERS[provider]["mime"], title + ext)
+
+    def _send_download(self, path, mime, name):
+        size = os.path.getsize(path)
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Disposition", 'attachment; filename="%s"' % name.replace('"', ""))
+        self.send_header("Content-Length", str(size))
+        self.end_headers()
+        with open(path, "rb") as f:
+            while True:
+                b = f.read(1 << 20)
+                if not b:
+                    break
+                self.wfile.write(b)
 
 
 def main():

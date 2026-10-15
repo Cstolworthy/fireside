@@ -56,7 +56,7 @@
 <body>
 <header>
   <h1>reader</h1>
-  <p>Drop an EPUB or paste a story link, pick a voice, get audio you can pause and resume.</p>
+  <p>Drop an EPUB or paste a story link, pick a voice, get audio you can pause, resume, and keep.</p>
 </header>
 <main>
   <section>
@@ -117,6 +117,12 @@
     <div id="view-read">
       <div class="panel" style="min-height:120px">
         <div id="empty" class="hint">No book loaded yet.</div>
+        <div id="booktools" class="row" style="display:none;margin-bottom:9px">
+          <button id="renderall" style="flex:1.4">Render all chapters</button>
+          <button id="saveone">Save one file</button>
+          <button id="savezip">Save zip</button>
+        </div>
+        <div id="renderinfo" class="hint" style="margin:0 0 10px"></div>
         <div id="chapters"></div>
       </div>
     </div>
@@ -283,6 +289,7 @@ async function loadUrl() {
 
 function renderList() {
   $('#empty').style.display = book ? 'none' : 'block';
+  $('#booktools').style.display = book ? 'flex' : 'none';
   const box = $('#chapters'); box.innerHTML = '';
   if (!book) return;
   book.chapters.forEach(c => {
@@ -293,7 +300,75 @@ function renderList() {
     b.onclick = () => play(c.i, b);
     row.append(n, t, b); box.append(row);
   });
+  refreshRendered();
 }
+
+// ---------------------------------------------------------------- render all + save
+async function refreshRendered() {
+  if (!book) return;
+  try {
+    const q = 'id=' + encodeURIComponent(book.id)
+      + '&provider=' + encodeURIComponent($('#provider').value)
+      + '&voice=' + encodeURIComponent($('#voice').value);
+    const d = await (await fetch('/api/rendered?' + q)).json();
+    if (!d.ok) return;
+    const full = d.done >= d.total && d.total > 0;
+    $('#saveone').disabled = d.done === 0;
+    $('#savezip').disabled = d.done === 0;
+    $('#renderall').disabled = full;
+    $('#renderinfo').textContent = d.done
+      ? d.done + ' of ' + d.total + ' chapters rendered in ' + voiceLabel()
+        + (full ? '  ·  ready to save' : '  ·  Render all to finish the whole book')
+      : 'Nothing rendered in ' + voiceLabel() + ' yet.';
+  } catch (_) {}
+}
+$('#provider').addEventListener('change', refreshRendered);
+$('#voice').addEventListener('change', refreshRendered);
+
+$('#renderall').onclick = async () => {
+  if (!book) return;
+  $('#err').textContent = '';
+  $('#renderall').disabled = true;
+  const vl = voiceLabel();
+  busy('Rendering all chapters in ' + vl + '\u2026');
+  const body = {
+    bookId: book.id, provider: $('#provider').value, voice: $('#voice').value,
+    key: $('#key').value, region: $('#region').value, group: $('#group').value,
+    speed: parseFloat($('#speed').value) || 1.0,
+  };
+  try {
+    const r = await fetch('/api/render-all', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+    while (true) {
+      await new Promise(res => setTimeout(res, 1200));
+      const s = await (await fetch('/api/progress?book=' + encodeURIComponent(book.id) + '&chapter=-1')).json();
+      if (s.error) throw new Error(s.error);
+      progress('Rendering the book  \u00b7  ' + s.done + ' of ' + (s.total || 0) + ' chapters'
+        + (s.running && s.current != null ? '  (chapter ' + (s.current + 1) + ')' : ''));
+      bar(s.done, s.total);
+      if (!s.running) {
+        if (s.done >= s.total) idle('All ' + s.total + ' chapters rendered in ' + vl + '. Save it whenever you like.');
+        else idle('Stopped after ' + s.done + ' of ' + s.total + ' chapters.');
+        break;
+      }
+    }
+  } catch (e) { fail(e); }
+  finally { $('#renderall').disabled = false; refreshRendered(); }
+};
+
+function saveAs(kind) {
+  if (!book) return;
+  const q = 'id=' + encodeURIComponent(book.id)
+    + '&provider=' + encodeURIComponent($('#provider').value)
+    + '&voice=' + encodeURIComponent($('#voice').value)
+    + '&model=&as=' + kind;
+  idle(kind === 'zip' ? 'Building the zip. Your browser will ask where to save it.'
+                      : 'Stitching the book into one file. Your browser will ask where to save it.');
+  window.location = '/api/save?' + q;
+}
+$('#saveone').onclick = () => saveAs('mp3');
+$('#savezip').onclick = () => saveAs('zip');
 
 async function play(i, btn) {
   $('#err').textContent = '';
@@ -441,6 +516,7 @@ async function loadVoices(auto) {
     $('#vfilter').value = '';
     applyVoiceFilter();
     markDirty();
+    refreshRendered();
     idle(d.voices.length + ' voices loaded' + (want && sel.value === want ? ', saved voice selected.' : '.'));
   } catch (e) { fail(e); }
 }
