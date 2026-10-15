@@ -1,3 +1,4 @@
+*.epub
 out/
 data/
 __pycache__/
