@@ -237,15 +237,12 @@ def voices_azure(key: str, region: str):
     for v in data:
         if "Neural" not in v.get("VoiceType", ""):
             continue
-        tag = v.get("VoiceTag") or {}
-        pers = tag.get("VoicePersonalities") or []
-        local = v.get("LocalName") or v.get("ShortName", "")
         locale = v.get("Locale", "")
         gender = v.get("Gender", "")
-        if pers:
-            label = "%s - %s (%s, %s)" % (local, pers[0], locale, gender)
-        else:
-            label = "%s (%s, %s)" % (local, locale, gender)
+        name = _voice_name(v.get("DisplayName") or v.get("ShortName", ""))
+        # deliberately no personality in the label: we do not apply a style, so
+        # naming one would claim something the audio does not do
+        label = "%s (%s, %s)" % (name, locale, gender)
         out.append({
             "id": v.get("ShortName", ""),
             "label": label,
@@ -255,6 +252,25 @@ def voices_azure(key: str, region: str):
     # English first (that is what gets read here), then everything else; both alphabetical
     out.sort(key=lambda x: (0 if x["locale"].startswith("en") else 1, x["locale"], x["id"]))
     return out
+
+
+def _voice_name(dn: str) -> str:
+    """'Microsoft Jenny Online (Natural) - English (United States)' -> 'Jenny'.
+
+    Azure's DisplayName is a mouthful and its ShortName is a slug; the voice list
+    is unusable if you have to read either one 900 times.
+    """
+    s = (dn or "").strip()
+    s = re.sub(r"^Microsoft\s+", "", s, flags=re.I)
+    s = s.split(" - ")[0]
+    s = re.sub(r"\s*\([^)]*\)", "", s).strip()
+    s = re.sub(r"\s+Online$", "", s, flags=re.I).strip()
+    if not s or s == dn:
+        # DisplayName was missing and we got a ShortName like en-US-JennyMultilingualNeural
+        m = re.match(r"^[a-z]{2}-[A-Za-z]{2,}(-(.+))?$", s or dn or "")
+        if m and m.group(2):
+            s = re.sub(r"Neural$", "", m.group(2)) or s
+    return s or dn
 
 
 def synth_azure(text: str, voice: str, key: str, region: str, rate: str = "0%") -> bytes:
@@ -341,6 +357,38 @@ PROVIDERS = {
 }
 
 
+def voice_sig(provider: str, voice: str, model: str = "") -> str:
+    """A short folder name for one voice, so audio is cached per voice.
+
+    Without this, changing the voice and pressing play replays whatever voice the
+    first render used. The cache has to be keyed by what actually made the sound.
+    """
+    raw = "%s|%s|%s" % (provider, voice or "none", model or "")
+    return "%s-%s" % (provider, hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8])
+
+
+TESTER_MAX_FILES = 240
+
+
+def _tester_dir(root: str) -> str:
+    d = os.path.join(root, "_tester")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _prune_tester(d: str) -> None:
+    """Keep the voice-tester pool bounded; drop the oldest once it gets big."""
+    try:
+        files = [os.path.join(d, f) for f in os.listdir(d) if not f.endswith(".part")]
+        if len(files) <= TESTER_MAX_FILES:
+            return
+        files.sort(key=lambda p: os.path.getmtime(p))
+        for p in files[: len(files) - TESTER_MAX_FILES]:
+            os.remove(p)
+    except OSError:
+        pass
+
+
 # --------------------------------------------------------------------- storage
 
 # render progress, so a long chapter shows movement instead of a hung button
@@ -411,6 +459,17 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/progress":
             q = urllib.parse.parse_qs(u.query)
             return self._json({"ok": True, **_prog_get(q.get("book", [""])[0], int(q.get("chapter", ["0"])[0]))})
+        if u.path == "/api/book":
+            q = urllib.parse.parse_qs(u.query)
+            bid = (q.get("id", [""])[0])
+            try:
+                b = load_book(self.root, bid)
+            except Exception:
+                return self._err("no such book", 404)
+            return self._json({"ok": True, "id": bid, "title": b["title"],
+                               "chapters": [{"i": i, "title": c["title"], "chars": len(c["text"]),
+                                             "preview": c["text"][:700]}
+                                            for i, c in enumerate(b["chapters"])]})
         if u.path == "/api/books":
             books = []
             for bid in os.listdir(self.root):
@@ -420,7 +479,11 @@ class Handler(BaseHTTPRequestHandler):
                     try:
                         b = json.load(open(j, encoding="utf-8"))
                         aud = os.path.join(bd, "audio")
-                        rendered = sorted(os.listdir(aud)) if os.path.isdir(aud) else []
+                        rendered = []
+                        if os.path.isdir(aud):
+                            for dp, _, fns in os.walk(aud):
+                                for fn in sorted(fns):
+                                    rendered.append(os.path.relpath(os.path.join(dp, fn), aud))
                         books.append({"id": bid, "title": b["title"],
                                       "chapters": len(b["chapters"]), "rendered": rendered})
                     except Exception:
@@ -471,6 +534,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._voices()
             if u.path == "/api/render":
                 return self._render()
+            if u.path == "/api/say":
+                return self._say()
         except Exception as e:
             return self._err("%s: %s" % (type(e).__name__, e), 500)
         self._err("not found", 404)
@@ -487,7 +552,8 @@ class Handler(BaseHTTPRequestHandler):
         with open(os.path.join(d, "book.json"), "w", encoding="utf-8") as f:
             json.dump(parsed, f, ensure_ascii=False)
         return self._json({"ok": True, "id": book_id, "title": parsed["title"],
-                           "chapters": [{"i": i, "title": c["title"], "chars": len(c["text"])}
+                           "chapters": [{"i": i, "title": c["title"], "chars": len(c["text"]),
+                                         "preview": c["text"][:700]}
                                         for i, c in enumerate(parsed["chapters"])]})
 
     def _ingest_url(self):
@@ -503,7 +569,8 @@ class Handler(BaseHTTPRequestHandler):
         with open(os.path.join(d, "book.json"), "w", encoding="utf-8") as f:
             json.dump(parsed, f, ensure_ascii=False)
         return self._json({"ok": True, "id": book_id, "title": parsed["title"],
-                           "chapters": [{"i": i, "title": c["title"], "chars": len(c["text"])}
+                           "chapters": [{"i": i, "title": c["title"], "chars": len(c["text"]),
+                                         "preview": c["text"][:700]}
                                         for i, c in enumerate(parsed["chapters"])]})
 
     def _voices(self):
@@ -523,6 +590,60 @@ class Handler(BaseHTTPRequestHandler):
             return self._err("unknown provider")
         return self._json({"ok": True, "voices": vs})
 
+    def _say(self):
+        """Synthesize arbitrary text in one voice. The voice-tester page, and a
+        fast way to hear a voice before committing a book to it."""
+        body = json.loads(self._body() or b"{}")
+        text = (body.get("text") or "").strip()
+        if not text:
+            return self._err("no text")
+        provider = body.get("provider", "local")
+        if provider not in PROVIDERS:
+            return self._err("unknown provider")
+        voice = body.get("voice", "")
+        key = body.get("key", "")
+        speed = float(body.get("speed", 1.0) or 1.0)
+        job = body.get("job") or ""
+        raw = "%s|%s|%s|%s" % (provider, voice, speed, text)
+        h = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+        d = _tester_dir(self.root)
+        ext = PROVIDERS[provider]["ext"]
+        out = os.path.join(d, h + ext)
+        url = "/audio/_tester/%s%s" % (h, ext)
+        if os.path.exists(out) and not body.get("force"):
+            return self._json({"ok": True, "cached": True, "url": url, "bytes": os.path.getsize(out)})
+        if provider == "local":
+            synth_local(text, out)
+            _prune_tester(d)
+            return self._json({"ok": True, "cached": False, "url": url, "bytes": os.path.getsize(out)})
+        if not key:
+            return self._err("need a key for %s" % provider)
+        parts = chunk_text(text)
+        tmp = out + ".part"
+        if job:
+            _prog_set(job, 0, done=0, total=len(parts), error=None)
+        try:
+            with open(tmp, "wb") as f:
+                for n, p in enumerate(parts, 1):
+                    if provider == "azure":
+                        piece = synth_azure(p, voice, key, body.get("region", "eastus"), body.get("rate", "0%"))
+                    else:
+                        piece = synth_minimax(p, voice, key, body.get("group", ""),
+                                              body.get("model", "speech-02-hd"), speed)
+                    f.write(piece)
+                    f.flush()
+                    if job:
+                        _prog_set(job, 0, done=n)
+            os.replace(tmp, out)
+        except Exception as e:
+            if job:
+                _prog_set(job, 0, error="%s: %s" % (type(e).__name__, e))
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            raise
+        _prune_tester(d)
+        return self._json({"ok": True, "cached": False, "url": url, "bytes": os.path.getsize(out)})
+
     def _render(self):
         body = json.loads(self._body() or b"{}")
         book_id = body["bookId"]
@@ -535,12 +656,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._err("chapter out of range")
         ch = book["chapters"][idx]
         ext = PROVIDERS[provider]["ext"]
-        out = os.path.join(book_dir(self.root, book_id), "audio", "ch%03d%s" % (idx, ext))
+        sig = voice_sig(provider, voice, body.get("model", ""))
+        adir = os.path.join(book_dir(self.root, book_id), "audio", sig)
+        os.makedirs(adir, exist_ok=True)
+        out = os.path.join(adir, "ch%03d%s" % (idx, ext))
+        rel = "%s/audio/%s/%s" % (book_id, sig, os.path.basename(out))
         if body.get("force") and os.path.exists(out):
             os.remove(out)
         if os.path.exists(out):
-            return self._json({"ok": True, "cached": True, "url": "/audio/%s/audio/%s" % (book_id, os.path.basename(out)),
-                               "bytes": os.path.getsize(out)})
+            return self._json({"ok": True, "cached": True, "url": "/audio/" + rel,
+                               "voice": voice, "bytes": os.path.getsize(out)})
         if provider == "local":
             synth_local(ch["text"], out)
         else:
@@ -566,8 +691,8 @@ class Handler(BaseHTTPRequestHandler):
                 if os.path.exists(tmp):
                     os.remove(tmp)
                 raise
-        return self._json({"ok": True, "cached": False, "url": "/audio/%s/audio/%s" % (book_id, os.path.basename(out)),
-                           "bytes": os.path.getsize(out)})
+        return self._json({"ok": True, "cached": False, "url": "/audio/" + rel,
+                           "voice": voice, "bytes": os.path.getsize(out)})
 
 
 def main():

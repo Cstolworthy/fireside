@@ -24,13 +24,27 @@ Options: `--port 9000`, `--out ./out`.
    AO3 works either way: on the work page use **Download -> EPUB**, then drop that
    file in. That path also handles login-gated works, because the download happens
    in *your* browser.
-2. Pick a voice engine.
-3. **Load voices**, type in the filter box to narrow the list, pick one.
-   Azure default region is `eastus`; the region has to match the key's resource.
-4. **Play** a chapter. First play renders it (long chapters show `n/total` as they
-go); after that it's cached and starts instantly.
+2. Pick a voice engine, paste your key, **Load voices**, type in the filter box to
+   narrow the list, pick one. Azure default region is `eastus`; the region has to
+   match the key's resource.
+3. Press **Remember settings** to keep the engine, key and **voice** for next time.
+   The button shows **unsaved** whenever something changed and has not been saved.
+   On the next visit the saved key is used to reload the list and re-select your voice.
+4. **Play** a chapter.
 
-Playback speed is settable. Audio files land in `out/<book>/audio/`.
+Every slow step shows a spinner, a count and an elapsed timer, so a long first
+render does not look like a hang. Audio is cached **per voice**: change the voice,
+press Play again, and you hear the new one. Going back to a voice you already used
+is instant.
+
+## Voice tester
+
+The **Voice tester** tab is for choosing a voice before you commit a book to it.
+Type or paste some text (or press *Use this chapter's opening*), pick a voice on
+the left, press **Say it**. The same text in each voice, so you can tell them apart.
+Each result is cached, so re-hearing one you already tried is instant.
+
+Playback speed is settable. Audio files land in `out/<book>/audio/<voice>/`.
 
 ## Voice engines
 
