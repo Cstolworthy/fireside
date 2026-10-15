@@ -822,13 +822,32 @@ class Handler(BaseHTTPRequestHandler):
         if stale:
             tmp = out + ".part"
             with open(tmp, "wb") as w:
-                for _, p in present:
-                    with open(p, "rb") as f:
-                        while True:
-                            b = f.read(1 << 20)
-                            if not b:
-                                break
-                            w.write(b)
+                if ext == ".wav":
+                    # a wav carries its length in the header, so a plain concat would
+                    # stop players at the end of chapter one. keep one header, fix the
+                    # two size fields, then append every file's samples.
+                    with open(present[0][1], "rb") as f:
+                        head = bytearray(f.read(44))
+                    total = sum(os.path.getsize(p) for _, p in present) - 44 * len(present)
+                    struct.pack_into("<I", head, 4, 36 + total)
+                    struct.pack_into("<I", head, 40, total)
+                    w.write(bytes(head))
+                    for _, p in present:
+                        with open(p, "rb") as f:
+                            f.seek(44)
+                            while True:
+                                b = f.read(1 << 20)
+                                if not b:
+                                    break
+                                w.write(b)
+                else:
+                    for _, p in present:
+                        with open(p, "rb") as f:
+                            while True:
+                                b = f.read(1 << 20)
+                                if not b:
+                                    break
+                                w.write(b)
             os.replace(tmp, out)
         return self._send_download(out, PROVIDERS[provider]["mime"], title + ext)
 

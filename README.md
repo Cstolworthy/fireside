@@ -1,6 +1,6 @@
 # reader
 
-Point it at an EPUB, choose a voice, get audio files you can pause and resume.
+Point it at an EPUB, choose a voice, get audio files you can pause, resume, and keep.
 
 ## Why files
 
@@ -37,6 +37,24 @@ render does not look like a hang. Audio is cached **per voice**: change the voic
 press Play again, and you hear the new one. Going back to a voice you already used
 is instant.
 
+## Save the audio
+
+**Render all chapters** works through the whole book in the background and reports
+progress chapter by chapter. It skips anything already rendered, so pressing it
+twice costs nothing. The line under the buttons says how much of the book exists in
+the voice you have selected right now.
+
+Then take it out:
+
+- **Save one file** stitches the chapters into a single audio file, for a phone or
+  a podcast app that should just play straight through.
+- **Save zip** hands back one file per chapter, numbered, inside a folder named
+  after the book.
+
+Both are built once and cached next to the audio, so a second download is instant.
+The chapter files underneath are plain `.mp3` (Azure, MiniMax) or `.wav` (offline
+tone) in `out/<book>/audio/<voice>/`, so you can also just copy that folder.
+
 ## Voice tester
 
 The **Voice tester** tab is for choosing a voice before you commit a book to it.
@@ -69,3 +87,8 @@ the provider you picked (and only the text you ask to be spoken).
 - Inputs: `.epub`, or any public http/https page that is plain HTML. Pages built
   entirely in JavaScript, or behind a login, will not parse.
 - `local` engine caps at 4 minutes because it is just a stand-in.
+- **Save one file** joins the chapters end to end. That works because each chapter
+  is already one continuous audio file with no container wrapper beyond the format
+  itself; a `.wav` gets its two length fields fixed up on the join so players do not
+  stop at the end of chapter one. Chapter boundaries are not re-encoded, so there is
+  no extra quality loss.
