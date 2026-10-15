@@ -1,0 +1,8 @@
+services:
+  reader:
+    build: .
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./data:/data   # rendered audio lives here
+    restart: unless-stopped
