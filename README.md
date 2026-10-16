@@ -17,6 +17,29 @@ Python 3.8+, standard library only. No pip install, no build.
 
 Options: `--port 9000`, `--out ./out`.
 
+### Download and run (no terminal)
+
+- **Windows** - double-click `start_reader.bat`
+- **macOS** - double-click `start_reader.command`
+  (if macOS instead asks what to open it with, right-click it, *Open With ->
+  Terminal*, or run `sh start_reader.command` in Terminal)
+- **Linux** - run `./start_reader.sh`
+
+Each one starts the server and opens the page in your browser. The only thing you
+need first is Python 3 from <https://www.python.org/downloads/> (on a Mac,
+`xcode-select --install` in Terminal is enough). The launchers say so plainly if
+it is missing.
+
+### Serve it to more than yourself
+
+    python3 server.py --host 0.0.0.0 --port 8765
+    docker compose up          # or: docker build -t reader . && docker run -p 8765:8765 reader
+
+`--host 0.0.0.0` means anyone who can reach that port sees the same shelf and the
+same `out/` folder. There are no accounts; it is one bookshelf for whoever shows
+up. That is fine on your own machine or LAN. Do not put it on the open internet in
+that shape.
+
 ## Use
 
 1. Drop an `.epub` (or click to choose), **or** paste a public story link and press

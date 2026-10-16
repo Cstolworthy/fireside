@@ -37,6 +37,8 @@ import wave
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+READER_VERSION = "1.6"  # shown in the page header; single source
+
 # ---------------------------------------------------------------- epub parsing
 
 TAG = re.compile(r"<[^>]+>")
@@ -618,6 +620,7 @@ class Handler(BaseHTTPRequestHandler):
             p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
             with open(p, "rb") as f:
                 b = f.read()
+            b = b.replace(b"__READER_VERSION__", READER_VERSION.encode())
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
