@@ -109,7 +109,7 @@ def unit_tests():
     import sources
     from sources import (ORDER, REGISTRY, get_source, choose, request_key,
                          ingest, Field, describe)
-    from sources._fetch import host_allowed, fetch
+    from sources._fetch import host_allowed, fetch, bind_transport
     from sources.web import parse_web
     from sources.epub import parse_epub
     from sources.ao3 import parse_ao3, is_work_url, full_work_url
@@ -145,6 +145,11 @@ def unit_tests():
     ck("ao3 other host does not match", not is_work_url("https://notao3.example/works/1"))
     fw = full_work_url("https://archiveofourown.org/works/12345")
     ck("full work url asks for all chapters", "view_full_work=true" in fw and "view_adult=true" in fw, fw)
+    # transport: AO3 declares a browser fingerprint; bind_transport is inert when absent
+    ck("ao3 declares a browser transport", bool(getattr(get_source("ao3"), "transport", None)
+                                                and get_source("ao3").transport().get("impersonate")))
+    ck("plain source has no transport", not hasattr(get_source("web"), "transport"))
+    ck("bind_transport inert when None", bind_transport(fetch, None) is fetch)
     a = parse_ao3(AO3_PAGE, "https://archiveofourown.org/works/12345")
     ck("ao3 title", a["title"] == "Test Fic", a["title"])
     ck("ao3 N chapters, one book", [c["title"] for c in a["chapters"]] == ["Chapter 1: Start", "Chapter 2: Later"],

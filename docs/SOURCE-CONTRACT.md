@@ -115,6 +115,35 @@ still ships no HTML. On `ingest-url` the host resolves the credential per source
 after matching (`body.creds[source.id]`), so a source never sees credentials
 meant for another.
 
+## Transport (v1.10)
+
+"> How is the text fetched? Does the plugin define it? That was the hope: the plugin could own the quirks
+> of connecting to whatever platform." - Chris, 2026-10-16
+
+It does now. A source may declare
+
+    transport() -> {"impersonate": "safari17_0", "retries": 4, "backoff": 1.5, "timeout": 60}
+
+and the host performs the fetch that way. Optional fields: `impersonate` (a
+browser TLS/HTTP fingerprint via `curl_cffi`), `headers`, `retries`, `backoff`,
+`timeout`. Absent `transport()` = plain `urllib`, exactly as before.
+
+Why: `archiveofourown.org` is behind Cloudflare, which grades the TLS
+ClientHello. Measured from the sandbox on 2026-10-16, same URL:
+
+    urllib                 -> HTTP 525 (SSL handshake failed)
+    curl_cffi chrome124    -> HTTP 403
+    curl_cffi safari17_0   -> HTTP 200, full work
+
+So the 525 is not a routing problem; it is the bot check refusing the client. A
+raw TLS handshake to AO3 from the bench box completes (TLSv1.3) and then
+Cloudflare answers 525. The gate is also rate-sensitive: a burst flips a good
+request back to 525, which is what `retries`/`backoff` are for.
+
+This keeps the earlier split intact. The host still owns the socket and the
+credential (one audited chokepoint, cookie only to declared hosts); the source
+owns the quirk of how the site wants to be fetched.
+
 ## Still later
 
 - The loader: discovery of third-party source plugins, isolation, install. That

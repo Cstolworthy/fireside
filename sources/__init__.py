@@ -11,6 +11,10 @@ One source = one object:
                         ships no HTML
   credential_hosts()    -> [host suffix]; the host attaches the credential ONLY
                         to these hosts, as a Cookie header, and never logs it
+  transport() [opt]     -> fetch policy (e.g. {"impersonate": "safari17_0",
+                        "retries": 4}) for sites that gate on the TLS
+                        fingerprint. The host performs the fetch; the source
+                        owns the quirk. Absent = plain urllib.
 
 The plugin never opens a socket and never holds the login. It calls the `fetch`
 the host hands it. `cred` is a resolved credential ({cookie: ...} for now); the
@@ -19,7 +23,7 @@ source cannot tell whether it came from paste-cookie or a later sign-in flow.
 
 import hashlib
 
-from ._fetch import fetch, host_allowed  # noqa: F401  (re-exported: host egress)
+from ._fetch import fetch, host_allowed, bind_transport  # noqa: F401  (re-exported: host egress)
 
 
 class Field:
@@ -80,7 +84,9 @@ def ingest(req, cred=None, fetcher=None):
     s = choose(req)
     if s is None:
         raise ValueError("no source matches this input")
-    book = s.read(req, fetcher or fetch, cred)
+    base = fetcher or fetch
+    tr = s.transport() if hasattr(s, "transport") else None
+    book = s.read(req, bind_transport(base, tr), cred)
     book.setdefault("meta", {})
     book["meta"]["source"] = s.id
     return s, request_key(req), book

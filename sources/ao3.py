@@ -121,6 +121,16 @@ class Ao3:
                  "sessionid value (or the whole cookie string). Never shared, only sent to AO3.",
             placeholder="sessionid=...")]
 
+    def transport(self):
+        # AO3 sits behind Cloudflare, which grades the TLS ClientHello: a plain
+        # urllib/requests client gets HTTP 525, a chrome fingerprint gets 403,
+        # a safari fingerprint gets the page. Declared here (not hardcoded in the
+        # host) so the source owns the quirk; the host still performs the fetch
+        # through its one logged, credential-scoped path. Retries+backoff because
+        # the gate is also rate-sensitive: a burst flips a good request to 525.
+        return {"impersonate": "safari17_0", "retries": 4, "backoff": 1.5,
+                "timeout": 60}
+
     def credential_hosts(self):
         return ["archiveofourown.org"]
 
