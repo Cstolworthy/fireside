@@ -12,6 +12,8 @@ No third-party packages. An EPUB is a zip; it's read with the stdlib.
 
 TTS providers
   local   - offline. A spoken-length tone. No key, no network. For trying the UI.
+  openai  - any OpenAI-compatible /v1/audio/speech server you host (Kokoro,
+            Speaches, ...). Point it at a base_url; cost 0, runs on your box.
   azure   - Azure AI Speech. Needs a key + region. Great voice menu (hundreds).
 
 Input: an .epub file, or any public http/https story link (fetched + cleaned here).
@@ -41,14 +43,14 @@ from providers import get_provider  # the speech engines; see docs/PROVIDER-CONT
 from sources import ingest as source_ingest  # the text sources; see docs/SOURCE-CONTRACT.md
 from sources import describe as source_describe, choose as source_choose
 
-READER_VERSION = "1.10"  # shown in the page header; single source
+READER_VERSION = "1.13"  # shown in the page header; single source
 
 def _cred(body: dict) -> dict:
     """Resolve the credential the way the contract wants: the provider is handed a
     value, never the login. Both doors (paste-key now, oauth later) land here, so
     nothing below the registry can tell which one was used."""
     return {"key": body.get("key", ""), "region": body.get("region", "eastus"),
-            "group": body.get("group", "")}
+            "group": body.get("group", ""), "base_url": body.get("base_url", "")}
 
 
 def _call_opts(body: dict) -> dict:

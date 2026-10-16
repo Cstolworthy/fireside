@@ -61,9 +61,10 @@ def report(opts, done, total):
 
 
 from .local import Local          # noqa: E402
+from .openai import OpenAICompat  # noqa: E402
 from .azure import Azure          # noqa: E402
 from .minimax import MiniMax      # noqa: E402
 
 REGISTRY = {}
-for _p in (Local(), Azure(), MiniMax()):
+for _p in (Local(), OpenAICompat(), Azure(), MiniMax()):
     REGISTRY[_p.id] = _p

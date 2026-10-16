@@ -78,11 +78,17 @@
       <label>Voice engine</label>
       <select id="provider">
         <option value="local">Offline test (no key)</option>
+        <option value="openai">Local / OpenAI-compatible (Kokoro)</option>
         <option value="azure">Azure Speech</option>
         <option value="minimax">MiniMax</option>
       </select>
 
       <div id="creds" style="display:none">
+        <div id="oafields" style="display:none">
+          <label>Server URL</label>
+          <input id="base_url" placeholder="http://10.32.1.2:8880" autocomplete="off">
+          <div class="hint" style="margin-top:4px">Any OpenAI-compatible /v1/audio/speech server on your LAN. Runs on your hardware, so it costs nothing and never touches a meter.</div>
+        </div>
         <label id="kl">Key</label>
         <input id="key" type="password" placeholder="paste key" autocomplete="off">
         <div id="azurefields">
@@ -132,6 +138,18 @@
           <button id="renderall" style="flex:1.4">Render all chapters</button>
           <button id="saveone">Save one file</button>
           <button id="savezip">Save zip</button>
+        </div>
+        <div id="playopts" style="display:none;margin-bottom:10px">
+          <label style="display:flex;align-items:center;gap:7px;text-transform:none;letter-spacing:0;font-size:13px;color:var(--ink);margin:0">
+            <input type="checkbox" id="autonext" style="width:auto">
+            Auto-play the next chapter
+          </label>
+          <label for="xmode" style="margin-top:9px">When you press Play</label>
+          <select id="xmode">
+            <option value="live">Live &mdash; render this chapter only (default)</option>
+            <option value="next">Live + next &mdash; also render the next chapter ahead</option>
+            <option value="book">Whole book &mdash; render everything, then play straight through</option>
+          </select>
         </div>
         <div id="renderinfo" class="hint" style="margin:0 0 10px"></div>
         <div id="chapters"></div>
@@ -183,12 +201,14 @@
 <script>
 const $ = s => document.querySelector(s);
 const LS = 'reader.v1';
-const FIELDS = ['provider','key','region','group','speed','voice'];
+const FIELDS = ['provider','key','region','group','speed','voice','base_url'];
 let book = null, cur = -1, timer = null;
+let prefetching = new Set();
+let bookKicked = false;
 
 let saved = JSON.parse(localStorage.getItem(LS) || '{}');
 let lastSaved = Object.assign({}, saved);
-for (const k of ['provider','region','group','speed']) if (saved[k]) $('#'+k).value = saved[k];
+for (const k of ['provider','region','group','speed','base_url']) if (saved[k]) $('#'+k).value = saved[k];
 if (saved.key) $('#key').value = saved.key;
 
 // ---------------------------------------------------------------- status + busy
@@ -236,15 +256,20 @@ function voiceLabel() {
 function creds() {
   const p = $('#provider').value;
   $('#creds').style.display = p === 'local' ? 'none' : 'block';
+  $('#oafields').style.display = p === 'openai' ? 'block' : 'none';
   $('#azurefields').style.display = p === 'azure' ? 'block' : 'none';
   $('#mmfields').style.display = p === 'minimax' ? 'block' : 'none';
-  $('#kl').textContent = p === 'azure' ? 'Azure key' : 'MiniMax key';
+  $('#kl').style.display = (p === 'azure' || p === 'minimax') ? 'block' : 'none';
+  $('#key').style.display = (p === 'azure' || p === 'minimax') ? 'block' : 'none';
+  if (p === 'azure') $('#kl').textContent = 'Azure key';
+  else if (p === 'minimax') $('#kl').textContent = 'MiniMax key';
 }
 function updateSetup() {
   const p = $('#provider').value;
   $('#setup').textContent = p === 'azure'
     ? 'Hundreds of voices across accents and styles. Needs an Azure Speech key.'
     : p === 'minimax' ? 'The voice from the demo clip. Needs a MiniMax key + group id.'
+    : p === 'openai' ? 'A speech server you run yourself (Kokoro and friends). Free, private, yours. Give it the server URL above.'
     : 'Proves the flow without a key.';
 }
 function snapshot() { const o = {}; for (const k of FIELDS) o[k] = $('#'+k).value; return o; }
@@ -376,6 +401,8 @@ async function loadUrl() {
 function renderList() {
   $('#empty').style.display = book ? 'none' : 'block';
   $('#booktools').style.display = book ? 'flex' : 'none';
+  $('#playopts').style.display = book ? 'block' : 'none';
+  bookKicked = false;
   const box = $('#chapters'); box.innerHTML = '';
   if (!book) return;
   book.chapters.forEach(c => {
@@ -419,7 +446,7 @@ $('#renderall').onclick = async () => {
   busy('Rendering all chapters in ' + vl + '\u2026');
   const body = {
     bookId: book.id, provider: $('#provider').value, voice: $('#voice').value,
-    key: $('#key').value, region: $('#region').value, group: $('#group').value,
+    key: $('#key').value, region: $('#region').value, group: $('#group').value, base_url: $('#base_url').value,
     speed: parseFloat($('#speed').value) || 1.0,
   };
   try {
@@ -489,10 +516,73 @@ async function play(i, btn) {
     $('#now').textContent = (i+1) + '. ' + book.chapters[i].title + '  ·  ' + vl;
     document.querySelectorAll('.ch').forEach(e => e.classList.toggle('playing', +e.dataset.i === i));
     markResume();
+    afterPlay(i);
     idle(d.cached ? 'Playing (already rendered, instant).' : 'Ready · ' + vl + ' · ' + fmtBytes(d.bytes));
   } catch (e) { fail(e); btn.textContent = 'Play'; btn.disabled = false; }
   finally { clearInterval(tick); }
 }
+
+// ---------------------------------------------------------------- play modes
+// Auto-play and how far ahead to render. Live is the default so pressing Play
+// never commits to a whole book; 'next' keeps one chapter buffered ahead so the
+// gap between chapters is invisible; 'book' renders everything up front.
+const PLAY_LS = 'reader.play';
+function loadPlaySettings() {
+  let s = {}; try { s = JSON.parse(localStorage.getItem(PLAY_LS) || '{}'); } catch (_) {}
+  if (s.autonext) $('#autonext').checked = true;
+  if (s.xmode) $('#xmode').value = s.xmode;
+}
+function savePlaySettings() {
+  localStorage.setItem(PLAY_LS, JSON.stringify({ autonext: $('#autonext').checked, xmode: $('#xmode').value }));
+}
+$('#autonext').onchange = savePlaySettings;
+$('#xmode').onchange = () => { savePlaySettings(); if (book && $('#xmode').value === 'book') kickRenderAll(); };
+loadPlaySettings();
+
+function afterPlay(i) {
+  if (!book) return;
+  const mode = $('#xmode').value;
+  if (mode === 'book') { kickRenderAll(); return; }
+  if (mode === 'next' && i + 1 < book.chapters.length) prefetchChapter(i + 1);
+}
+
+function renderBody(extra) {
+  return Object.assign({
+    bookId: book.id, provider: $('#provider').value, voice: $('#voice').value,
+    key: $('#key').value, region: $('#region').value, group: $('#group').value,
+    base_url: $('#base_url').value, speed: parseFloat($('#speed').value) || 1.0,
+  }, extra || {});
+}
+
+async function prefetchChapter(i) {
+  if (!book || i < 0 || i >= book.chapters.length) return;
+  const k = book.id + '|' + $('#provider').value + '|' + $('#voice').value + '|' + i;
+  if (prefetching.has(k)) return;
+  prefetching.add(k);
+  try {
+    await fetch('/api/render', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(renderBody({ chapter: i })) });
+  } catch (_) {}
+  finally { prefetching.delete(k); refreshRendered(); }
+}
+
+async function kickRenderAll() {
+  if (!book || bookKicked) return;
+  bookKicked = true;
+  try {
+    await fetch('/api/render-all', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(renderBody({})) });
+    idle('Rendering the whole book in the background. Press Play; it will roll on chapter to chapter.');
+  } catch (_) { bookKicked = false; }
+}
+
+$('#audio').addEventListener('ended', () => {
+  if (!$('#autonext').checked || !book || cur < 0) return;
+  const nx = cur + 1;
+  if (nx >= book.chapters.length) { idle('End of the book.'); return; }
+  const btn = document.querySelector('.ch[data-i="' + nx + '"] button');
+  play(nx, btn);
+});
 
 // ---------------------------------------------------------------- voice tester
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
@@ -533,7 +623,7 @@ async function sayIt(withPron) {
   try {
     const r = await fetch('/api/say', { method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ text, job, rules, provider:$('#provider').value, voice:$('#voice').value,
-        key:$('#key').value, region:$('#region').value, group:$('#group').value,
+        key:$('#key').value, region:$('#region').value, group:$('#group').value, base_url:$('#base_url').value,
         speed: parseFloat($('#speed').value) || 1.0 }) });
     const d = await r.json();
     if (!d.ok) throw new Error(d.error);
@@ -709,7 +799,7 @@ async function loadVoices(auto) {
   if (auto) busy('Loading your saved voice list…'); else busy('Loading voices…');
   try {
     const r = await fetch('/api/voices', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ provider:$('#provider').value, key:$('#key').value, region:$('#region').value, group:$('#group').value }) });
+      body: JSON.stringify({ provider:$('#provider').value, key:$('#key').value, region:$('#region').value, group:$('#group').value, base_url:$('#base_url').value }) });
     const d = await r.json();
     if (!d.ok) throw new Error(d.error);
     const sel = $('#voice'); sel.innerHTML = '';

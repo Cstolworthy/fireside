@@ -70,10 +70,12 @@ def unit_tests():
     import providers
     from providers import REGISTRY, get_provider, Audio
 
-    ck("registry has local/azure/minimax", set(REGISTRY) == {"local", "azure", "minimax"}, set(REGISTRY))
+    ck("registry has local/openai/azure/minimax", set(REGISTRY) == {"local", "openai", "azure", "minimax"}, set(REGISTRY))
     ck("unknown provider -> None", get_provider("bogus") is None)
     ck("augmentable", hasattr(providers, "REGISTRY") and "minimax" in REGISTRY)
     ck("local needs no key", REGISTRY["local"].needs_key is False)
+    ck("openai needs no key", REGISTRY["openai"].needs_key is False)
+    ck("openai priced 0 (runs on your box)", REGISTRY["openai"].cost_per_1m_chars({}) == 0.0)
     ck("azure needs a key", REGISTRY["azure"].needs_key is True)
     ck("minimax needs a key", REGISTRY["minimax"].needs_key is True)
     ck("azure price 15/1M", REGISTRY["azure"].cost_per_1m_chars({}) == 15.0)
