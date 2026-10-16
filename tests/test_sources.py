@@ -58,6 +58,25 @@ def make_epub() -> bytes:
 PAGE = ("<html><head><title>A Story</title></head><body><h1>Part One</h1>"
         "<p>%s</p></body></html>" % ("Fire and salt. " * 40))
 
+# A trimmed AO3 work page: title h2, two chapters, each a div id="chapter-N"
+# with a div.userstuff body and a blockquote notes block that must NOT be read.
+AO3_PAGE = ("""<html><head><title>Test Fic - somebody | Archive of Our Own</title></head><body>
+<div id="main"><h2 class="title heading">Test Fic</h2>
+<div id="workskin"><div id="chapters">
+<div class="chapter preface group"><h3 class="title">Chapter 1: Start</h3></div>
+<div id="chapter-1" class="chapter" role="article">
+  <div class="chapter preface group"><h3 class="title">Chapter 1: Start</h3>
+  <blockquote class="userstuff">a summary, not the body</blockquote></div>
+  <div class="userstuff module" role="article"><p>Fire burns here.</p><p>%s</p></div>
+  <div class="chapter notes module"><h3 class="landmark heading">Notes</h3>
+  <blockquote class="userstuff">author note, not read aloud</blockquote></div>
+</div>
+<div id="chapter-2" class="chapter" role="article">
+  <div class="chapter preface group"><h3 class="title">Chapter 2: Later</h3></div>
+  <div class="userstuff module" role="article"><p>%s</p></div>
+</div>
+</div></div></div></body></html>""" % ("the middle " * 30, "the end " * 30))
+
 
 class PageHandler(BaseHTTPRequestHandler):
     seen_cookie = None
@@ -89,12 +108,13 @@ def req(base, path, data=None, method="GET", raw=None, ctype="application/json")
 def unit_tests():
     import sources
     from sources import (ORDER, REGISTRY, get_source, choose, request_key,
-                         ingest, Field)
+                         ingest, Field, describe)
     from sources._fetch import host_allowed, fetch
     from sources.web import parse_web
     from sources.epub import parse_epub
+    from sources.ao3 import parse_ao3, is_work_url, full_work_url
 
-    ck("registry has epub/web", set(REGISTRY) == {"epub", "web"}, set(REGISTRY))
+    ck("registry has epub/ao3/web", set(REGISTRY) == {"epub", "ao3", "web"}, set(REGISTRY))
     ck("unknown source -> None", get_source("bogus") is None)
     ck("augmentable", hasattr(sources, "REGISTRY") and "web" in REGISTRY)
     ck("web registered last (fallback)", ORDER[-1].id == "web", [s.id for s in ORDER])
@@ -103,6 +123,9 @@ def unit_tests():
     u = {"kind": "url", "url": "https://example.com/story?p=1"}
     ck("upload -> epub", choose(up).id == "epub")
     ck("http url -> web", choose(u).id == "web")
+    ao3u = {"kind": "url", "url": "https://archiveofourown.org/works/12345"}
+    ck("ao3 work url -> ao3 (not web)", choose(ao3u).id == "ao3")
+    ck("ao3 tag url -> web", choose({"kind": "url", "url": "https://archiveofourown.org/tags/Good%20Omens/works"}).id == "web")
     ck("ftp url -> no source", choose({"kind": "url", "url": "ftp://x/y"}) is None)
     ck("request_key stable + idempotent", request_key(u) == request_key(u))
     ck("request_key upload == sha1(bytes)[:12]", request_key(up) == __import__("hashlib").sha1(up["data"]).hexdigest()[:12])
@@ -115,6 +138,22 @@ def unit_tests():
     ck("web title", w["title"] == "A Story", w["title"])
     ck("web one chapter", len(w["chapters"]) == 1 and w["chapters"][0]["title"] == "Part One")
 
+    # AO3: one work -> one book, N chapters; summary/notes are not read
+    ck("ao3 work url matches", is_work_url("https://archiveofourown.org/works/12345"))
+    ck("ao3 subdomain matches", is_work_url("https://www.archiveofourown.org/works/12345/chapters/9"))
+    ck("ao3 non-work does not match", not is_work_url("https://archiveofourown.org/tags/x/works"))
+    ck("ao3 other host does not match", not is_work_url("https://notao3.example/works/1"))
+    fw = full_work_url("https://archiveofourown.org/works/12345")
+    ck("full work url asks for all chapters", "view_full_work=true" in fw and "view_adult=true" in fw, fw)
+    a = parse_ao3(AO3_PAGE, "https://archiveofourown.org/works/12345")
+    ck("ao3 title", a["title"] == "Test Fic", a["title"])
+    ck("ao3 N chapters, one book", [c["title"] for c in a["chapters"]] == ["Chapter 1: Start", "Chapter 2: Later"],
+       [c["title"] for c in a["chapters"]])
+    ck("ao3 body read, summary skipped", a["chapters"][0]["text"].startswith("Fire burns here.")
+       and "summary" not in a["chapters"][0]["text"], a["chapters"][0]["text"][:60])
+    ck("ao3 notes skipped", "author note" not in a["chapters"][0]["text"])
+    ck("ao3 chapter 2 text", a["chapters"][1]["text"].startswith("the end"))
+
     # credential scoping
     ck("scope: apex", host_allowed("https://archiveofourown.org/works/1", ["archiveofourown.org"]))
     ck("scope: subdomain", host_allowed("https://www.archiveofourown.org/works/1", ["archiveofourown.org"]))
@@ -126,7 +165,14 @@ def unit_tests():
     ck("Field dict shape", f.dict() == {"key": "cookie", "label": "AO3 session cookie",
                                         "type": "secret", "help": "paste from your browser",
                                         "placeholder": ""})
-    ck("built-in sources declare no settings", REGISTRY["epub"].settings() == [] and REGISTRY["web"].settings() == [])
+    ck("epub/web declare no settings", REGISTRY["epub"].settings() == [] and REGISTRY["web"].settings() == [])
+    afields = REGISTRY["ao3"].settings()
+    ck("ao3 declares a secret cookie field", len(afields) == 1 and afields[0].key == "cookie"
+       and afields[0].type == "secret")
+    ck("ao3 scopes its cookie to AO3", REGISTRY["ao3"].credential_hosts() == ["archiveofourown.org"])
+    desc = describe()
+    ck("describe() lists every source", [d["id"] for d in desc] == [s.id for s in ORDER], [d["id"] for d in desc])
+    ck("describe() carries fields as plain data", any(d["id"] == "ao3" and d["settings"][0]["key"] == "cookie" for d in desc))
 
     # live fetch: cookie attached ONLY inside scope
     srv = ThreadingHTTPServer(("127.0.0.1", 0), PageHandler)

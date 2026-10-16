@@ -39,8 +39,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from providers import get_provider  # the speech engines; see docs/PROVIDER-CONTRACT.md
 from sources import ingest as source_ingest  # the text sources; see docs/SOURCE-CONTRACT.md
+from sources import describe as source_describe, choose as source_choose
 
-READER_VERSION = "1.8"  # shown in the page header; single source
+READER_VERSION = "1.9"  # shown in the page header; single source
 
 def _cred(body: dict) -> dict:
     """Resolve the credential the way the contract wants: the provider is handed a
@@ -342,6 +343,8 @@ class Handler(BaseHTTPRequestHandler):
                                "chapters": [{"i": i, "title": c["title"], "chars": len(c["text"]),
                                              "preview": c["text"][:700]}
                                             for i, c in enumerate(b["chapters"])]})
+        if u.path == "/api/sources":
+            return self._json({"ok": True, "sources": source_describe()})
         if u.path == "/api/books":
             books = []
             for bid in os.listdir(self.root):
@@ -436,8 +439,15 @@ class Handler(BaseHTTPRequestHandler):
         url = (body.get("url") or "").strip()
         if not url:
             return self._err("no url")
-        cred = body.get("cred") or None
-        src, book_id, parsed = source_ingest({"kind": "url", "url": url}, cred=cred)
+        req = {"kind": "url", "url": url}
+        src = source_choose(req)
+        if src is None:
+            return self._err("no source handles that link")
+        # the host resolves the credential per source, after matching: the source
+        # never sees which door it came through, and creds for other sources are
+        # never even looked at.
+        cred = (body.get("creds") or {}).get(src.id) or body.get("cred") or None
+        src, book_id, parsed = source_ingest(req, cred=cred)
         d = book_dir(self.root, book_id)
         os.makedirs(os.path.join(d, "audio"), exist_ok=True)
         with open(os.path.join(d, "book.json"), "w", encoding="utf-8") as f:

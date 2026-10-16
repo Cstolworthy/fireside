@@ -70,7 +70,7 @@
         <input id="url" placeholder="or paste a story link (https://…)" autocomplete="off">
         <button id="loadurl" style="flex:0 0 88px">Load</button>
       </div>
-      <div class="hint">Public pages work pasted. For <b>AO3</b>, either paste the work link or use its <b>Download &rarr; EPUB</b> button and drop the file (that path also handles login-only works).</div>
+      <div class="hint">Public pages work pasted. <b>AO3</b> work links are read directly; for a locked work, paste your AO3 cookie under <b>Text sources</b> below (or use the work's <b>Download &rarr; EPUB</b> button and drop the file).</div>
       <div id="bookinfo" class="hint"></div>
     </div>
 
@@ -106,6 +106,15 @@
       </div>
       <div class="hint">Keys stay in this browser and reach only this local app. The voice you pick here is the one both the reader and the voice tester use.</div>
       <div id="setup" class="hint"></div>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <label>Text sources</label>
+      <div class="hint" style="margin-top:0">Where the story comes from. Each source can ask for whatever it needs (AO3 asks for a cookie so locked works come through). Settings stay in this browser.</div>
+      <div id="sources"></div>
+      <div class="row" style="margin-top:8px">
+        <button id="savesources" class="primary">Remember source settings<span class="tag" id="srcdirty" style="display:none">unsaved</span></button>
+      </div>
     </div>
   </section>
 
@@ -259,6 +268,65 @@ $('#save').onclick = () => {
   idle('Settings saved in this browser.');
 };
 
+// ---------------------------------------------------------------- sources
+// One Settings page listing every source and the fields it declares. The host
+// draws the widget; a source ships no HTML (docs/SOURCE-CONTRACT.md).
+const SRC_LS = 'reader.sources';
+let srcSaved = JSON.parse(localStorage.getItem(SRC_LS) || '{}');
+let srcDefs = [];
+function srcSnapshot() {
+  const o = {};
+  srcDefs.forEach(s => { const v = {}; (s.settings || []).forEach(f => {
+    const el = document.getElementById('src-' + s.id + '-' + f.key); if (el && el.value) v[f.key] = el.value; });
+    if (Object.keys(v).length) o[s.id] = v; });
+  return o;
+}
+function srcDirty() {
+  return JSON.stringify(srcSnapshot()) !== JSON.stringify(srcSaved || {});
+}
+function markSrc() { $('#srcdirty').style.display = srcDirty() ? 'inline' : 'none'; }
+async function loadSources() {
+  try {
+    const r = await fetch('/api/sources');
+    const d = await r.json();
+    if (!d.ok) return;
+    srcDefs = d.sources || [];
+    const box = $('#sources'); box.innerHTML = '';
+    srcDefs.forEach(s => {
+      const fields = s.settings || [];
+      if (!fields.length) return;
+      const wrap = document.createElement('div'); wrap.style.margin = '8px 0';
+      const h = document.createElement('div'); h.style.cssText = 'font-size:12px;color:var(--dim);margin-bottom:3px';
+      h.textContent = s.label;
+      wrap.append(h);
+      fields.forEach(f => {
+        const lab = document.createElement('label'); lab.textContent = f.label; wrap.append(lab);
+        const inp = document.createElement('input');
+        inp.type = f.type === 'secret' ? 'password' : 'text';
+        inp.id = 'src-' + s.id + '-' + f.key;
+        inp.placeholder = f.placeholder || '';
+        inp.autocomplete = 'off';
+        const cur = (srcSaved[s.id] || {})[f.key];
+        if (cur) inp.value = cur;
+        inp.addEventListener('input', markSrc);
+        wrap.append(inp);
+        if (f.help) { const hh = document.createElement('div'); hh.className = 'hint'; hh.style.marginTop = '0'; hh.textContent = f.help; wrap.append(hh); }
+      });
+      box.append(wrap);
+    });
+    if (!box.children.length) $('#sources').innerHTML = '<div class="hint" style="margin-top:0">No source needs settings.</div>';
+    markSrc();
+  } catch (e) { /* sources are optional */ }
+}
+$('#savesources').onclick = () => {
+  srcSaved = srcSnapshot();
+  localStorage.setItem(SRC_LS, JSON.stringify(srcSaved));
+  markSrc();
+  const b = $('#savesources'); b.classList.add('saved'); setTimeout(() => b.classList.remove('saved'), 900);
+  idle('Source settings saved in this browser.');
+};
+loadSources();
+
 // ---------------------------------------------------------------- ingest
 $('#drop').onclick = () => $('#file').click();
 $('#file').onchange = e => e.target.files[0] && ingest(e.target.files[0]);
@@ -293,7 +361,7 @@ async function loadUrl() {
   $('#bookinfo').textContent = '';
   busy('Fetching the page and pulling the story out…');
   try {
-    const r = await fetch('/api/ingest-url', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url}) });
+    const r = await fetch('/api/ingest-url', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({url, creds: srcSnapshot()}) });
     const d = await r.json();
     if (!d.ok) throw new Error(d.error);
     book = d;

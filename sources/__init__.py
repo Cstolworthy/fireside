@@ -45,6 +45,18 @@ def get_source(sid):
     return REGISTRY.get(sid)
 
 
+def describe():
+    """The whole registry as plain data, so the host can render one Settings
+    page listing every source and the fields it declares. A source ships no HTML;
+    it only declares the shape and the host draws the widget."""
+    out = []
+    for s in ORDER:
+        out.append({"id": s.id, "label": s.label,
+                    "settings": [f.dict() for f in s.settings()],
+                    "credential_hosts": list(s.credential_hosts())})
+    return out
+
+
 def choose(req):
     """First source whose matches() is true, in registration order. The generic
     web source is the fallback and is registered last."""
@@ -75,8 +87,9 @@ def ingest(req, cred=None, fetcher=None):
 
 
 from .epub import Epub   # noqa: E402
+from .ao3 import Ao3     # noqa: E402
 from .web import Web     # noqa: E402
 
 # Order matters: specific sources first, the generic web fallback LAST.
-ORDER = [Epub(), Web()]
+ORDER = [Epub(), Ao3(), Web()]
 REGISTRY = {s.id: s for s in ORDER}

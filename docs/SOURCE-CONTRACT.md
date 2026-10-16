@@ -93,8 +93,31 @@ Still later: the loader (discovery of third-party source plugins, isolation,
 install). That is expansion, not revenue: do not let it eat the hosted-billing
 path.
 
-## Not in scope here
+## AO3 shipped (v1.9)
 
-- AO3 itself: that is a source someone builds against this contract. It is
-  heavier than the others because it acts with the user's session cookie, which
-  is exactly why the credential lives host-side and is scoped.
+`ao3.py` is a real source on this contract: it matches an
+`archiveofourown.org/works/<id>` link, asks AO3 for `view_full_work=true` so one
+book has all N chapters (each chapter is its own audio file downstream), and
+scrapes the body out of AO3's own markup. Locked works use the reader's session
+cookie: pasted in Settings, kept in the browser, sent only to
+`archiveofourown.org`. It is heavier than epub/web because it acts with the
+user's login, which is exactly why the credential lives host-side and is scoped.
+
+The parse targets HTML, not an API, so an AO3 re-skin can break it; a login page
+or the adult gate is detected and reported instead of silently returning junk.
+
+## Settings surface (v1.9)
+
+`describe()` returns the whole registry as plain data: each source's `id`,
+`label`, `settings()` fields, and `credential_hosts()`. The host renders one
+Settings page from that (see the Text sources panel in `index.html`); a source
+still ships no HTML. On `ingest-url` the host resolves the credential per source
+after matching (`body.creds[source.id]`), so a source never sees credentials
+meant for another.
+
+## Still later
+
+- The loader: discovery of third-party source plugins, isolation, install. That
+  is expansion, not revenue: do not let it eat the hosted-billing path.
+- Signed history and a hosted multi-user credential store (server-side,
+  encrypted) for the credential that is browser-side today.
