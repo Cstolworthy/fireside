@@ -115,25 +115,37 @@ still ships no HTML. On `ingest-url` the host resolves the credential per source
 after matching (`body.creds[source.id]`), so a source never sees credentials
 meant for another.
 
-## Transport (v1.10)
+## Transport (v1.10, revised v1.12)
 
 "> How is the text fetched? Does the plugin define it? That was the hope: the plugin could own the quirks
 > of connecting to whatever platform." - Chris, 2026-10-16
 
-It does now. A source may declare
+It does now, without the core learning any one platform's or vendor's name. A
+source may declare
 
-    transport() -> {"impersonate": "safari17_0", "retries": 4, "backoff": 1.5, "timeout": 60}
+    transport() -> {"backend": "browser", "profile": "safari17_0",
+                    "retries": 4, "backoff": 1.5, "timeout": 60}
 
-and the host performs the fetch that way. Optional fields: `impersonate` (a
-browser TLS/HTTP fingerprint via `curl_cffi`), `headers`, `retries`, `backoff`,
-`timeout`. Absent `transport()` = plain `urllib`, exactly as before.
+and the host performs the fetch that way. `backend` names one of the host's
+fetch backends (`plain` = stdlib urllib, the default; `browser` = a browser
+TLS/HTTP fingerprint). Generic fields: `headers`, `retries`, `backoff`,
+`timeout`. A backend reads its own knobs (`profile` is the browser to imitate);
+the host ignores what it does not know. Absent `transport()` = `plain`.
 
-Why: `archiveofourown.org` is behind Cloudflare, which grades the TLS
-ClientHello. Measured from the sandbox on 2026-10-16, same URL:
+The backend's client library lives entirely inside `sources/_backends.py`. The
+core egress (`sources/_fetch.py`) speaks only "backend", never a vendor's word
+and never a vendor's import; adding or swapping a client touches one file. This
+is the rule Chris stated on 2026-10-16: **the system is shaped to host
+integrations; integrations flex around the external system. Never adapt the
+system to a quirk of an integration.** `test_sources.py` asserts it (the core
+carries no vendor token).
 
-    urllib                 -> HTTP 525 (SSL handshake failed)
-    curl_cffi chrome124    -> HTTP 403
-    curl_cffi safari17_0   -> HTTP 200, full work
+Why `browser` exists at all: `archiveofourown.org` is behind Cloudflare, which
+grades the TLS ClientHello. Measured from the sandbox on 2026-10-16, same URL:
+
+    plain urllib           -> HTTP 525 (SSL handshake failed)
+    chrome fingerprint     -> HTTP 403
+    safari fingerprint     -> HTTP 200, full work
 
 So the 525 is not a routing problem; it is the bot check refusing the client. A
 raw TLS handshake to AO3 from the bench box completes (TLSv1.3) and then

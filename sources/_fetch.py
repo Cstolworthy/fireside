@@ -5,17 +5,18 @@ attaches the credential (only to hosts the source declared), and logs every
 request. This module is that fetch, plus the credential-scoping check.
 
 Transport (added v1.10): some sites gate on the TLS ClientHello, not on routing.
-archiveofourown.org sits behind Cloudflare and answers a plain urllib/requests
-client with HTTP 525 (and a chrome-fingerprinted one with 403), while a browser
-gets the page. A source that hits one of those declares `transport()` and the
-host performs the fetch that way -- still through this one logged path, still
-with the cookie attached only to declared hosts. The source owns the quirk; the
-host still owns the socket and the credential.
+A source that hits one of those declares `transport()`, which names a fetch
+`backend` (see _backends.py) plus generic policy -- headers, retries, backoff,
+timeout. The host performs the fetch through this one logged path, still with
+the cookie attached only to declared hosts. The source owns the quirk; the host
+owns the socket, the credential, and the choice of client.
 """
 
 import time
 import urllib.parse
 import urllib.request
+
+from ._backends import BACKENDS, DEFAULT_BACKEND
 
 UA = "Mozilla/5.0 (compatible; reader-local/1.0; personal read-aloud)"
 DEFAULT_LIMIT = 8 * 1024 * 1024
@@ -36,41 +37,21 @@ def host_allowed(url: str, credential_hosts) -> bool:
     return False
 
 
-def _http_urllib(url, headers, limit, timeout):
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        raw = r.read(limit)
-        cs = r.headers.get_content_charset()
-    return raw.decode(cs or "utf-8", "replace")
-
-
-def _http_impersonate(url, headers, limit, timeout, impersonate):
-    """Fetch with a browser TLS/HTTP fingerprint via curl_cffi. Needed where the
-    site's bot check grades the ClientHello. Raises on non-2xx so the retry loop
-    (rate-limit and challenge responses are often transient) can back off."""
-    try:
-        from curl_cffi import requests as creq
-    except Exception as e:  # pragma: no cover - dependency-missing path
-        raise RuntimeError(
-            "this source needs the 'curl_cffi' client to pass the site's bot "
-            "check (pip install curl_cffi): %s" % e)
-    sess = creq.Session(impersonate=impersonate)
-    r = sess.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-    if r.status_code >= 400:
-        raise RuntimeError("HTTP %d from %s" % (r.status_code, url))
-    return r.text[:limit]
-
-
 def fetch(url: str, cred=None, credential_hosts=(), limit: int = DEFAULT_LIMIT,
           transport=None):
     """Fetch one url and return text. Attaches the credential as a Cookie header
     ONLY when the host is in scope. Never logs the credential. `transport` is the
-    source's declared fetch policy (see docs/SOURCE-CONTRACT.md); None = plain
-    urllib, same as before."""
+    source's declared fetch policy (see docs/SOURCE-CONTRACT.md): it names a
+    `backend` and carries generic policy. None = plain urllib, same as before."""
     u = urllib.parse.urlparse(url)
     if u.scheme not in ("http", "https"):
         raise ValueError("only http/https links")
     t = transport or {}
+    backend = t.get("backend") or DEFAULT_BACKEND
+    fn = BACKENDS.get(backend)
+    if fn is None:
+        raise ValueError("unknown fetch backend %r (known: %s)"
+                         % (backend, ", ".join(sorted(BACKENDS))))
     headers = {
         "User-Agent": UA,
         "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
@@ -80,16 +61,13 @@ def fetch(url: str, cred=None, credential_hosts=(), limit: int = DEFAULT_LIMIT,
         cookie = cred.get("cookie") or cred.get("session") or ""
         if cookie:
             headers["Cookie"] = cookie
-    imp = t.get("impersonate")
     timeout = t.get("timeout", DEFAULT_TIMEOUT)
     retries = int(t.get("retries", 0))
     backoff = float(t.get("backoff", 1.5))
     last = None
     for attempt in range(retries + 1):
         try:
-            if imp:
-                return _http_impersonate(url, headers, limit, timeout, imp)
-            return _http_urllib(url, headers, limit, timeout)
+            return fn(url, headers, limit, timeout, t)
         except Exception as e:
             last = e
             if attempt < retries:

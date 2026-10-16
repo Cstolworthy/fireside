@@ -145,11 +145,26 @@ def unit_tests():
     ck("ao3 other host does not match", not is_work_url("https://notao3.example/works/1"))
     fw = full_work_url("https://archiveofourown.org/works/12345")
     ck("full work url asks for all chapters", "view_full_work=true" in fw and "view_adult=true" in fw, fw)
-    # transport: AO3 declares a browser fingerprint; bind_transport is inert when absent
-    ck("ao3 declares a browser transport", bool(getattr(get_source("ao3"), "transport", None)
-                                                and get_source("ao3").transport().get("impersonate")))
+    # transport: AO3 declares a browser backend; bind_transport is inert when absent
+    a3t = get_source("ao3").transport() if hasattr(get_source("ao3"), "transport") else {}
+    ck("ao3 declares a browser backend", a3t.get("backend") == "browser", a3t)
     ck("plain source has no transport", not hasattr(get_source("web"), "transport"))
     ck("bind_transport inert when None", bind_transport(fetch, None) is fetch)
+    # Chris's rule (2026-10-16): the system hosts integrations, it does not learn
+    # one. The egress core must carry no vendor vocabulary; a client library lives
+    # behind a named backend in _backends.py.
+    import inspect
+    from sources import _fetch as _fmod, _backends as _bmod
+    fsrc = inspect.getsource(_fmod)
+    ck("core egress names no vendor", not any(w in fsrc for w in ("curl_cffi", "impersonate")))
+    ck("backends registry is generic", set(_bmod.BACKENDS) == {"plain", "browser"}, set(_bmod.BACKENDS))
+    try:
+        fetch("https://example.com/", transport={"backend": "nope"})
+        ck("unknown backend rejected", False)
+    except ValueError:
+        ck("unknown backend rejected", True)
+    except Exception as e:
+        ck("unknown backend rejected", False, "wrong error: %r" % (e,))
     a = parse_ao3(AO3_PAGE, "https://archiveofourown.org/works/12345")
     ck("ao3 title", a["title"] == "Test Fic", a["title"])
     ck("ao3 N chapters, one book", [c["title"] for c in a["chapters"]] == ["Chapter 1: Start", "Chapter 2: Later"],

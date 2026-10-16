@@ -11,10 +11,11 @@ One source = one object:
                         ships no HTML
   credential_hosts()    -> [host suffix]; the host attaches the credential ONLY
                         to these hosts, as a Cookie header, and never logs it
-  transport() [opt]     -> fetch policy (e.g. {"impersonate": "safari17_0",
-                        "retries": 4}) for sites that gate on the TLS
-                        fingerprint. The host performs the fetch; the source
-                        owns the quirk. Absent = plain urllib.
+  transport() [opt]     -> fetch policy: {"backend": "plain"|"browser", ...}
+                        for sites that gate on the TLS fingerprint. Generic
+                        fields: headers, retries, backoff, timeout; a named
+                        backend may read its own. The host performs the fetch;
+                        the source owns the quirk. Absent = plain urllib.
 
 The plugin never opens a socket and never holds the login. It calls the `fetch`
 the host hands it. `cred` is a resolved credential ({cookie: ...} for now); the
