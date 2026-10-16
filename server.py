@@ -357,14 +357,97 @@ PROVIDERS = {
 }
 
 
-def voice_sig(provider: str, voice: str, model: str = "") -> str:
+def voice_sig(provider: str, voice: str, model: str = "", extra: str = "") -> str:
     """A short folder name for one voice, so audio is cached per voice.
 
     Without this, changing the voice and pressing play replays whatever voice the
     first render used. The cache has to be keyed by what actually made the sound.
+    `extra` carries the pronunciation tag, so a fixed word makes a new render too.
     """
-    raw = "%s|%s|%s" % (provider, voice or "none", model or "")
+    raw = "%s|%s|%s|%s" % (provider, voice or "none", model or "", extra or "")
     return "%s-%s" % (provider, hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8])
+
+
+# -------------------------------------------------------------- pronunciations
+
+def pron_path(root: str, book_id: str) -> str:
+    return os.path.join(book_dir(root, book_id), "pron.json")
+
+
+def load_pron(root: str, book_id: str) -> list:
+    """This book's say-it-differently list: [{'from': word, 'to': respelling}].
+
+    Stored beside the book rather than inside book.json, so loading the same file
+    again does not throw the list away.
+    """
+    try:
+        with open(pron_path(root, book_id), "r", encoding="utf-8") as f:
+            rules = json.load(f)
+    except Exception:
+        return []
+    if not isinstance(rules, list):
+        return []
+    out = []
+    for r in rules:
+        frm = str((r or {}).get("from", "")).strip()
+        to = str((r or {}).get("to", "")).strip()
+        if frm and to:
+            out.append({"from": frm, "to": to})
+    return out
+
+
+def save_pron(root: str, book_id: str, rules) -> list:
+    """Tidy and store the list: drop blanks, drop duplicate words, keep order."""
+    clean, seen = [], set()
+    for r in rules or []:
+        frm = str((r or {}).get("from", "")).strip()
+        to = str((r or {}).get("to", "")).strip()
+        if frm and to and frm.lower() not in seen:
+            seen.add(frm.lower())
+            clean.append({"from": frm, "to": to})
+    os.makedirs(book_dir(root, book_id), exist_ok=True)
+    with open(pron_path(root, book_id), "w", encoding="utf-8") as f:
+        json.dump(clean, f, ensure_ascii=False, indent=1)
+    return clean
+
+
+def pron_token(rules) -> str:
+    """Short tag folded into the audio cache key. Empty when there is no list, so a
+    book that never had one keeps whatever it already rendered."""
+    if not rules:
+        return ""
+    raw = "|".join("%s>%s" % (r["from"].lower(), r["to"])
+                   for r in sorted(rules, key=lambda r: r["from"].lower()))
+    return "p" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:6]
+
+
+def _pron_regex(rules):
+    """One alternation, longest word first, whole-word where the word has word edges."""
+    alts = []
+    for r in sorted(rules or [], key=lambda r: -len(r["from"])):
+        frm = r["from"]
+        e = re.escape(frm)
+        if re.match(r"\w", frm[0]):
+            e = r"(?<!\w)" + e
+        if re.match(r"\w", frm[-1]):
+            e = e + r"(?!\w)"
+        alts.append(e)
+    return re.compile("|".join(alts), re.I) if alts else None
+
+
+def apply_pron(text: str, rules) -> str:
+    """Swap whole words for their say-as respelling, case-insensitive. The
+    replacement goes in literally, never read back as a regex."""
+    pat = _pron_regex(rules)
+    if not text or pat is None:
+        return text
+    repl = {r["from"].lower(): r["to"] for r in rules}
+    return pat.sub(lambda m: repl.get(m.group(0).lower(), m.group(0)), text)
+
+
+def chapter_uses_pron(text: str, rules) -> bool:
+    pat = _pron_regex(rules)
+    return bool(pat and text and pat.search(text))
 
 
 TESTER_MAX_FILES = 240
@@ -415,9 +498,18 @@ def load_book(root: str, book_id: str) -> dict:
         return json.load(f)
 
 
-def chapter_path(root: str, book_id: str, provider: str, voice: str, model: str, idx: int) -> str:
-    """Where one chapter's audio for one voice lives. Same rule the player uses."""
-    sig = voice_sig(provider, voice, model)
+def chapter_path(root: str, book_id: str, book: dict, provider: str, voice: str,
+                 model: str, idx: int) -> str:
+    """Where one chapter's audio for one voice lives. Same rule the player uses.
+
+    The pronunciation tag rides in the signature only for chapters that actually
+    use a listed word, so fixing one name re-renders those chapters and leaves the
+    rest of a long book exactly where it was.
+    """
+    rules = load_pron(root, book_id)
+    ch = book["chapters"][idx]
+    extra = pron_token(rules) if (rules and chapter_uses_pron(ch["text"], rules)) else ""
+    sig = voice_sig(provider, voice, model, extra)
     return os.path.join(book_dir(root, book_id), "audio", sig, "ch%03d%s" % (idx, PROVIDERS[provider]["ext"]))
 
 
@@ -428,16 +520,17 @@ def render_chapter_file(root: str, book_id: str, book: dict, idx: int, provider:
     apart: both end up with the same bytes in the same file.
     """
     ch = book["chapters"][idx]
-    out = chapter_path(root, book_id, provider, body.get("voice", ""), body.get("model", ""), idx)
+    out = chapter_path(root, book_id, book, provider, body.get("voice", ""), body.get("model", ""), idx)
     os.makedirs(os.path.dirname(out), exist_ok=True)
     if body.get("force") and os.path.exists(out):
         os.remove(out)
     if os.path.exists(out):
         return out
+    text = apply_pron(ch["text"], load_pron(root, book_id))
     if provider == "local":
-        synth_local(ch["text"], out)
+        synth_local(text, out)
         return out
-    parts = chunk_text(ch["text"])
+    parts = chunk_text(text)
     tmp = out + ".part"
     _prog_set(book_id, idx, done=0, total=len(parts), error=None)
     try:
@@ -543,6 +636,9 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/save":
             q = urllib.parse.parse_qs(u.query)
             return self._save(q)
+        if u.path == "/api/pron":
+            q = urllib.parse.parse_qs(u.query)
+            return self._pron_get(q)
         if u.path == "/api/book":
             q = urllib.parse.parse_qs(u.query)
             bid = (q.get("id", [""])[0])
@@ -622,6 +718,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._render_all()
             if u.path == "/api/say":
                 return self._say()
+            if u.path == "/api/pron":
+                return self._pron_set()
         except Exception as e:
             return self._err("%s: %s" % (type(e).__name__, e), 500)
         self._err("not found", 404)
@@ -683,6 +781,8 @@ class Handler(BaseHTTPRequestHandler):
         text = (body.get("text") or "").strip()
         if not text:
             return self._err("no text")
+        rules = body.get("rules") or []
+        text = apply_pron(text, rules)
         provider = body.get("provider", "local")
         if provider not in PROVIDERS:
             return self._err("unknown provider")
@@ -690,7 +790,7 @@ class Handler(BaseHTTPRequestHandler):
         key = body.get("key", "")
         speed = float(body.get("speed", 1.0) or 1.0)
         job = body.get("job") or ""
-        raw = "%s|%s|%s|%s" % (provider, voice, speed, text)
+        raw = "%s|%s|%s|%s|%s" % (provider, voice, speed, pron_token(rules), text)
         h = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
         d = _tester_dir(self.root)
         ext = PROVIDERS[provider]["ext"]
@@ -740,7 +840,7 @@ class Handler(BaseHTTPRequestHandler):
         book = load_book(self.root, book_id)
         if idx < 0 or idx >= len(book["chapters"]):
             return self._err("chapter out of range")
-        out = chapter_path(self.root, book_id, provider, body.get("voice", ""),
+        out = chapter_path(self.root, book_id, book, provider, body.get("voice", ""),
                            body.get("model", ""), idx)
         rel = os.path.relpath(out, self.root).replace(os.sep, "/")
         cached = os.path.exists(out)
@@ -778,11 +878,37 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return self._err("no such book", 404)
         present = [i for i in range(len(book["chapters"]))
-                   if os.path.isfile(chapter_path(self.root, bid, provider, q.get("voice", [""])[0],
-                                                  q.get("model", [""])[0], i))]
+                   if os.path.isfile(chapter_path(self.root, bid, book, provider,
+                                                  q.get("voice", [""])[0], q.get("model", [""])[0], i))]
         return self._json({"ok": True, "total": len(book["chapters"]), "done": len(present),
-                           "have": present,
+                           "have": present, "pron": len(load_pron(self.root, bid)),
                            "sig": voice_sig(provider, q.get("voice", [""])[0], q.get("model", [""])[0])})
+
+    def _pron_get(self, q):
+        """The saved say-it-differently list, plus which chapters it touches."""
+        bid = q.get("id", [""])[0]
+        try:
+            book = load_book(self.root, bid)
+        except Exception:
+            return self._err("no such book", 404)
+        rules = load_pron(self.root, bid)
+        hit = [i for i, c in enumerate(book["chapters"]) if chapter_uses_pron(c["text"], rules)]
+        return self._json({"ok": True, "book": bid, "rules": rules, "chapters": hit})
+
+    def _pron_set(self):
+        """Save the list and report which chapters use it, so the caller can
+        re-render just those."""
+        body = json.loads(self._body() or b"{}")
+        bid = body.get("bookId", "")
+        try:
+            book = load_book(self.root, bid)
+        except Exception:
+            return self._err("no such book", 404)
+        rules = save_pron(self.root, bid, body.get("rules"))
+        hit = [i for i, c in enumerate(book["chapters"]) if chapter_uses_pron(c["text"], rules)]
+        return self._json({"ok": True, "rules": rules, "chapters": hit,
+                           "titles": [book["chapters"][i]["title"] for i in hit],
+                           "token": pron_token(rules)})
 
     def _save(self, q):
         """Hand back what has been rendered: as=mp3 stitches the chapters into one
@@ -797,9 +923,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._err("no such book", 404)
         voice, model = q.get("voice", [""])[0], q.get("model", [""])[0]
         ext = PROVIDERS[provider]["ext"]
-        present = [(i, chapter_path(self.root, bid, provider, voice, model, i))
+        present = [(i, chapter_path(self.root, bid, book, provider, voice, model, i))
                    for i in range(len(book["chapters"]))
-                   if os.path.isfile(chapter_path(self.root, bid, provider, voice, model, i))]
+                   if os.path.isfile(chapter_path(self.root, bid, book, provider, voice, model, i))]
         if not present:
             return self._err("nothing rendered in this voice yet", 404)
         want = (q.get("as", ["mp3"])[0] or "mp3").lower()

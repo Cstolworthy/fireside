@@ -112,6 +112,7 @@
     <div class="tabs">
       <button data-tab="read" class="on">Read</button>
       <button data-tab="test">Voice tester</button>
+      <button data-tab="pron">Pronunciations</button>
     </div>
 
     <div id="view-read">
@@ -136,6 +137,20 @@
           <button id="say" class="primary">Say it in this voice</button>
         </div>
         <div class="hint">Pick a voice on the left, hit Say it, then pick the next. Each voice is cached, so going back to one you already tried starts instantly.</div>
+      </div>
+    </div>
+
+    <div id="view-pron" style="display:none">
+      <div class="panel">
+        <label>Fix a word the voice gets wrong</label>
+        <div class="hint">Left: the word as it appears in the text. Right: how it should sound, spelled out — <b>Hermione</b> → <i>Her-my-oh-nee</i>, <b>Stiles</b> → <i>styles</i>. It applies to the voice picked on the left. Saving changes the render only for the chapters that use the word, so the rest of the book keeps its audio.</div>
+        <div id="pronrows" style="margin-top:10px"></div>
+        <div class="row" style="margin-top:10px">
+          <button id="pronadd">Add a word</button>
+          <button id="pronsave" class="primary">Save list</button>
+          <button id="prontest">Hear the opening with fixes</button>
+        </div>
+        <div id="proninfo" class="hint" style="margin-top:8px"></div>
       </div>
     </div>
 
@@ -262,6 +277,7 @@ async function ingest(f) {
     localStorage.setItem('reader.last', d.id);
     $('#bookinfo').textContent = d.title + ' — ' + d.chapters.length + ' chapters';
     renderList();
+    loadPron();
     idle('Loaded ' + d.title + '.');
   } catch (e) { fail(e); }
 }
@@ -283,6 +299,7 @@ async function loadUrl() {
     localStorage.setItem('reader.last', d.id);
     $('#bookinfo').textContent = d.title + ' — ' + d.chapters.length + ' chapter(s)';
     renderList();
+    loadPron();
     idle('Page loaded. Press Play when you are ready.');
   } catch (e) { fail(e); }
 }
@@ -414,6 +431,8 @@ document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   const t = b.dataset.tab;
   $('#view-read').style.display = t === 'read' ? 'block' : 'none';
   $('#view-test').style.display = t === 'test' ? 'block' : 'none';
+  $('#view-pron').style.display = t === 'pron' ? 'block' : 'none';
+  if (t === 'pron') loadPron();
 });
 
 $('#usesample').onclick = () => {
@@ -424,13 +443,15 @@ $('#usesample').onclick = () => {
   if (txt) { $('#sample').value = c.preview || txt; idle('Took the opening of chapter ' + (i+1) + '.'); }
 };
 
-$('#say').onclick = sayIt;
+$('#say').onclick = () => sayIt(false);
 
-async function sayIt() {
+async function sayIt(withPron) {
   const text = $('#sample').value.trim();
   if (!text) { idle('Nothing to say yet — type or paste some text.'); return; }
   $('#err').textContent = '';
   const vl = voiceLabel();
+  collectPron();
+  const rules = withPron ? pronRules : [];
   const job = 'say-' + Math.random().toString(36).slice(2, 10);
   busy('Synthesizing the sample in ' + vl + '…');
   const tick = setInterval(async () => {
@@ -442,7 +463,7 @@ async function sayIt() {
   }, 1000);
   try {
     const r = await fetch('/api/say', { method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ text, job, provider:$('#provider').value, voice:$('#voice').value,
+      body: JSON.stringify({ text, job, rules, provider:$('#provider').value, voice:$('#voice').value,
         key:$('#key').value, region:$('#region').value, group:$('#group').value,
         speed: parseFloat($('#speed').value) || 1.0 }) });
     const d = await r.json();
@@ -456,6 +477,119 @@ async function sayIt() {
   } catch (e) { fail(e); }
   finally { clearInterval(tick); }
 }
+
+// ---------------------------------------------------------------- pronunciations
+let pronRules = [];
+
+function pronRow(frm, to) {
+  const row = document.createElement('div');
+  row.className = 'row pronrow'; row.style.marginTop = '6px';
+  const a = document.createElement('input');
+  a.placeholder = 'word in the text'; a.value = frm || ''; a.style.flex = '1 1 0';
+  const mid = document.createElement('span');
+  mid.textContent = '→'; mid.style.color = 'var(--dim)'; mid.style.flex = '0 0 auto';
+  const b = document.createElement('input');
+  b.placeholder = 'how it should sound'; b.value = to || ''; b.style.flex = '1.5 1 0';
+  const x = document.createElement('button');
+  x.textContent = '✕'; x.style.flex = '0 0 44px';
+  x.onclick = () => { row.remove(); collectPron(); };
+  row.append(a, mid, b, x);
+  $('#pronrows').append(row);
+}
+
+function collectPron() {
+  pronRules = [...$('#pronrows').querySelectorAll('.pronrow')].map(r => {
+    const inp = r.querySelectorAll('input');
+    return { from: inp[0].value.trim(), to: inp[1].value.trim() };
+  }).filter(r => r.from && r.to);
+}
+
+function showPronRules(rules) {
+  $('#pronrows').innerHTML = '';
+  (rules && rules.length ? rules : [{ from:'', to:'' }]).forEach(r => pronRow(r.from, r.to));
+}
+
+async function loadPron() {
+  if (!book) { showPronRules([]); $('#proninfo').textContent = 'Load a book to keep a list for it.'; return; }
+  try {
+    const d = await (await fetch('/api/pron?id=' + encodeURIComponent(book.id))).json();
+    if (!d.ok) return;
+    pronRules = d.rules || [];
+    showPronRules(pronRules);
+    $('#proninfo').textContent = pronRules.length
+      ? pronRules.length + ' word(s) set for this book.'
+        + (d.chapters && d.chapters.length ? ' ' + d.chapters.length + ' chapter(s) use them.' : '')
+      : 'No words set for this book yet.';
+  } catch (_) {}
+}
+
+$('#pronadd').onclick = () => { pronRow('', ''); $('#proninfo').textContent = ''; };
+
+$('#pronsave').onclick = async () => {
+  if (!book) { idle('Load a book first.'); return; }
+  collectPron();
+  $('#err').textContent = '';
+  busy('Saving the pronunciation list…');
+  try {
+    const r = await fetch('/api/pron', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ bookId: book.id, rules: pronRules }) });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+    pronRules = d.rules || [];
+    showPronRules(pronRules);
+    const aff = d.chapters || [];
+    $('#proninfo').innerHTML = '';
+    if (!aff.length) {
+      $('#proninfo').textContent = pronRules.length
+        ? 'Saved. No chapter in this book uses those words yet.'
+        : 'Saved (empty list).';
+      idle('Saved.');
+      return;
+    }
+    $('#proninfo').append(document.createTextNode('Saved. ' + aff.length + ' chapter(s) use these words: '
+      + aff.map(i => i + 1).join(', ') + '. '));
+    const btn = document.createElement('button');
+    btn.textContent = 'Re-render ' + aff.length + ' chapter(s)';
+    btn.onclick = () => reRenderChapters(aff, btn);
+    $('#proninfo').append(btn);
+    idle('Saved. Re-render to hear the fix.');
+  } catch (e) { fail(e); }
+};
+
+async function reRenderChapters(idxs, btn) {
+  if (!book) return;
+  if (btn) btn.disabled = true;
+  $('#err').textContent = '';
+  const vl = voiceLabel();
+  const body = {
+    bookId: book.id, provider: $('#provider').value, voice: $('#voice').value,
+    key: $('#key').value, region: $('#region').value, group: $('#group').value,
+    speed: parseFloat($('#speed').value) || 1.0, force: true,
+  };
+  busy('Re-rendering fixed chapters in ' + vl + '…');
+  try {
+    for (let n = 0; n < idxs.length; n++) {
+      progress('Re-rendering chapter ' + (idxs[n] + 1) + '  ·  ' + (n + 1) + ' of ' + idxs.length);
+      bar(n, idxs.length);
+      const r = await fetch('/api/render', { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(Object.assign({ chapter: idxs[n] }, body)) });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error);
+    }
+    bar(idxs.length, idxs.length);
+    idle('Re-rendered ' + idxs.length + ' chapter(s) in ' + vl + '. Press Play to hear the fix.');
+    $('#proninfo').textContent = 'Re-rendered ' + idxs.length + ' chapter(s) in ' + vl + '.';
+  } catch (e) { fail(e); }
+  finally { if (btn) btn.disabled = false; refreshRendered(); }
+}
+
+$('#prontest').onclick = async () => {
+  if (!book) { idle('Load a book first, or use the Voice tester.'); return; }
+  const i = cur >= 0 ? cur : 0;
+  const c = book.chapters[i];
+  $('#sample').value = (c && (c.preview || c.title)) || '';
+  await sayIt(true);
+};
 
 // ---------------------------------------------------------------- resume
 function markResume() {
@@ -533,6 +667,7 @@ window.addEventListener('load', () => {
       book = d;
       $('#bookinfo').textContent = d.title + ' — ' + d.chapters.length + ' chapters (last book) \u00b7 press Play to resume';
       renderList();
+      loadPron();
     }).catch(() => {});
   }
 });
