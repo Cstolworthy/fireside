@@ -41,7 +41,7 @@ from providers import get_provider  # the speech engines; see docs/PROVIDER-CONT
 from sources import ingest as source_ingest  # the text sources; see docs/SOURCE-CONTRACT.md
 from sources import describe as source_describe, choose as source_choose
 
-READER_VERSION = "1.9"  # shown in the page header; single source
+READER_VERSION = "1.10"  # shown in the page header; single source
 
 def _cred(body: dict) -> dict:
     """Resolve the credential the way the contract wants: the provider is handed a
@@ -704,6 +704,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 

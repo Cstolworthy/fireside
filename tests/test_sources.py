@@ -67,7 +67,7 @@ AO3_PAGE = ("""<html><head><title>Test Fic - somebody | Archive of Our Own</titl
 <div id="chapter-1" class="chapter" role="article">
   <div class="chapter preface group"><h3 class="title">Chapter 1: Start</h3>
   <blockquote class="userstuff">a summary, not the body</blockquote></div>
-  <div class="userstuff module" role="article"><p>Fire burns here.</p><p>%s</p></div>
+  <div class="userstuff module" role="article"><h3 class="landmark heading" id="work">Chapter Text</h3><p>Fire burns here.</p><p>%s</p></div>
   <div class="chapter notes module"><h3 class="landmark heading">Notes</h3>
   <blockquote class="userstuff">author note, not read aloud</blockquote></div>
 </div>
@@ -152,6 +152,7 @@ def unit_tests():
     ck("ao3 body read, summary skipped", a["chapters"][0]["text"].startswith("Fire burns here.")
        and "summary" not in a["chapters"][0]["text"], a["chapters"][0]["text"][:60])
     ck("ao3 notes skipped", "author note" not in a["chapters"][0]["text"])
+    ck("ao3 landmark heading stripped (live bug 10-16)", "Chapter Text" not in a["chapters"][0]["text"])
     ck("ao3 chapter 2 text", a["chapters"][1]["text"].startswith("the end"))
 
     # credential scoping
@@ -265,3 +266,4 @@ if __name__ == "__main__":
             print("  - " + f)
         sys.exit(1)
     print("ALL PASS")
+

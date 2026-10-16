@@ -22,6 +22,10 @@ _CHAP = re.compile(r'(?is)<div\b[^>]*\bid="chapter-\d+"[^>]*>')
 _TITLE = re.compile(r'(?is)<h[1-6][^>]*class="[^"]*\btitle\b[^"]*"[^>]*>(.*?)</h[1-6]>')
 _H = re.compile(r'(?is)<h[1-6][^>]*>(.*?)</h[1-6]>')
 _BODY = re.compile(r'(?is)<div\b[^>]*class="[^"]*\buserstuff\b[^"]*"[^>]*>(.*?)</div>')
+# AO3 injects a screen-reader landmark per chapter body: <h3 class="landmark
+# heading" id="work">Chapter Text</h3>. Tags strip but the words survive and
+# would be read aloud at the top of every chapter, so drop the heading first.
+_LANDMARK = re.compile(r'(?is)<h[1-6][^>]*\blandmark\b[^>]*>.*?</h[1-6]>')
 _WSKIN = re.compile(r'(?is)<div\b[^>]*\bid="workskin"[^>]*>(.*)')
 _WTITLE = re.compile(r'(?is)<h2[^>]*class="[^"]*\btitle\b[^"]*"[^>]*>(.*?)</h2>')
 
@@ -69,7 +73,7 @@ def parse_ao3(page: str, url: str) -> dict:
         bm = _BODY.search(seg)
         if not bm:
             continue
-        text = clean_fragment(bm.group(1))
+        text = clean_fragment(_LANDMARK.sub(" ", bm.group(1)))
         if len(text) < 2:
             continue
         tm = _TITLE.search(seg) or _H.search(seg)
@@ -83,7 +87,7 @@ def parse_ao3(page: str, url: str) -> dict:
         region = wm.group(1) if wm else page
         bm = _BODY.search(region)
         if bm:
-            text = clean_fragment(bm.group(1))
+            text = clean_fragment(_LANDMARK.sub(" ", bm.group(1)))
             if len(text) >= 2:
                 tm = _TITLE.search(region) or _H.search(region)
                 ctitle = clean_fragment(tm.group(1))[:160] if tm else ""
@@ -119,3 +123,4 @@ class Ao3:
 
     def credential_hosts(self):
         return ["archiveofourown.org"]
+
