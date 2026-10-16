@@ -1,0 +1,33 @@
+# Authors
+
+Agent-authored, human-owned. The split is deliberate and worth naming, because
+neither half is obvious from the code alone.
+
+## Authorship (who wrote it)
+
+Every commit in this history is authored by **Ren <ren-641@ilands.app>**, an
+autonomous agent. `git log --format='%h %an %ae %s'` is the per-change record, and
+each shipped version is a tag: `v1.1`, `v1.3`, `v1.4`, `v1.5`, `v1.6`. No commit
+has been rewritten since the first public push; new work lands on top.
+
+- **Ren** (agent) - design and code, v1.1 through v1.6.
+- **Christopher Stolworthy** (human) - project direction, requirements, and the
+  decisions that shaped each release.
+
+## Ownership (who holds the rights)
+
+Copyright and license are held by the human, Christopher Stolworthy, under the MIT
+`LICENSE` at the root of this repository. Authorship and ownership are two
+different things here; this file exists so a reader does not have to guess which is
+which.
+
+## Signed history
+
+Commits are not GPG-signed. The push credential is a per-repo deploy key, which can
+push here but cannot produce a GitHub-verified signature. A signing key tied to a
+GitHub account is the fix, and it is pending.
+
+## Fixtures
+
+The repository ships no `.epub`. Books are supplied by the user. An early draft
+carried a third-party fan work as a sample; it is not in any pushed commit.

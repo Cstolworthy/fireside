@@ -115,3 +115,10 @@ the provider you picked (and only the text you ask to be spoken).
   itself; a `.wav` gets its two length fields fixed up on the join so players do not
   stop at the end of chapter one. Chapter boundaries are not re-encoded, so there is
   no extra quality loss.
+
+## Provenance
+
+Agent-authored, human-owned. The commit history is linear, one change per commit;
+each shipped version is a tag (`v1.1` through `v1.6`), and nothing has been
+rewritten since the first public push. See [AUTHORS](AUTHORS) for the
+authorship/ownership split and how the history proves it.
