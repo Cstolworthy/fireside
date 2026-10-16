@@ -37,14 +37,30 @@ record chars at 0 cost, or a BYO user's bundle is burnt paying our price for
 speech we did not buy. Unpriced providers render, but the meter marks the row
 `unpriced` instead of guessing a number.
 
-## Drift already present (fix when the loader lands)
+## Drift, named and closed (v1.7)
 
-- `server.py` dispatches on `provider` with if/elif in three places (voices, say,
-  render). Collapse to a registry lookup; keep behavior identical.
-- `local` has no `list_voices` and its `synth` is `(text, out_path)`, not
-  `(text, voice, opts, cred)`. It needs an explicit "no voices, zero cost" shim.
-- `synth_azure` drops `model`; `synth_minimax` takes one. `opts` carries both.
-- The `PROVIDERS` dict holds only `ext`/`mime`; fold it into the module.
+The three engines now live in `providers/` on this contract: one module each
+(`local.py`, `azure.py`, `minimax.py`), plus the registry in `providers/__init__.py`.
+
+- `server.py` asks `get_provider(provider)` instead of if/elif in three places.
+- `local` exposes `list_voices` (one tone) and a `synth` that returns bytes at
+  zero cost, so it is no longer a special case.
+- `opts` carries `rate`/`speed`/`model` for every provider; azure ignores model,
+  minimax uses it, and neither call site can drift from the other.
+- The old `PROVIDERS` dict is gone; `ext`/`mime`/`needs_key` live on the module.
+- `cost_per_1m_chars`: local 0, azure 15 (pay-as-you-go), minimax `None`
+  (unpriced, not free). `/api/say` returns `cost_usd`; the host zeroes it for a
+  BYO key.
+- `render_chapter_file` and `/api/say` share one provider call, write the returned
+  bytes once, and report progress through the same `report(n,total)` callback, so
+  the Play button and Render-all cannot drift apart.
+
+`tests/test_providers.py` checks all of it with no network and no fixture (it
+builds a two-chapter EPUB in a temp dir and runs the real server).
+
+Still later: the loader (discovery from a `providers/` dir, isolation, install).
+A new provider only imports `Audio`/`Voice` and is added to `REGISTRY`; nothing
+else in the app changes.
 
 ## Not in scope here
 

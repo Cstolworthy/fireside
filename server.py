@@ -37,15 +37,15 @@ import wave
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-READER_VERSION = "1.6"  # shown in the page header; single source
+from providers import get_provider  # the speech engines; see docs/PROVIDER-CONTRACT.md
+
+READER_VERSION = "1.7"  # shown in the page header; single source
 
 # ---------------------------------------------------------------- epub parsing
 
 TAG = re.compile(r"<[^>]+>")
 WS = re.compile(r"[ \t\r\f\v]+")
 BLANK = re.compile(r"\n{3,}")
-CHUNK_TARGET = 3500  # characters per TTS request
-
 # page chrome that survives tag-stripping and would otherwise be read aloud
 _CHROME = re.compile(r"(?i)^(skip to (main )?(content|footer)|jump to content|toggle navigation|menu|search|search for:)$")
 
@@ -207,156 +207,19 @@ def parse_web(page: str, url: str) -> dict:
     return {"title": title, "chapters": [{"title": ch or title[:120] or "Page", "text": text}]}
 
 
-def chunk_text(text: str, target: int = CHUNK_TARGET):
-    """Split on sentence/paragraph edges so each request stays under the provider cap."""
-    parts, cur = [], ""
-    for para in text.split("\n\n"):
-        if len(cur) + len(para) + 2 > target and cur:
-            parts.append(cur.strip())
-            cur = ""
-        if len(para) > target:
-            sents = re.split(r"(?<=[.!?])\s+", para)
-            for s in sents:
-                if len(cur) + len(s) + 1 > target and cur:
-                    parts.append(cur.strip())
-                    cur = ""
-                cur += s + " "
-        else:
-            cur += para + "\n\n"
-    if cur.strip():
-        parts.append(cur.strip())
-    return parts or [text]
+def _cred(body: dict) -> dict:
+    """Resolve the credential the way the contract wants: the provider is handed a
+    value, never the login. Both doors (paste-key now, oauth later) land here, so
+    nothing below the registry can tell which one was used."""
+    return {"key": body.get("key", ""), "region": body.get("region", "eastus"),
+            "group": body.get("group", "")}
 
 
-# ------------------------------------------------------------------- providers
-
-def voices_azure(key: str, region: str):
-    url = "https://%s.tts.speech.microsoft.com/cognitiveservices/voices/list" % region
-    req = urllib.request.Request(url, headers={"Ocp-Apim-Subscription-Key": key})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        data = json.loads(r.read().decode())
-    out = []
-    for v in data:
-        if "Neural" not in v.get("VoiceType", ""):
-            continue
-        locale = v.get("Locale", "")
-        gender = v.get("Gender", "")
-        name = _voice_name(v.get("DisplayName") or v.get("ShortName", ""))
-        # deliberately no personality in the label: we do not apply a style, so
-        # naming one would claim something the audio does not do
-        label = "%s (%s, %s)" % (name, locale, gender)
-        out.append({
-            "id": v.get("ShortName", ""),
-            "label": label,
-            "locale": locale,
-            "gender": gender,
-        })
-    # English first (that is what gets read here), then everything else; both alphabetical
-    out.sort(key=lambda x: (0 if x["locale"].startswith("en") else 1, x["locale"], x["id"]))
-    return out
-
-
-def _voice_name(dn: str) -> str:
-    """'Microsoft Jenny Online (Natural) - English (United States)' -> 'Jenny'.
-
-    Azure's DisplayName is a mouthful and its ShortName is a slug; the voice list
-    is unusable if you have to read either one 900 times.
-    """
-    s = (dn or "").strip()
-    s = re.sub(r"^Microsoft\s+", "", s, flags=re.I)
-    s = s.split(" - ")[0]
-    s = re.sub(r"\s*\([^)]*\)", "", s).strip()
-    s = re.sub(r"\s+Online$", "", s, flags=re.I).strip()
-    if not s or s == dn:
-        # DisplayName was missing and we got a ShortName like en-US-JennyMultilingualNeural
-        m = re.match(r"^[a-z]{2}-[A-Za-z]{2,}(-(.+))?$", s or dn or "")
-        if m and m.group(2):
-            s = re.sub(r"Neural$", "", m.group(2)) or s
-    return s or dn
-
-
-def synth_azure(text: str, voice: str, key: str, region: str, rate: str = "0%") -> bytes:
-    url = "https://%s.tts.speech.microsoft.com/cognitiveservices/v1" % region
-    ssml = (
-        "<speak version='1.0' xml:lang='en-US'>"
-        "<voice name='%s'>"
-        "<prosody rate='%s'>%s</prosody>"
-        "</voice></speak>" % (voice, rate, html.escape(text))
-    )
-    req = urllib.request.Request(url, data=ssml.encode("utf-8"), headers={
-        "Ocp-Apim-Subscription-Key": key,
-        "Content-Type": "application/ssml+xml",
-        "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
-        "User-Agent": "reader-local",
-    })
-    with urllib.request.urlopen(req, timeout=120) as r:
-        return r.read()
-
-
-def voices_minimax(key: str, group: str):
-    # Best-effort. MiniMax voice ids look like English_Gentle-voiced_man.
-    url = "https://api.minimax.chat/v1/get_voice?GroupId=%s" % urllib.parse.quote(group)
-    req = urllib.request.Request(url, data=b"{}", headers={
-        "Authorization": "Bearer %s" % key, "Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            d = json.loads(r.read().decode())
-        vs = d.get("system_voice") or d.get("voice_list") or []
-        out = [{"id": v.get("voice_id"), "label": v.get("voice_name") or v.get("voice_id"),
-                "locale": "", "gender": ""} for v in vs if v.get("voice_id")]
-        if out:
-            return out
-    except Exception:
-        pass
-    return [
-        {"id": "English_Gentle-voiced_man", "label": "English Gentle (voiced man)", "locale": "en", "gender": "male"},
-        {"id": "English_CalmWoman", "label": "English Calm (woman)", "locale": "en", "gender": "female"},
-        {"id": "English_Trustworth_Man", "label": "English Trustworthy (man)", "locale": "en", "gender": "male"},
-        {"id": "English_radiant_girl", "label": "English Radiant (girl)", "locale": "en", "gender": "female"},
-    ]
-
-
-def synth_minimax(text: str, voice: str, key: str, group: str, model: str = "speech-02-hd",
-                  speed: float = 1.0) -> bytes:
-    url = "https://api.minimax.chat/v1/t2a_v2?GroupId=%s" % urllib.parse.quote(group)
-    body = json.dumps({
-        "model": model, "text": text, "stream": False,
-        "voice_setting": {"voice_id": voice, "speed": speed, "vol": 1.0, "pitch": 0},
-        "audio_setting": {"sample_rate": 32000, "format": "mp3"},
-    }).encode()
-    req = urllib.request.Request(url, data=body, headers={
-        "Authorization": "Bearer %s" % key, "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=180) as r:
-        d = json.loads(r.read().decode())
-    audio = (d.get("data") or {}).get("audio")
-    if not audio:
-        raise ValueError("minimax returned no audio: %s" % str(d)[:200])
-    return bytes.fromhex(audio)
-
-
-def synth_local(text: str, out_path: str) -> str:
-    """Offline stand-in: a quiet tone read at speaking length. Proves the pipeline."""
-    secs = max(1.0, min(240.0, len(text) / 14.0))
-    rate = 16000
-    frames = int(secs * rate)
-    with wave.open(out_path, "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(rate)
-        buf = bytearray()
-        for i in range(frames):
-            # slow warble so it is obvious this is a stand-in, not real speech
-            v = int(3000 * (0.5 + 0.5 * (i % 800) / 800.0))
-            buf += struct.pack("<h", v)
-        w.writeframes(bytes(buf))
-    return out_path
-
-
-PROVIDERS = {
-    "local": {"ext": ".wav", "mime": "audio/wav"},
-    "azure": {"ext": ".mp3", "mime": "audio/mpeg"},
-    "minimax": {"ext": ".mp3", "mime": "audio/mpeg"},
-}
+def _call_opts(body: dict) -> dict:
+    """Per-call knobs the providers read; anything else in the body is ignored."""
+    return {"rate": body.get("rate", "0%"),
+            "speed": float(body.get("speed", 1.0) or 1.0),
+            "model": body.get("model", "")}
 
 
 def voice_sig(provider: str, voice: str, model: str = "", extra: str = "") -> str:
@@ -512,7 +375,7 @@ def chapter_path(root: str, book_id: str, book: dict, provider: str, voice: str,
     ch = book["chapters"][idx]
     extra = pron_token(rules) if (rules and chapter_uses_pron(ch["text"], rules)) else ""
     sig = voice_sig(provider, voice, model, extra)
-    return os.path.join(book_dir(root, book_id), "audio", sig, "ch%03d%s" % (idx, PROVIDERS[provider]["ext"]))
+    return os.path.join(book_dir(root, book_id), "audio", sig, "ch%03d%s" % (idx, get_provider(provider).ext))
 
 
 def render_chapter_file(root: str, book_id: str, book: dict, idx: int, provider: str, body: dict) -> str:
@@ -528,27 +391,18 @@ def render_chapter_file(root: str, book_id: str, book: dict, idx: int, provider:
         os.remove(out)
     if os.path.exists(out):
         return out
+    p = get_provider(provider)
+    if p is None:
+        raise ValueError("unknown provider: %s" % provider)
     text = apply_pron(ch["text"], load_pron(root, book_id))
-    if provider == "local":
-        synth_local(text, out)
-        return out
-    parts = chunk_text(text)
+    opts = _call_opts(body)
+    opts["report"] = lambda n, total: _prog_set(book_id, idx, done=n, total=total)
     tmp = out + ".part"
-    _prog_set(book_id, idx, done=0, total=len(parts), error=None)
+    _prog_set(book_id, idx, done=0, total=p.chunks(text), error=None)
     try:
+        audio = p.synth(text, body.get("voice", ""), opts, _cred(body))
         with open(tmp, "wb") as f:
-            for n, p in enumerate(parts, 1):
-                if provider == "azure":
-                    piece = synth_azure(p, body.get("voice", ""), body.get("key", ""),
-                                        body.get("region", "eastus"), body.get("rate", "0%"))
-                elif provider == "minimax":
-                    piece = synth_minimax(p, body.get("voice", ""), body.get("key", ""), body.get("group", ""),
-                                          body.get("model") or "speech-02-hd", float(body.get("speed", 1.0) or 1.0))
-                else:
-                    raise ValueError("unknown provider")
-                f.write(piece)
-                f.flush()
-                _prog_set(book_id, idx, done=n)
+            f.write(audio.bytes)
         os.replace(tmp, out)
     except Exception as e:
         _prog_set(book_id, idx, error="%s: %s" % (type(e).__name__, e))
@@ -763,19 +617,13 @@ class Handler(BaseHTTPRequestHandler):
     def _voices(self):
         body = json.loads(self._body() or b"{}")
         provider = body.get("provider", "local")
-        key = body.get("key", "")
-        if provider == "local":
-            return self._json({"ok": True, "voices": [
-                {"id": "tone", "label": "Offline tone (no speech)", "locale": "", "gender": ""}]})
-        if not key:
-            return self._err("need a key for %s" % provider)
-        if provider == "azure":
-            vs = voices_azure(key, body.get("region", "eastus"))
-        elif provider == "minimax":
-            vs = voices_minimax(key, body.get("group", ""))
-        else:
+        p = get_provider(provider)
+        if p is None:
             return self._err("unknown provider")
-        return self._json({"ok": True, "voices": vs})
+        cred = _cred(body)
+        if p.needs_key and not cred["key"]:
+            return self._err("need a key for %s" % provider)
+        return self._json({"ok": True, "voices": [v.dict() for v in p.list_voices(cred)]})
 
     def _say(self):
         """Synthesize arbitrary text in one voice. The voice-tester page, and a
@@ -787,42 +635,31 @@ class Handler(BaseHTTPRequestHandler):
         rules = body.get("rules") or []
         text = apply_pron(text, rules)
         provider = body.get("provider", "local")
-        if provider not in PROVIDERS:
+        p = get_provider(provider)
+        if p is None:
             return self._err("unknown provider")
         voice = body.get("voice", "")
-        key = body.get("key", "")
         speed = float(body.get("speed", 1.0) or 1.0)
         job = body.get("job") or ""
         raw = "%s|%s|%s|%s|%s" % (provider, voice, speed, pron_token(rules), text)
         h = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
         d = _tester_dir(self.root)
-        ext = PROVIDERS[provider]["ext"]
+        ext = p.ext
         out = os.path.join(d, h + ext)
         url = "/audio/_tester/%s%s" % (h, ext)
         if os.path.exists(out) and not body.get("force"):
             return self._json({"ok": True, "cached": True, "url": url, "bytes": os.path.getsize(out)})
-        if provider == "local":
-            synth_local(text, out)
-            _prune_tester(d)
-            return self._json({"ok": True, "cached": False, "url": url, "bytes": os.path.getsize(out)})
-        if not key:
+        if p.needs_key and not body.get("key"):
             return self._err("need a key for %s" % provider)
-        parts = chunk_text(text)
-        tmp = out + ".part"
+        opts = _call_opts(body)
         if job:
-            _prog_set(job, 0, done=0, total=len(parts), error=None)
+            opts["report"] = lambda n, total: _prog_set(job, 0, done=n, total=total)
+            _prog_set(job, 0, done=0, total=p.chunks(text), error=None)
+        tmp = out + ".part"
         try:
+            audio = p.synth(text, voice, opts, _cred(body))
             with open(tmp, "wb") as f:
-                for n, p in enumerate(parts, 1):
-                    if provider == "azure":
-                        piece = synth_azure(p, voice, key, body.get("region", "eastus"), body.get("rate", "0%"))
-                    else:
-                        piece = synth_minimax(p, voice, key, body.get("group", ""),
-                                              body.get("model", "speech-02-hd"), speed)
-                    f.write(piece)
-                    f.flush()
-                    if job:
-                        _prog_set(job, 0, done=n)
+                f.write(audio.bytes)
             os.replace(tmp, out)
         except Exception as e:
             if job:
@@ -831,14 +668,15 @@ class Handler(BaseHTTPRequestHandler):
                 os.remove(tmp)
             raise
         _prune_tester(d)
-        return self._json({"ok": True, "cached": False, "url": url, "bytes": os.path.getsize(out)})
+        return self._json({"ok": True, "cached": False, "url": url,
+                           "bytes": os.path.getsize(out), "cost_usd": audio.cost_usd})
 
     def _render(self):
         body = json.loads(self._body() or b"{}")
         book_id = body["bookId"]
         idx = int(body["chapter"])
         provider = body.get("provider", "local")
-        if provider not in PROVIDERS:
+        if get_provider(provider) is None:
             return self._err("unknown provider")
         book = load_book(self.root, book_id)
         if idx < 0 or idx >= len(book["chapters"]):
@@ -856,9 +694,10 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(self._body() or b"{}")
         book_id = body["bookId"]
         provider = body.get("provider", "local")
-        if provider not in PROVIDERS:
+        p = get_provider(provider)
+        if p is None:
             return self._err("unknown provider")
-        if provider != "local" and not body.get("key"):
+        if p.needs_key and not body.get("key"):
             return self._err("need a key for %s" % provider)
         book = load_book(self.root, book_id)
         with RENDER_GUARD:
@@ -874,7 +713,7 @@ class Handler(BaseHTTPRequestHandler):
         """How much of this book already exists in the chosen voice."""
         bid = q.get("id", [""])[0]
         provider = q.get("provider", ["local"])[0]
-        if provider not in PROVIDERS:
+        if get_provider(provider) is None:
             return self._err("unknown provider")
         try:
             book = load_book(self.root, bid)
@@ -918,14 +757,15 @@ class Handler(BaseHTTPRequestHandler):
         file, as=zip gives the per-chapter files. Built once, then cached."""
         bid = q.get("id", [""])[0]
         provider = q.get("provider", ["local"])[0]
-        if provider not in PROVIDERS:
+        prov = get_provider(provider)
+        if prov is None:
             return self._err("unknown provider")
         try:
             book = load_book(self.root, bid)
         except Exception:
             return self._err("no such book", 404)
         voice, model = q.get("voice", [""])[0], q.get("model", [""])[0]
-        ext = PROVIDERS[provider]["ext"]
+        ext = prov.ext
         present = [(i, chapter_path(self.root, bid, book, provider, voice, model, i))
                    for i in range(len(book["chapters"]))
                    if os.path.isfile(chapter_path(self.root, bid, book, provider, voice, model, i))]
@@ -978,7 +818,7 @@ class Handler(BaseHTTPRequestHandler):
                                     break
                                 w.write(b)
             os.replace(tmp, out)
-        return self._send_download(out, PROVIDERS[provider]["mime"], title + ext)
+        return self._send_download(out, prov.mime, title + ext)
 
     def _send_download(self, path, mime, name):
         size = os.path.getsize(path)
@@ -1021,5 +861,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
