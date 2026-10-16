@@ -38,174 +38,9 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from providers import get_provider  # the speech engines; see docs/PROVIDER-CONTRACT.md
+from sources import ingest as source_ingest  # the text sources; see docs/SOURCE-CONTRACT.md
 
-READER_VERSION = "1.7"  # shown in the page header; single source
-
-# ---------------------------------------------------------------- epub parsing
-
-TAG = re.compile(r"<[^>]+>")
-WS = re.compile(r"[ \t\r\f\v]+")
-BLANK = re.compile(r"\n{3,}")
-# page chrome that survives tag-stripping and would otherwise be read aloud
-_CHROME = re.compile(r"(?i)^(skip to (main )?(content|footer)|jump to content|toggle navigation|menu|search|search for:)$")
-
-
-def _text_of(xhtml: str) -> str:
-    """Tags out, readable text back. Block tags become newlines."""
-    s = re.sub(r"(?is)<(script|style|head)[^>]*>.*?</\1>", " ", xhtml)
-    s = re.sub(r"(?i)<br\s*/?>", "\n", s)
-    s = re.sub(r"(?i)</?(p|div|h[1-6]|li|tr|blockquote|section)[^>]*>", "\n", s)
-    s = TAG.sub("", s)
-    s = html.unescape(s)
-    s = WS.sub(" ", s)
-    lines = [ln.strip() for ln in s.split("\n")]
-    s = "\n".join(ln for ln in lines if ln and not _CHROME.match(ln))
-    return BLANK.sub("\n\n", s).strip()
-
-
-def _first_heading(xhtml: str, fallback: str) -> str:
-    m = re.search(r"(?is)<h[1-3][^>]*>(.*?)</h[1-3]>", xhtml)
-    if m:
-        t = _text_of(m.group(1))
-        if t:
-            return t[:120]
-    m = re.search(r"(?is)<title[^>]*>(.*?)</title>", xhtml)
-    if m:
-        t = _text_of(m.group(1))
-        if t:
-            return t[:120]
-    return fallback
-
-
-def parse_epub(data: bytes, name: str) -> dict:
-    """bytes of an .epub -> {'title':..., 'chapters':[{'title','text'}...]}"""
-    import io
-
-    z = zipfile.ZipFile(io.BytesIO(data))
-    names = z.namelist()
-
-    opf_path = None
-    if "META-INF/container.xml" in names:
-        root = _text_of_xml(z.read("META-INF/container.xml"))
-        m = re.search(r'full-path="([^"]+)"', z.read("META-INF/container.xml").decode("utf-8", "replace"))
-        if m:
-            opf_path = m.group(1)
-    if not opf_path:
-        opf_path = next((n for n in names if n.lower().endswith(".opf")), None)
-    if not opf_path:
-        raise ValueError("no .opf in this epub")
-
-    opf = z.read(opf_path).decode("utf-8", "replace")
-    base = os.path.dirname(opf_path)
-
-    title = "Untitled"
-    m = re.search(r"(?is)<dc:title[^>]*>(.*?)</dc:title>", opf)
-    if m:
-        title = _text_of(m.group(1)) or title
-
-    manifest = {}
-    for m in re.finditer(r"(?is)<item\b[^>]*/?>", opf):
-        tag = m.group(0)
-        i = re.search(r'id="([^"]+)"', tag)
-        h = re.search(r'href="([^"]+)"', tag)
-        mt = re.search(r'media-type="([^"]+)"', tag)
-        if i and h:
-            manifest[i.group(1)] = (h.group(1), (mt.group(1) if mt else ""))
-
-    order = []
-    for m in re.finditer(r"(?is)<itemref\b[^>]*/?>", opf):
-        i = re.search(r'idref="([^"]+)"', m.group(0))
-        if i and i.group(1) in manifest:
-            order.append(manifest[i.group(1)])
-
-    chapters = []
-    for idx, (href, mt) in enumerate(order):
-        if "html" not in mt and not href.lower().endswith((".xhtml", ".html", ".htm")):
-            continue
-        p = href if not base else os.path.join(base, href)
-        p = p.replace("\\", "/")
-        try:
-            raw = z.read(p).decode("utf-8", "replace")
-        except KeyError:
-            continue
-        txt = _text_of(raw)
-        if len(txt) < 2:
-            continue
-        chapters.append({"title": _first_heading(raw, "Chapter %d" % (len(chapters) + 1)), "text": txt})
-
-    if not chapters:
-        raise ValueError("no readable chapters found")
-    return {"title": title, "chapters": chapters}
-
-
-def _text_of_xml(b: bytes) -> str:
-    return b.decode("utf-8", "replace")
-
-
-# --------------------------------------------------------------- web pages
-
-UA = "Mozilla/5.0 (compatible; reader-local/1.0; personal read-aloud)"
-
-# chrome that never belongs in the reading text
-_KILL = re.compile(
-    r"(?is)<(script|style|noscript|svg|iframe|template|form|nav|header|footer|aside)\b[^>]*>.*?</\1>")
-_BLOCK = re.compile(r"(?i)</?(p|div|h[1-6]|li|tr|blockquote|section|article|main|figure|figcaption)\b[^>]*>")
-_ANYTAG = re.compile(r"<[^>]+>")
-
-
-def _clean_fragment(frag: str) -> str:
-    """Page HTML -> just the words, with paragraph breaks kept."""
-    s = _KILL.sub(" ", frag)
-    s = re.sub(r"(?i)<br\s*/?>", "\n", s)
-    s = _BLOCK.sub("\n", s)
-    s = _ANYTAG.sub("", s)
-    s = html.unescape(s)
-    s = WS.sub(" ", s)
-    lines = [ln.strip() for ln in s.split("\n")]
-    s = "\n".join(ln for ln in lines if ln and not _CHROME.match(ln))
-    return BLANK.sub("\n\n", s).strip()
-
-
-def fetch_url(url: str, limit: int = 8 * 1024 * 1024) -> str:
-    u = urllib.parse.urlparse(url)
-    if u.scheme not in ("http", "https"):
-        raise ValueError("only http/https links")
-    req = urllib.request.Request(url, headers={
-        "User-Agent": UA, "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        raw = r.read(limit)
-        cs = r.headers.get_content_charset()
-    return raw.decode(cs or "utf-8", "replace")
-
-
-def parse_web(page: str, url: str) -> dict:
-    """A fetched page -> {'title','chapters'}. One page is its own chapter."""
-    title = "Untitled"
-    m = re.search(r"(?is)<title[^>]*>(.*?)</title>", page)
-    if m:
-        t = _clean_fragment(m.group(1))
-        if t:
-            title = t[:160]
-
-    frag = None
-    for pat in (r"(?is)<article\b[^>]*>(.*?)</article>",
-                r"(?is)<main\b[^>]*>(.*?)</main>"):
-        m = re.search(pat, page)
-        if m:
-            frag = m.group(1)
-            break
-    if not frag:
-        m = re.search(r"(?is)<body\b[^>]*>(.*?)</body>", page)
-        frag = m.group(1) if m else page
-
-    text = _clean_fragment(frag)
-    if len(text) < 120:
-        raise ValueError("no readable text on that page (login wall, or it builds itself in JS)")
-
-    h1 = re.search(r"(?is)<h1[^>]*>(.*?)</h1>", page)
-    ch = _clean_fragment(h1.group(1))[:120] if h1 else ""
-    return {"title": title, "chapters": [{"title": ch or title[:120] or "Page", "text": text}]}
-
+READER_VERSION = "1.8"  # shown in the page header; single source
 
 def _cred(body: dict) -> dict:
     """Resolve the credential the way the contract wants: the provider is handed a
@@ -586,13 +421,12 @@ class Handler(BaseHTTPRequestHandler):
         if not data:
             return self._err("empty upload")
         name = (q.get("name", ["book.epub"])[0])
-        book_id = hashlib.sha1(data).hexdigest()[:12]
+        src, book_id, parsed = source_ingest({"kind": "upload", "filename": name, "data": data})
         d = book_dir(self.root, book_id)
         os.makedirs(os.path.join(d, "audio"), exist_ok=True)
-        parsed = parse_epub(data, name)
         with open(os.path.join(d, "book.json"), "w", encoding="utf-8") as f:
             json.dump(parsed, f, ensure_ascii=False)
-        return self._json({"ok": True, "id": book_id, "title": parsed["title"],
+        return self._json({"ok": True, "id": book_id, "title": parsed["title"], "source": src.id,
                            "chapters": [{"i": i, "title": c["title"], "chars": len(c["text"]),
                                          "preview": c["text"][:700]}
                                         for i, c in enumerate(parsed["chapters"])]})
@@ -602,14 +436,13 @@ class Handler(BaseHTTPRequestHandler):
         url = (body.get("url") or "").strip()
         if not url:
             return self._err("no url")
-        page = fetch_url(url)
-        parsed = parse_web(page, url)
-        book_id = hashlib.sha1(url.encode("utf-8")).hexdigest()[:12]
+        cred = body.get("cred") or None
+        src, book_id, parsed = source_ingest({"kind": "url", "url": url}, cred=cred)
         d = book_dir(self.root, book_id)
         os.makedirs(os.path.join(d, "audio"), exist_ok=True)
         with open(os.path.join(d, "book.json"), "w", encoding="utf-8") as f:
             json.dump(parsed, f, ensure_ascii=False)
-        return self._json({"ok": True, "id": book_id, "title": parsed["title"],
+        return self._json({"ok": True, "id": book_id, "title": parsed["title"], "source": src.id,
                            "chapters": [{"i": i, "title": c["title"], "chars": len(c["text"]),
                                          "preview": c["text"][:700]}
                                         for i, c in enumerate(parsed["chapters"])]})
