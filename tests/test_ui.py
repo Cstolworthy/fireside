@@ -20,7 +20,7 @@ import threading
 import unittest
 import urllib.request
 
-from host.app import App, UI_DIR, GET_ROUTES, POST_ROUTES, make_handler
+from host.app import App, UI_DIR, GET_ROUTES, POST_ROUTES, AUTH_ROUTES, make_handler
 from tests.test_app import READER_BODY, SPEECH_BODY, STORAGE_BODY
 from tests.test_pluginhost import write_plugin
 
@@ -80,13 +80,22 @@ class TestBrowserUi(unittest.TestCase):
 
     def test_ui_only_calls_served_routes(self):
         html = open(os.path.join(UI_DIR, "index.html"), encoding="utf-8").read()
-        served = set(GET_ROUTES) | set(POST_ROUTES)
+        served = set(GET_ROUTES) | set(POST_ROUTES) | set(AUTH_ROUTES)
         calls = set(re.findall(r"""(?:fetch|api|jpost)\(\s*['"]([^'"]+)['"]""", html))
         self.assertTrue(calls, "no fetch calls found - did the page change shape?")
         for call in calls:
             base = call.split("?")[0]
             self.assertIn(base, served,
                           "the UI calls %r, which the host does not serve" % base)
+
+    def test_sign_in_chip_is_wired(self):
+        # the page carries a sign-in surface, and it talks only to served routes
+        html = open(os.path.join(UI_DIR, "index.html"), encoding="utf-8").read()
+        self.assertIn('id="auth"', html)
+        self.assertIn('id="namebox"', html)
+        self.assertIn("/auth/providers", html)
+        self.assertIn("/auth/logout", html)
+        self.assertIn("Sign in with ", html)
 
     def test_plugins_declare_speech_settings(self):
         # the fake root above ships no settings; ask the host to load the real

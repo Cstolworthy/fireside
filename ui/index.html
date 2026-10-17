@@ -59,7 +59,7 @@
 <header>
   <h1>fireside</h1>
   <p>Drop an EPUB or paste a story link, pick a voice, get audio you can pause, resume, and keep. <span id="ver">v__HOST_VERSION__</span></p>
-  <div id="who"><span>listening as</span><input id="user" placeholder="your name" autocomplete="off"><button id="saveuser" style="width:auto">set</button></div>
+  <div id="who"><span id="auth"></span><span id="namebox"><span>listening as</span><input id="user" placeholder="your name" autocomplete="off"><button id="saveuser" style="width:auto">set</button></span></div>
 </header>
 <main>
   <section>
@@ -258,6 +258,32 @@ $('#save').onclick = () => {
 $('#user').oninput = () => { $('#user').dataset.dirty = '1'; };
 $('#saveuser').onclick = async () => { USER = $('#user').value.trim(); localStorage.setItem(UKEY, USER); loadLibrary(); idle('Listening as ' + (USER || '(unset)')); };
 
+// --- sign-in (social providers; the session lives on the server) -----------
+// A provider only appears if the deployment has credentials for it, so an
+// unconfigured self-host shows nothing and keeps the plain name box.
+async function initAuth() {
+  let providers = [], me = { authenticated: false, user: '' };
+  try { providers = (await api('/auth/providers')).providers || []; } catch (_) {}
+  try { me = await api('/me'); } catch (_) {}
+  const box = $('#auth'); box.innerHTML = '';
+  if (me.authenticated) {
+    const label = me.user.includes(':') ? me.user.split(':')[1] : me.user;
+    USER = me.user; localStorage.setItem(UKEY, USER); $('#user').value = USER;
+    const s = document.createElement('span'); s.textContent = 'signed in · ' + label;
+    const out = document.createElement('button'); out.textContent = 'Sign out'; out.style.width = 'auto';
+    out.onclick = async () => { try { await api('/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); } catch (_) {}
+      localStorage.removeItem(UKEY); USER = ''; location.reload(); };
+    box.append(s, out);
+    $('#namebox').style.display = 'none';
+  } else if (providers.length) {
+    providers.forEach(p => {
+      const b = document.createElement('button'); b.textContent = 'Sign in with ' + p.label; b.style.width = 'auto';
+      b.onclick = () => { location.href = p.start; };
+      box.append(b);
+    });
+  }
+}
+
 // --- voices ----------------------------------------------------------------
 async function loadVoices() {
   const pid = $('#provider').value; if (!pid) return;
@@ -455,6 +481,7 @@ $('#offline').onclick = async () => {
 
 // --- boot ------------------------------------------------------------------
 window.addEventListener('load', async () => {
+  try { await initAuth(); } catch (_) {}
   try { await loadPlugins(); } catch (e) { fail(e); }
   if (saved.voice) { const o = document.createElement('option'); o.value = saved.voice; o.textContent = (saved.voiceLabel || saved.voice) + ' (saved)'; $('#voice').prepend(o); }
   loadLibrary();
