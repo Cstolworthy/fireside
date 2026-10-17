@@ -38,7 +38,8 @@ class Plugin:
 STORAGE_BODY = '''
 class Plugin:
     id = %(id)r
-    def put(self, key, data): return key
+    def put(self, data): return "ref"
+    def has(self, ref): return False
     def get(self, ref): return b""
     def delete(self, ref): return None
 '''

@@ -24,7 +24,7 @@ DEFAULT_PORT = int(os.environ.get("FIRESIDE_HOST_PORT", "8788"))
 _REQUIRED_METHODS = {
     "reader": ("matches", "read"),
     "speech": ("list_voices", "synth", "quote", "report"),
-    "storage": ("put", "get", "delete"),
+    "storage": ("put", "has", "get", "delete"),
 }
 
 

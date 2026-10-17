@@ -147,7 +147,10 @@ class Storage:
     the bytes are still there."""
     id = ""
 
-    def put(self, key: str, data: bytes) -> str:
+    def put(self, data: bytes) -> str:
+        raise NotImplementedError
+
+    def has(self, ref: str) -> bool:
         raise NotImplementedError
 
     def get(self, ref: str) -> bytes:
