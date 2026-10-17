@@ -166,3 +166,30 @@ reader, a speech engine, or a storage backend.
 On unraid, the simplest path is the Compose Manager plugin: add this repo as a
 stack, set the host port to 8788, and point the `data` mount at a share under
 `/mnt/user/appdata/fireside`.
+
+
+## Backends and accounts
+
+State lives in SQLite under `FIRESIDE_DATA` by default - nothing to install, one
+file to back up. Point it at MySQL or MariaDB when you want the data somewhere
+else (a shared host, an existing database server, a second box):
+
+    FIRESIDE_DB=mysql://user:password@host:3306/fireside
+
+The database is created on first start if the account may create it. The query
+layer is the same either way; the engine is chosen once, at connect. Unset
+`FIRESIDE_DB` (or set `sqlite:///path/to.db`) to stay on SQLite.
+
+Sign-in has two shapes, and a deployment can offer both:
+
+- **Local account** - username and password, stored on this server as a salted
+  PBKDF2 hash. This is the door a LAN box needs, and it is on by default; set
+  `FIRESIDE_ALLOW_LOCAL=0` to hide it. Register and sign in from the header.
+- **Social sign-in** - GitHub / Google / Microsoft, configured by putting the
+  client id and secret in the environment. A provider appears only when its
+  credentials are present, so an unconfigured server simply offers none. Google
+  requires an HTTPS redirect URI: a bare IP or plain http is rejected by Google,
+  so it needs a real hostname with TLS in front.
+
+With `FIRESIDE_REQUIRE_AUTH=1` (automatic under `--hosted`) every route but the
+page, `/health`, `/auth/providers` and `/me` needs a session.

@@ -13,8 +13,10 @@ Contract:
   session_user(token)             -> user_id or None (expiry enforced)
 """
 
+import hashlib
 import json
 import os
+import re
 import secrets
 import time
 import urllib.parse
@@ -52,6 +54,60 @@ PROVIDERS = {
         "id_env": ("FIRESIDE_OAUTH_MICROSOFT_CLIENT_ID", "FIRESIDE_OAUTH_MICROSOFT_SECRET"),
     },
 }
+
+
+def _truthy(v):
+    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _allow_local():
+    """Local username/password accounts. On unless explicitly disabled."""
+    v = os.environ.get("FIRESIDE_ALLOW_LOCAL")
+    return True if v is None else _truthy(v)
+
+
+def _digest(password, salt):
+    return hashlib.pbkdf2_hmac("sha256", (password or "").encode("utf-8"),
+                               bytes.fromhex(salt), 200000).hex()
+
+
+def normalize_username(username):
+    return (username or "").strip().lower()
+
+
+def local_register(conn, username, password):
+    """Create a local account. Raises AuthError if the name is taken or weak."""
+    name = normalize_username(username)
+    if len(name) < 3 or len(name) > 64:
+        raise AuthError("username must be 3-64 characters")
+    if not re.match(r"^[a-z0-9._-]+$", name):
+        raise AuthError("username may use letters, digits, dot, dash, underscore")
+    if len(password or "") < 8:
+        raise AuthError("password must be at least 8 characters")
+    if conn.execute("SELECT 1 FROM local_accounts WHERE username=?", (name,)).fetchone():
+        raise AuthError("username already taken")
+    uid = "local:%s" % name
+    salt = secrets.token_hex(16)
+    conn.execute("INSERT OR IGNORE INTO users(id,name,created_at) VALUES(?,?,?)",
+                 (uid, name, _now()))
+    conn.execute("INSERT INTO local_accounts(username,user_id,digest,salt,created_at)"
+                 " VALUES(?,?,?,?,?)",
+                 (name, uid, _digest(password, salt), salt, _now()))
+    conn.commit()
+    return uid
+
+
+def local_login(conn, username, password):
+    """Verify a local account. Raises AuthError without saying which half failed."""
+    name = normalize_username(username)
+    row = conn.execute("SELECT user_id,digest,salt FROM local_accounts WHERE username=?",
+                       (name,)).fetchone()
+    if row is None:
+        _digest(password or "", secrets.token_hex(16))   # same work, no leak
+        raise AuthError("invalid username or password")
+    if not secrets.compare_digest(_digest(password or "", row["salt"]), row["digest"]):
+        raise AuthError("invalid username or password")
+    return row["user_id"]
 
 
 class AuthError(Exception):
@@ -124,10 +180,11 @@ def upsert_user(conn, provider, ident):
 
 
 class Auth:
-    def __init__(self, conn, fetch=None, providers=None):
+    def __init__(self, conn, fetch=None, providers=None, local=None):
         self.conn = conn
         self.fetch = fetch or _default_fetch
         self.table = providers or PROVIDERS
+        self.allow_local = _allow_local() if local is None else bool(local)
 
     def _creds(self, pid):
         cid, sec = self.table[pid]["id_env"]
@@ -135,6 +192,8 @@ class Auth:
 
     def providers(self):
         out = []
+        if self.allow_local:
+            out.append({"id": "local", "label": "Local account", "kind": "local"})
         for pid, cfg in self.table.items():
             cid, sec = self._creds(pid)
             if cid and sec:

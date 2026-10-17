@@ -55,7 +55,7 @@ class TestSessions(unittest.TestCase):
 class TestProviders(unittest.TestCase):
     def setUp(self):
         self.conn = db.connect(":memory:")
-        self.a = auth.Auth(self.conn)
+        self.a = auth.Auth(self.conn, local=False)
         self._env = {}
         for k in ("FIRESIDE_OAUTH_GITHUB_CLIENT_ID", "FIRESIDE_OAUTH_GITHUB_SECRET",
                   "FIRESIDE_OAUTH_GOOGLE_CLIENT_ID", "FIRESIDE_OAUTH_GOOGLE_SECRET"):
@@ -152,7 +152,36 @@ class TestAuthOverHttp(unittest.TestCase):
     def test_providers_listed(self):
         s, b = self._get("/auth/providers")
         self.assertEqual(s, 200)
-        self.assertEqual([p["id"] for p in json.loads(b)["providers"]], ["github"])
+        self.assertEqual([p["id"] for p in json.loads(b)["providers"]], ["local", "github"])
+
+    def test_local_register_and_use(self):
+        body = json.dumps({"username": "chris", "password": "hunter2hunter2"}).encode()
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d/auth/local/register" % self.port, data=body,
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as r:
+            self.assertEqual(r.status, 200)
+            cookie = r.headers.get("Set-Cookie", "")
+            self.assertIn("fireside_session=", cookie)
+        tok = cookie.split("fireside_session=")[1].split(";")[0]
+        s, b = self._get("/me", cookie="fireside_session=" + tok)
+        self.assertTrue(json.loads(b)["authenticated"])
+        s, b = self._get("/library", cookie="fireside_session=" + tok)
+        self.assertEqual(s, 200)
+
+    def test_local_login_wrong_password_is_401(self):
+        body = json.dumps({"username": "chris", "password": "hunter2hunter2"}).encode()
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d/auth/local/register" % self.port, data=body,
+            headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req).read()
+        bad = json.dumps({"username": "chris", "password": "wrongwrong"}).encode()
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d/auth/local/login" % self.port, data=bad,
+            headers={"Content-Type": "application/json"})
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(req)
+        self.assertEqual(ctx.exception.code, 401)
 
     def test_me_unauthenticated(self):
         s, b = self._get("/me")
