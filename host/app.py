@@ -284,6 +284,11 @@ POST_ROUTES = {
 # the sign-in surface, and the browser's cache of who it is.
 PUBLIC_ROUTES = {"/", "/index.html", "/health", "/auth/providers", "/me"}
 
+# auth sub-routes the handler serves directly (they set cookies / redirect),
+# so they are not in the GET/POST dispatch tables above. Declared here so the
+# browser client's served-route guard can see them too.
+AUTH_ROUTES = {"/auth/logout"}
+
 
 def _truthy(v):
     return str(v or "").strip().lower() in ("1", "true", "yes", "on")
