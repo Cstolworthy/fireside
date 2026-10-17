@@ -161,3 +161,41 @@ class Storage:
 
     def info(self) -> StorageInfo:
         return StorageInfo()
+
+
+# ---- adapters ------------------------------------------------------------------
+
+def to_book(r):
+    """Coerce a reader's return into a Book.
+
+    The v1 sources return plain dicts ({title, chapters:[{title,text}], meta});
+    the v2 host wants a Book. The reader adapters call this so both shapes are
+    legal and the host only ever sees Book. An object that already answers
+    `title`/`chapters` (a Book, or a test double) is passed through untouched.
+    """
+    if isinstance(r, Book) or hasattr(r, "chapters"):
+        return r
+    if isinstance(r, dict):
+        chs = []
+        for c in r.get("chapters") or []:
+            if isinstance(c, dict):
+                chs.append(Chapter(title=c.get("title", ""), text=c.get("text", "")))
+            else:
+                chs.append(c)
+        return Book(title=r.get("title") or "Untitled", chapters=chs,
+                    meta=r.get("meta") or {}, id=r.get("id"))
+    return r
+
+def to_audio(a):
+    """Coerce a synth() result into a contract Audio.
+
+    The v1 providers return providers.Audio (.bytes); the v2 host wants
+    host.contracts.Audio (.data). The speech adapters call this so the host only
+    ever sees the contract shape.
+    """
+    if isinstance(a, Audio):
+        return a
+    if hasattr(a, "bytes"):
+        return Audio(data=a.bytes, ext=getattr(a, "ext", "mp3"),
+                     mime=getattr(a, "mime", "audio/mpeg"))
+    return a
