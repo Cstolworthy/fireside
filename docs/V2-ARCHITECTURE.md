@@ -124,3 +124,26 @@ Sale pricing policy (the fee and the two lines) lives in `docs/PRICING.md`.
 4. accounting: quote/report contract, ledger, reserve/settle, sale designation;
 5. client (Windows): connect, library, download+verify, offline play+resume;
 6. hosted mode: server-side credential store, rate limiting gate, then our key.
+
+## Build status (2026-10-17)
+
+Server-side build order is done through step 6; the client shells (Windows,
+then Android) are the remaining work, and the v1 app still runs next to the
+host. All of it is proven by the test suite (72 tests, no network).
+
+1. contracts + host skeleton + plugin discovery - done (`host/host.py`).
+2. reader/speech behind the v2 contracts, v1 tests green - done (`plugins/`).
+3. storage contract + local default + job pipeline - done (`storage/local.py`,
+   `host/db.py`, `host/library.py`, `host/jobs.py`). Content-addressed blobs;
+   global render cache keyed on (text, provider, voice, model, speed).
+4. accounting: quote/report, ledger, reserve/settle, sale designation - done
+   (`host/accounting.py`). Default quote/report for any speech plugin in
+   `providers/_accounting.py`; a plugin overrides for real pricing.
+5. client (server side): positions, claim/handoff, stop flags, verify-before-
+   play core - done (`host/playback.py`, `client/core.py`). The Windows/Android
+   shells over this core are not built yet.
+6. hosted scaffolding: server-side credential store + rate-limit gate - done
+   (`host/credentials.py`, `host/ratelimit.py`, wired in `host/app.py`).
+
+Run it: `python3 -m host.app --port 8788` (`--hosted` flips the mode). The v2
+HTTP surface is documented at the top of `host/app.py`.

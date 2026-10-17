@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS positions (
 CREATE TABLE IF NOT EXISTS devices (
     user_id TEXT, device_id TEXT, book_id TEXT, last_seen TEXT, stop INTEGER DEFAULT 0,
     PRIMARY KEY (user_id, device_id, book_id));
+CREATE TABLE IF NOT EXISTS credentials (
+    user_id TEXT, provider TEXT, data TEXT, updated_at TEXT, PRIMARY KEY (user_id, provider));
 """
 
 
