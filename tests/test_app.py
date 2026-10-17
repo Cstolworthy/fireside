@@ -38,7 +38,7 @@ class Plugin:
     mime = \"audio/mpeg\"
     needs_key = False
     def list_voices(self, cred):
-        return []
+        return [{\"id\": \"vv\", \"label\": \"Voice V\"}]
     def synth(self, text, voice, opts, cred):
         return Audio(data=(\"A:\" + text).encode())
     def cost_per_1m_chars(self, cred):
@@ -101,6 +101,16 @@ class TestApp(unittest.TestCase):
         s, b = self._get(path)
         return s, json.loads(b)
 
+    def _wait_job(self, jid, timeout=10):
+        import time
+        end = time.time() + timeout
+        while time.time() < end:
+            s, job = self._jget("/job?id=%s" % jid)
+            if job["status"] in ("done", "error"):
+                return job
+            time.sleep(0.05)
+        self.fail("job %s did not finish in %ss" % (jid, timeout))
+
     def test_health(self):
         s, body = self._jget("/health")
         self.assertEqual(s, 200)
@@ -120,8 +130,9 @@ class TestApp(unittest.TestCase):
         s, r = self._post("/render", {"user": "u1", "book": bid,
                                       "provider": "fake", "voice": "v"})
         self.assertEqual(s, 200)
-        s, job = self._jget("/job?id=%s" % r["job_id"])
+        job = self._wait_job(r["job_id"])
         self.assertEqual(job["status"], "done")
+        self.assertEqual(job["current"], 2)
 
         s, prog = self._jget("/progress?user=u1&book=%s" % bid)
         self.assertTrue(all(c["rendered"] for c in prog["chapters"]))
@@ -148,6 +159,16 @@ class TestApp(unittest.TestCase):
             self._get("/chapter?book=%s&idx=0" % imp["book_id"])
         self.assertEqual(cm.exception.code, 409)
 
+    def test_voices_endpoint(self):
+        s, d = self._post("/voices", {"provider": "fake"})
+        self.assertEqual(s, 200)
+        self.assertEqual(d["voices"][0]["id"], "vv")
+        import urllib.error
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._post("/voices", {"provider": "nope"})
+        self.assertEqual(cm.exception.code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()
+

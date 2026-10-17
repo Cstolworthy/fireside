@@ -122,3 +122,47 @@ Agent-authored, human-owned. The commit history is linear, one change per commit
 each shipped version is a tag (`v1.1` through `v1.6`), and nothing has been
 rewritten since the first public push. See [AUTHORS](AUTHORS) for the
 authorship/ownership split and how the history proves it.
+
+
+## fireside v2 (host + browser client)
+
+v2 splits the single app into a **host** and a **client**. The host owns the
+library, the render jobs, storage, the credit ledger, and a plugin registry; the
+browser client is served by the host and talks to it over JSON. The same server
+runs at home and hosted - only the auth mode and whose key is used differ.
+
+    python3 -m host.app --host 0.0.0.0 --port 8788
+    # then open http://<this-machine>:8788
+
+The v1 app (`python3 server.py`) still runs alongside it, unchanged, until every
+v2 piece has replaced it. The v2 HTTP surface is documented at the top of
+`host/app.py`; the plugin contracts are in `docs/V2-ARCHITECTURE.md`.
+
+### What the browser client does
+
+- import an EPUB (dropped) or a story link, into your own library;
+- pick a voice engine and a voice from those the plugins declare;
+- render a book as a job and watch it progress;
+- **verify before play**: each chapter is downloaded whole and its SHA-256
+  checked against the server's ref before a single note plays, online or offline;
+- resume from a single per-book position, and hand playback between devices
+  (playing on one stops the other);
+- **download for offline** is pull-only: it caches chapters that are already
+  converted and reports the rest; it never triggers a render.
+
+The SHA-256 runs in the page itself, so verification works on a plain-HTTP LAN
+origin where `crypto.subtle` is unavailable.
+
+### Run it on unraid (or any Docker host)
+
+    docker compose up -d --build
+
+Then open `http://<unraid-ip>:8788`. Rendered audio, the SQLite DB and the
+content-addressed blobs live in `./data` (mapped to `/data` in the container), so
+a container update never loses them. Plugins are discovered from `plugins/` in
+the image; drop a new `plugins/<kind>/<id>/` directory in and rebuild to add a
+reader, a speech engine, or a storage backend.
+
+On unraid, the simplest path is the Compose Manager plugin: add this repo as a
+stack, set the host port to 8788, and point the `data` mount at a share under
+`/mnt/user/appdata/fireside`.

@@ -1,8 +1,8 @@
 services:
-  reader:
+  fireside:
     build: .
     ports:
-      - "8765:8765"
+      - "8788:8788"
     volumes:
-      - ./data:/data   # rendered audio lives here
+      - ./data:/data   # library DB + content-addressed audio blobs
     restart: unless-stopped
