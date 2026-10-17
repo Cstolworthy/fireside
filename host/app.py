@@ -27,7 +27,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
-from host import accounting, credentials, db, jobs, library, playback
+from host import accounting, auth, credentials, db, jobs, library, playback
 from sources._fetch import fetch as _fetch
 
 UI_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ui")
@@ -36,7 +36,8 @@ HOST_VERSION = "2.0"
 
 class App:
     def __init__(self, plugins_root=None, db_path=None, storage_id="local",
-                 sale_connection=None, rate_limiter=None, hosted=False):
+                 sale_connection=None, rate_limiter=None, hosted=False,
+                 require_auth=False):
         self.host = Host(plugins_root)
         self.db_path = db_path
         self.conn = db.connect(db_path)
@@ -44,6 +45,13 @@ class App:
         self.sale_connection = sale_connection
         self.rate_limiter = rate_limiter
         self.hosted = hosted
+        self.require_auth = require_auth
+        self.auth = auth.Auth(self.conn)
+
+    def _uid(self, q, body):
+        """The signed-in user wins over any user id the client passed in."""
+        return ((q or {}).get("_user") or (body or {}).get("user")
+                or (q or {}).get("user") or "")
 
     @property
     def storage(self):
@@ -107,10 +115,10 @@ class App:
     # ---- library --------------------------------------------------------------
 
     def library_list(self, q, body):
-        return 200, library.list_books(self.conn, q.get("user", ""))
+        return 200, library.list_books(self.conn, self._uid(q, None))
 
     def import_book(self, q, body):
-        user = body["user"]
+        user = self._uid(q, body)
         req = {"kind": body.get("kind", "url"), "url": body.get("url"),
                "filename": body.get("filename"),
                "data": base64.b64decode(body["data_b64"]) if body.get("data_b64") else None}
@@ -144,7 +152,7 @@ class App:
     # ---- render ---------------------------------------------------------------
 
     def render(self, q, body):
-        user = body["user"]
+        user = self._uid(q, body)
         book_id = body["book"]
         provider = body["provider"]
         voice = body.get("voice", "")
@@ -224,30 +232,39 @@ class App:
     # ---- playback -------------------------------------------------------------
 
     def get_position(self, q, body):
-        return 200, playback.get_position(self.conn, q["user"], q["book"]) or {}
+        return 200, playback.get_position(self.conn, self._uid(q, None), q["book"]) or {}
 
     def put_position(self, q, body):
-        return 200, playback.put_position(self.conn, body["user"], body["book"],
+        return 200, playback.put_position(self.conn, self._uid(q, body), body["book"],
                                           body["chapter_index"], body["offset_seconds"],
                                           body.get("device", ""))
 
     def claim(self, q, body):
-        return 200, playback.claim(self.conn, body["user"], body["book"], body["device"])
+        return 200, playback.claim(self.conn, self._uid(q, body), body["book"], body["device"])
 
     def stop(self, q, body):
-        return 200, {"stop": playback.stop_pending(self.conn, q["user"], q["book"],
+        return 200, {"stop": playback.stop_pending(self.conn, self._uid(q, None), q["book"],
                                                    q["device"])}
 
     def ack(self, q, body):
-        playback.ack_stop(self.conn, body["user"], body["book"], body["device"])
+        playback.ack_stop(self.conn, self._uid(q, body), body["book"], body["device"])
         return 200, {"ok": True}
 
     # ---- credentials (hosted; values never leave) -----------------------------
 
     def put_credential(self, q, body):
-        credentials.set_credential(self.conn, body["user"], body["provider"],
+        credentials.set_credential(self.conn, self._uid(q, body), body["provider"],
                                    body.get("data") or {})
-        return 200, {"ok": True, "providers": credentials.providers(self.conn, body["user"])}
+        return 200, {"ok": True, "providers": credentials.providers(self.conn, self._uid(q, body))}
+
+    # ---- auth (social sign-in; the session lives in sqlite) ------------------
+
+    def auth_providers(self, q, body):
+        return 200, {"providers": self.auth.providers()}
+
+    def me(self, q, body):
+        uid = (q or {}).get("_user") or ""
+        return 200, {"user": uid, "authenticated": bool(uid)}
 
 
 GET_ROUTES = {
@@ -255,6 +272,7 @@ GET_ROUTES = {
     "/health": "health", "/plugins": "plugins", "/library": "library_list",
     "/job": "job", "/progress": "progress", "/chapter": "chapter",
     "/position": "get_position", "/stop": "stop",
+    "/auth/providers": "auth_providers", "/me": "me",
 }
 POST_ROUTES = {
     "/import": "import_book", "/render": "render", "/voices": "voices",
@@ -262,15 +280,94 @@ POST_ROUTES = {
     "/credential": "put_credential",
 }
 
+# reachable without a session even when auth is required: the page, its health,
+# the sign-in surface, and the browser's cache of who it is.
+PUBLIC_ROUTES = {"/", "/index.html", "/health", "/auth/providers", "/me"}
+
+
+def _truthy(v):
+    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
+
 
 def make_handler(app):
     class Handler(BaseHTTPRequestHandler):
         server_version = "fireside-host/2"
 
+        # ---- cookies + redirects ---------------------------------------------
+        def _cookie(self, name):
+            raw = self.headers.get("Cookie", "")
+            for part in raw.split(";"):
+                k, _, v = part.strip().partition("=")
+                if k == name:
+                    return v
+            return ""
+
+        def _base_url(self):
+            env = os.environ.get("FIRESIDE_BASE_URL")
+            if env:
+                return env.rstrip("/")
+            return "http://" + (self.headers.get("Host") or "127.0.0.1:8788")
+
+        def _cookie_str(self, name, value, path="/", max_age=None):
+            c = "%s=%s; Path=%s; HttpOnly; SameSite=Lax" % (name, value, path)
+            if max_age is not None:
+                c += "; Max-Age=%d" % max_age
+            if self._base_url().startswith("https"):
+                c += "; Secure"
+            return c
+
+        def _redirect(self, location, cookies=None):
+            self.send_response(302)
+            self.send_header("Location", location)
+            for c in (cookies or []):
+                self.send_header("Set-Cookie", c)
+            self.end_headers()
+
+        def _token(self):
+            tok = self._cookie(auth.SESSION_COOKIE)
+            if not tok:
+                authz = self.headers.get("Authorization", "")
+                if authz.startswith("Bearer "):
+                    tok = authz[7:]
+            return tok
+
+        def _auth_route(self, parts, parsed):
+            from urllib.parse import parse_qs
+            q = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+            pid, action = parts[1], parts[2]
+            if pid not in app.auth.table:
+                return self.send_error(404)
+            try:
+                redirect_uri = self._base_url() + "/auth/%s/callback" % pid
+                if action == "start":
+                    state = auth.new_state()
+                    url = app.auth.authorize_url(pid, redirect_uri, state)
+                    return self._redirect(url, [self._cookie_str(
+                        auth.STATE_COOKIE, state, path="/auth", max_age=600)])
+                if action == "callback":
+                    if q.get("error"):
+                        return self.send_error(400, "oauth error: %s" % q["error"])
+                    if not q.get("state") or q["state"] != self._cookie(auth.STATE_COOKIE):
+                        return self.send_error(400, "bad oauth state")
+                    uid, token = app.auth.login(pid, q.get("code", ""), redirect_uri)
+                    return self._redirect("/", [
+                        self._cookie_str(auth.SESSION_COOKIE, token, max_age=auth.SESSION_TTL),
+                        self._cookie_str(auth.STATE_COOKIE, "", path="/auth", max_age=0)])
+            except auth.AuthError as e:
+                return self._json(401, {"error": str(e)})
+            return self.send_error(404)
+
         def _dispatch(self, routes):
             from urllib.parse import urlparse, parse_qs
             u = urlparse(self.path)
             path = u.path.rstrip("/") or "/"
+            parts = path.strip("/").split("/")
+            if (self.command == "GET" and len(parts) == 3 and parts[0] == "auth"):
+                return self._auth_route(parts, u)
+            if path == "/auth/logout" and self.command == "POST":
+                auth.delete_session(app.conn, self._token())
+                return self._redirect("/", [self._cookie_str(
+                    auth.SESSION_COOKIE, "", max_age=0)])
             name = routes.get(path)
             if name is None:
                 return self.send_error(404)
@@ -283,6 +380,9 @@ def make_handler(app):
                         body = json.loads(self.rfile.read(n).decode("utf-8"))
                     except ValueError:
                         return self.send_error(400)
+            q["_user"] = auth.session_user(app.conn, self._token()) or ""
+            if app.require_auth and path not in PUBLIC_ROUTES and not q["_user"]:
+                return self._json(401, {"error": "auth required"})
             try:
                 status, payload = getattr(app, name)(q, body)
             except Exception as e:
@@ -342,10 +442,15 @@ if __name__ == "__main__":
     ap.add_argument("--data", default=None,
                     help="data dir for the DB and blobs (default: $FIRESIDE_DATA)")
     ap.add_argument("--hosted", action="store_true")
+    ap.add_argument("--require-auth", action="store_true",
+                    help="reject requests with no session (auto-on when --hosted)")
     args = ap.parse_args()
     if args.data:                      # one knob sets DB + blob root alike
         os.environ["FIRESIDE_DATA"] = args.data
-    app, httpd = serve(App(plugins_root=args.plugins, hosted=args.hosted), args.port, args.host)
+    require = (args.require_auth or args.hosted
+               or _truthy(os.environ.get("FIRESIDE_REQUIRE_AUTH")))
+    app, httpd = serve(App(plugins_root=args.plugins, hosted=args.hosted,
+                           require_auth=require), args.port, args.host)
     print("fireside v2 host on http://%s:%d" % (args.host, httpd.server_address[1]))
     try:
         httpd.serve_forever()

@@ -45,6 +45,9 @@ CREATE TABLE IF NOT EXISTS devices (
     PRIMARY KEY (user_id, device_id, book_id));
 CREATE TABLE IF NOT EXISTS credentials (
     user_id TEXT, provider TEXT, data TEXT, updated_at TEXT, PRIMARY KEY (user_id, provider));
+CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY, user_id TEXT, provider TEXT,
+    created_at INTEGER, expires_at INTEGER);
 """
 
 
@@ -73,3 +76,4 @@ def connect(path=None):
 
 def now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
