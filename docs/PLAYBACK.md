@@ -101,14 +101,13 @@ stop-push as a normal handoff, just user-initiated.
 - Library, position, and offline selections are **per-user**. Sharing happens at
   the storage contract, not at the account.
 
-## Still inferred (confirm before building)
+## Confirmed by Chris (2026-10-17)
 
-- **Sleep timer / speed control**: not in the walkthrough. Assume playback speed
-  is per-client UI state and a sleep timer is a client nicety, neither part of
-  the synced model.
-- **Chapter bookmarks**: the model keeps one position (chapter + offset). If
-  per-chapter bookmarks are wanted, it's an additive table, not a change to the
-  resume path.
-- **The "pull then play" gate vs streaming**: the walkthrough says fully
-  download first. That is deliberate (verify-before-play), and it is the reason
-  prefetch exists.
+- **Full download before play applies online too.** No partial streaming: a
+  chapter is materialized and verified whole, over the wire or from disk,
+  before it plays. Prefetch exists so this is rarely felt.
+- **Sleep timer and speed control are client-only.** They are per-device UI
+  state, never part of the synced position and never pushed across devices.
+- **Position stays per book, one record.** No per-chapter bookmarks: resume is
+  always the single `{chapter_index, offset_seconds}`. If bookmarks are ever
+  wanted they would be an additive table, not a change to the resume path.
