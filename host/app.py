@@ -22,17 +22,23 @@ Endpoints (JSON unless noted):
 
 import base64
 import json
+import os
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
 from host import accounting, credentials, db, jobs, library, playback
 from sources._fetch import fetch as _fetch
 
+UI_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ui")
+HOST_VERSION = "2.0"
+
 
 class App:
     def __init__(self, plugins_root=None, db_path=":memory:", storage_id="local",
                  sale_connection=None, rate_limiter=None, hosted=False):
         self.host = Host(plugins_root)
+        self.db_path = db_path
         self.conn = db.connect(db_path)
         self.storage_id = storage_id
         self.sale_connection = sale_connection
@@ -56,9 +62,18 @@ class App:
         if not callable(fn):
             return []
         try:
-            return [f.dict() if hasattr(f, "dict") else dict(f) for f in fn()]
+            raw = fn()
         except Exception:
             return []
+        out = []
+        for f in raw:                            # one shape for the UI: name + kind
+            d = f.dict() if hasattr(f, "dict") else dict(f)
+            if "name" not in d and "key" in d:
+                d["name"] = d["key"]
+            if "kind" not in d and "type" in d:
+                d["kind"] = d["type"]
+            out.append(d)
+        return out
 
     def plugins(self, q, body):
         out = {"readers": [], "speech": [], "storage": []}
@@ -74,6 +89,20 @@ class App:
         for pid, p in self.host.storage.items():
             out["storage"].append({"id": pid, "info": p.obj.info()})
         return 200, out
+
+    def voices(self, q, body):
+        provider = body.get("provider") or q.get("provider") or ""
+        if provider not in self.host.speech:
+            return 400, {"error": "unknown provider"}
+        cred = body.get("cred") or {}
+        raw = self.host.speech[provider].obj.list_voices(cred)
+        return 200, {"voices": [v.dict() if hasattr(v, "dict") else dict(v) for v in raw]}
+
+    def ui(self, q, body):
+        """Serve the browser client. The host owns its own UI; plugins ship none."""
+        with open(os.path.join(UI_DIR, "index.html"), "r", encoding="utf-8") as f:
+            page = f.read().replace("__HOST_VERSION__", HOST_VERSION)
+        return 200, {"_html": page}
 
     # ---- library --------------------------------------------------------------
 
@@ -128,7 +157,11 @@ class App:
             return 429, {"error": "rate limited"}
         speech = self.host.speech[provider].obj
         cred = body.get("cred") or credentials.get_credential(self.conn, user, provider)
-        est = sum(c["chars"] or 0 for c in library.chapters(self.conn, book_id))
+        rows = library.chapters(self.conn, book_id)
+        est = sum(c["chars"] or 0 for c in rows)
+        todo = [c["idx"] for c in rows]
+        if only is not None:
+            todo = [i for i in todo if i in set(only)]
         sale = accounting.sale_connection_matches(self.sale_connection, provider, voice, model)
         res_id = None
         if sale:
@@ -143,13 +176,26 @@ class App:
                                                 getattr(quote, "currency", "USD"))
                 except accounting.Insufficient as e:
                     return 402, {"error": "insufficient balance", "detail": str(e)}
-        jid = jobs.render_book(self.conn, self.storage, speech, user, book_id,
-                               voice, model, speed, cred=cred,
-                               opts={"model": model, "speed": speed}, only=only)
-        if sale and res_id:
-            rep = speech.report({"chars_actual": est, "cred": cred, "job_id": jid})
-            accounting.settle(self.conn, res_id, rep)
-        return 200, {"job_id": jid}
+        jid = jobs.start_job(self.conn, user, book_id, speech.id, voice, model,
+                             total=len(todo))
+        opts = {"model": model, "speed": speed}
+
+        def _work():
+            # A render can run for minutes; it gets its own DB connection so it
+            # never blocks the request thread and the client can poll /job.
+            c = db.connect(self.db_path)
+            try:
+                jobs.render_book(c, self.storage, speech, user, book_id, voice,
+                                 model, speed, cred=cred, opts=opts, only=only,
+                                 job_id=jid)
+                if sale and res_id:
+                    rep = speech.report({"chars_actual": est, "cred": cred, "job_id": jid})
+                    accounting.settle(c, res_id, rep)
+            finally:
+                c.close()
+
+        threading.Thread(target=_work, daemon=True).start()
+        return 200, {"job_id": jid, "total": len(todo)}
 
     def job(self, q, body):
         j = jobs.job(self.conn, q.get("id", ""))
@@ -205,13 +251,15 @@ class App:
 
 
 GET_ROUTES = {
+    "/": "ui", "/index.html": "ui",
     "/health": "health", "/plugins": "plugins", "/library": "library_list",
     "/job": "job", "/progress": "progress", "/chapter": "chapter",
     "/position": "get_position", "/stop": "stop",
 }
 POST_ROUTES = {
-    "/import": "import_book", "/render": "render", "/position": "put_position",
-    "/claim": "claim", "/ack": "ack", "/credential": "put_credential",
+    "/import": "import_book", "/render": "render", "/voices": "voices",
+    "/position": "put_position", "/claim": "claim", "/ack": "ack",
+    "/credential": "put_credential",
 }
 
 
@@ -239,7 +287,15 @@ def make_handler(app):
                 status, payload = getattr(app, name)(q, body)
             except Exception as e:
                 return self._json(500, {"error": "%s: %s" % (type(e).__name__, e)})
-            if isinstance(payload, dict) and "_raw" in payload:
+            if isinstance(payload, dict) and "_html" in payload:
+                raw = payload["_html"].encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+            elif isinstance(payload, dict) and "_raw" in payload:
                 raw = payload["_raw"]
                 self.send_response(status)
                 self.send_header("Content-Type", payload.get("_mime", "application/octet-stream"))
@@ -270,9 +326,9 @@ def make_handler(app):
     return Handler
 
 
-def serve(app=None, port=8788):
+def serve(app=None, port=8788, host="127.0.0.1"):
     app = app or App()
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(app))
+    httpd = ThreadingHTTPServer((host, port), make_handler(app))
     return app, httpd
 
 
@@ -280,12 +336,15 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8788)
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="127.0.0.1 for this machine; 0.0.0.0 to share on the LAN")
     ap.add_argument("--plugins", default=None)
     ap.add_argument("--hosted", action="store_true")
     args = ap.parse_args()
-    app, httpd = serve(App(plugins_root=args.plugins, hosted=args.hosted), args.port)
-    print("fireside v2 host on http://127.0.0.1:%d" % httpd.server_address[1])
+    app, httpd = serve(App(plugins_root=args.plugins, hosted=args.hosted), args.port, args.host)
+    print("fireside v2 host on http://%s:%d" % (args.host, httpd.server_address[1]))
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         httpd.shutdown()
+
