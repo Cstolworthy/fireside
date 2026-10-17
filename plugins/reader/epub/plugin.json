@@ -1,0 +1,9 @@
+{
+  "id": "epub",
+  "kind": "reader",
+  "label": "EPUB file",
+  "version": "1.0",
+  "entry": "plugin.py",
+  "class": "Reader",
+  "order": 10
+}

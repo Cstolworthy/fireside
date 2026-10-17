@@ -1,0 +1,8 @@
+{
+  "id": "azure",
+  "kind": "speech",
+  "label": "Azure Speech",
+  "version": "1.0",
+  "entry": "plugin.py",
+  "class": "Speech"
+}

@@ -1,0 +1,9 @@
+{
+  "id": "web",
+  "kind": "reader",
+  "label": "Web page",
+  "version": "1.0",
+  "entry": "plugin.py",
+  "class": "Reader",
+  "order": 1000
+}

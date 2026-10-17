@@ -1,0 +1,8 @@
+{
+  "id": "openai",
+  "kind": "speech",
+  "label": "OpenAI-compatible (Kokoro)",
+  "version": "1.0",
+  "entry": "plugin.py",
+  "class": "Speech"
+}

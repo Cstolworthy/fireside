@@ -1,0 +1,8 @@
+{
+  "id": "local",
+  "kind": "speech",
+  "label": "Local (offline)",
+  "version": "1.0",
+  "entry": "plugin.py",
+  "class": "Speech"
+}
