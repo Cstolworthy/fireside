@@ -63,6 +63,7 @@ class App:
         h = self.host.health()
         h["hosted"] = self.hosted
         h["storage_backend"] = self.storage_id
+        h["db_backend"] = db.backend_name()
         return 200, h
 
     def _fields(self, o):
@@ -373,6 +374,27 @@ def make_handler(app):
                 auth.delete_session(app.conn, self._token())
                 return self._redirect("/", [self._cookie_str(
                     auth.SESSION_COOKIE, "", max_age=0)])
+            if path in ("/auth/local/register", "/auth/local/login") \
+                    and self.command == "POST":
+                n = int(self.headers.get("Content-Length") or 0)
+                try:
+                    body = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+                except ValueError:
+                    return self.send_error(400)
+                try:
+                    if path.endswith("register"):
+                        uid = auth.local_register(app.conn, body.get("username", ""),
+                                                  body.get("password", ""))
+                    else:
+                        uid = auth.local_login(app.conn, body.get("username", ""),
+                                               body.get("password", ""))
+                except auth.AuthError as e:
+                    return self._json(401, {"error": str(e)})
+                token = auth.create_session(app.conn, uid, "local")
+                return self._json(200, {"ok": True, "user": uid},
+                                  cookie=self._cookie_str(
+                                      auth.SESSION_COOKIE, token,
+                                      max_age=auth.SESSION_TTL))
             name = routes.get(path)
             if name is None:
                 return self.send_error(404)
@@ -411,10 +433,12 @@ def make_handler(app):
             else:
                 self._json(status, payload)
 
-        def _json(self, status, payload):
+        def _json(self, status, payload, cookie=None):
             b = json.dumps(payload).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
+            if cookie:
+                self.send_header("Set-Cookie", cookie)
             self.send_header("Content-Length", str(len(b)))
             self.end_headers()
             self.wfile.write(b)

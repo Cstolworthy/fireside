@@ -275,15 +275,38 @@ async function initAuth() {
       localStorage.removeItem(UKEY); USER = ''; location.reload(); };
     box.append(s, out);
     $('#namebox').style.display = 'none';
-  } else if (providers.length) {
-    providers.forEach(p => {
+  } else {
+    providers.filter(p => p.kind !== 'local' && p.start).forEach(p => {
       const b = document.createElement('button'); b.textContent = 'Sign in with ' + p.label; b.style.width = 'auto';
       b.onclick = () => { location.href = p.start; };
       box.append(b);
     });
+    if (providers.some(p => p.kind === 'local')) localForm(box);
   }
 }
 
+function localForm(box) {
+  const u = document.createElement('input'); u.placeholder = 'username'; u.autocomplete = 'username'; u.style.width = '112px';
+  const p = document.createElement('input'); p.placeholder = 'password'; p.type = 'password'; p.autocomplete = 'current-password'; p.style.width = '112px';
+  const si = document.createElement('button'); si.textContent = 'Sign in'; si.style.width = 'auto';
+  const cr = document.createElement('button'); cr.textContent = 'Create account'; cr.style.width = 'auto';
+  async function go(route) {
+    const username = u.value.trim();
+    if (!username) return fail('enter a username');
+    try {
+      await api(route, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username, password: p.value }) });
+      location.reload();
+    } catch (e) {
+      fail(route.indexOf('register') >= 0 ? 'could not create that account' : 'sign-in failed');
+    }
+  }
+  si.onclick = () => go('/auth/local/login');
+  cr.onclick = () => go('/auth/local/register');
+  box.append(u, p, si, cr);
+}
+
+// --- voices
 // --- voices ----------------------------------------------------------------
 async function loadVoices() {
   const pid = $('#provider').value; if (!pid) return;
