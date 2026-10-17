@@ -1,0 +1,12 @@
+# everything the image does not need
+.git
+.github
+__pycache__
+*.pyc
+*.pyo
+data
+out
+*.epub
+.venv
+venv
+.DS_Store

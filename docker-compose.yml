@@ -1,8 +1,11 @@
 services:
   fireside:
+    image: ghcr.io/cstolworthy/fireside:latest
     build: .
     ports:
       - "8788:8788"
+    environment:
+      - FIRESIDE_DATA=/data
     volumes:
       - ./data:/data   # library DB + content-addressed audio blobs
     restart: unless-stopped
