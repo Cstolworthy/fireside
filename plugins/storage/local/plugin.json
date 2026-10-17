@@ -1,0 +1,8 @@
+{
+  "id": "local",
+  "kind": "storage",
+  "label": "Local filesystem",
+  "version": "1.0",
+  "entry": "plugin.py",
+  "class": "Storage"
+}

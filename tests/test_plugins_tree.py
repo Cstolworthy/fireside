@@ -44,5 +44,17 @@ class TestSpeechTree(unittest.TestCase):
             self.assertIsInstance(o.needs_key, bool, "%s needs_key" % pid)
 
 
+class TestStorageTree(unittest.TestCase):
+    def test_local_backend_is_discovered(self):
+        d = discover("storage", PLUGINS)
+        self.assertIn("local", d)
+
+    def test_storage_object_exposes_the_contract(self):
+        o = discover("storage", PLUGINS)["local"].obj
+        for m in ("put", "has", "get"):
+            self.assertTrue(callable(getattr(o, m, None)), "storage missing %s" % m)
+
+
 if __name__ == "__main__":
+
     unittest.main()
