@@ -15,9 +15,13 @@ class LocalBackend:
 
     def __init__(self, root=None):
         if root is None:
-            root = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "..", "data", "blobs"
-            )
+            base = os.environ.get("FIRESIDE_DATA")
+            if base:
+                root = os.path.join(base, "blobs")
+            else:
+                root = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), "..", "data", "blobs"
+                )
         self.root = os.path.abspath(root)
         self.objects = os.path.join(self.root, "objects")
 
@@ -60,3 +64,4 @@ class LocalBackend:
 
     def info(self):
         return {"kind": "local", "durable": True, "url_ttl": None}
+

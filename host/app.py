@@ -35,7 +35,7 @@ HOST_VERSION = "2.0"
 
 
 class App:
-    def __init__(self, plugins_root=None, db_path=":memory:", storage_id="local",
+    def __init__(self, plugins_root=None, db_path=None, storage_id="local",
                  sale_connection=None, rate_limiter=None, hosted=False):
         self.host = Host(plugins_root)
         self.db_path = db_path
@@ -339,12 +339,17 @@ if __name__ == "__main__":
     ap.add_argument("--host", default="127.0.0.1",
                     help="127.0.0.1 for this machine; 0.0.0.0 to share on the LAN")
     ap.add_argument("--plugins", default=None)
+    ap.add_argument("--data", default=None,
+                    help="data dir for the DB and blobs (default: $FIRESIDE_DATA)")
     ap.add_argument("--hosted", action="store_true")
     args = ap.parse_args()
+    if args.data:                      # one knob sets DB + blob root alike
+        os.environ["FIRESIDE_DATA"] = args.data
     app, httpd = serve(App(plugins_root=args.plugins, hosted=args.hosted), args.port, args.host)
     print("fireside v2 host on http://%s:%d" % (args.host, httpd.server_address[1]))
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         httpd.shutdown()
+
 
