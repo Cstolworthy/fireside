@@ -34,6 +34,25 @@ class Voice:
                 "locale": self.locale, "gender": self.gender}
 
 
+class Field:
+    """One declarative settings widget. A provider ships no HTML; it declares
+    the shape and the host draws the widget (docs/V2-ARCHITECTURE.md)."""
+
+    __slots__ = ("name", "label", "kind", "default", "choices", "help")
+
+    def __init__(self, name, label, kind="text", default=None, choices=None, help=""):
+        self.name = name
+        self.label = label
+        self.kind = kind                # text | password | number | bool | choice
+        self.default = default
+        self.choices = list(choices) if choices else None
+        self.help = help
+
+    def dict(self):
+        return {"name": self.name, "label": self.label, "kind": self.kind,
+                "default": self.default, "choices": self.choices, "help": self.help}
+
+
 class Audio:
     """One self-contained audio file: we cache it to disk and concatenate it, so
     no streams and no sidecar headers. cost_usd is what this text would cost at
@@ -68,3 +87,4 @@ from .minimax import MiniMax      # noqa: E402
 REGISTRY = {}
 for _p in (Local(), OpenAICompat(), Azure(), MiniMax()):
     REGISTRY[_p.id] = _p
+

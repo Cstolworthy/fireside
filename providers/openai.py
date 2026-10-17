@@ -12,7 +12,7 @@ new local engine is a URL, not a code change.
 import json
 import urllib.request
 
-from . import Audio, Voice, report
+from . import Audio, Field, Voice, report
 from ._text import chunk_text
 
 DEFAULT_BASE = "http://127.0.0.1:8880"
@@ -24,6 +24,11 @@ class OpenAICompat:
     ext = ".mp3"
     mime = "audio/mpeg"
     needs_key = False
+
+    def settings(self):
+        return [Field("base_url", "Server URL", "text", default=DEFAULT_BASE,
+                      help="Any OpenAI-compatible /v1/audio/speech server on your LAN "
+                           "(Kokoro, Speaches, ...). Runs on your hardware, so it costs nothing.")]
 
     def _base(self, cred):
         return (cred.get("base_url") or DEFAULT_BASE).rstrip("/")
@@ -73,3 +78,4 @@ class OpenAICompat:
                                      data=body, headers=hdr)
         with urllib.request.urlopen(req, timeout=300) as r:
             return r.read()
+

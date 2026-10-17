@@ -5,7 +5,7 @@ import io
 import struct
 import wave
 
-from . import Audio, Voice, report
+from . import Audio, Field, Voice, report
 
 
 class Local:
@@ -13,6 +13,9 @@ class Local:
     ext = ".wav"
     mime = "audio/wav"
     needs_key = False
+
+    def settings(self):
+        return []
 
     def list_voices(self, cred):
         return [Voice("tone", "Offline tone (no speech)")]
@@ -40,3 +43,4 @@ class Local:
             w.writeframes(bytes(buf))
         report(opts, 1, 1)
         return Audio(out.getvalue(), self.ext, self.mime, 0.0)
+

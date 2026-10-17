@@ -8,7 +8,7 @@ import json
 import re
 import urllib.request
 
-from . import Audio, Voice, report
+from . import Audio, Field, Voice, report
 from ._text import chunk_text
 
 PRICE_PER_1M_USD = 15.0
@@ -19,6 +19,11 @@ class Azure:
     ext = ".mp3"
     mime = "audio/mpeg"
     needs_key = True
+
+    def settings(self):
+        return [Field("key", "Azure key", "password",
+                      help="Azure AI Speech key. Well-voiced, hundreds of voices."),
+                Field("region", "Region", "text", default="eastus")]
 
     def list_voices(self, cred):
         return voices_azure(cred.get("key", ""), cred.get("region", "eastus"))
@@ -98,3 +103,4 @@ def synth_azure(text: str, voice: str, key: str, region: str, rate: str = "0%") 
     })
     with urllib.request.urlopen(req, timeout=120) as r:
         return r.read()
+

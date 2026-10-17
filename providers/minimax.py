@@ -7,7 +7,7 @@ import json
 import urllib.parse
 import urllib.request
 
-from . import Audio, Voice, report
+from . import Audio, Field, Voice, report
 from ._text import chunk_text
 
 DEFAULT_MODEL = "speech-02-hd"
@@ -18,6 +18,10 @@ class MiniMax:
     ext = ".mp3"
     mime = "audio/mpeg"
     needs_key = True
+
+    def settings(self):
+        return [Field("key", "MiniMax key", "password"),
+                Field("group", "Group ID", "text", help="The GroupId your MiniMax key belongs to.")]
 
     def list_voices(self, cred):
         return voices_minimax(cred.get("key", ""), cred.get("group", ""))
@@ -80,3 +84,4 @@ def synth_minimax(text: str, voice: str, key: str, group: str, model: str = DEFA
     if not audio:
         raise ValueError("minimax returned no audio: %s" % str(d)[:200])
     return bytes.fromhex(audio)
+
