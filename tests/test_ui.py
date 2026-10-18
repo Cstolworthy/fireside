@@ -20,7 +20,7 @@ import threading
 import unittest
 import urllib.request
 
-from host.app import App, UI_DIR, GET_ROUTES, POST_ROUTES, AUTH_ROUTES, make_handler
+from host.app import App, UI_DIR, GET_ROUTES, POST_ROUTES, AUTH_ROUTES, PUBLIC_ROUTES, make_handler
 from tests.test_app import READER_BODY, SPEECH_BODY, STORAGE_BODY
 from tests.test_pluginhost import write_plugin
 
@@ -98,6 +98,16 @@ class TestBrowserUi(unittest.TestCase):
         self.assertIn("/auth/local/login", html)
         self.assertIn("/auth/logout", html)
         self.assertIn("Continue with ", html)
+        # the door must actually be shown: body.locked hides the app, so the
+        # sign-in card has to be un-hidden or the page is blank for everyone
+        # who is not signed in.
+        self.assertIn("$('#lock').hidden = false", html)
+
+    def test_favicon_is_served_publicly(self):
+        self.assertIn("/favicon.ico", PUBLIC_ROUTES)
+        s, body = self._get("/favicon.ico")
+        self.assertEqual(s, 200)
+        self.assertEqual(body[:4], b"\x00\x00\x01\x00")   # ICO magic
 
     def test_plugins_declare_speech_settings(self):
         # the fake root above ships no settings; ask the host to load the real
