@@ -32,7 +32,7 @@ def render_chapter(conn, storage, speech, book_id, idx, voice="", model="", spee
     """Render one chapter. Returns "cached" or "rendered"."""
     row = _chapter_row(conn, book_id, idx)
     key = render_key(row["text_ref"], speech.id, voice, model, speed)
-    cached = conn.execute("SELECT * FROM render_cache WHERE key=?", (key,)).fetchone()
+    cached = conn.execute("SELECT * FROM render_cache WHERE `key`=?", (key,)).fetchone()
     if cached:
         _write_chapter_audio(conn, book_id, idx, cached, speech.id, voice, model, speed,
                              voice_label=voice_label)
@@ -46,7 +46,7 @@ def render_chapter(conn, storage, speech, book_id, idx, voice="", model="", spee
     ref = storage.put(audio.data)
     conn.execute(
         "INSERT OR REPLACE INTO render_cache"
-        "(key,audio_ref,audio_bytes,duration_s,provider,voice,model,created_at)"
+        "(`key`,audio_ref,audio_bytes,duration_s,provider,voice,model,created_at)"
         " VALUES(?,?,?,?,?,?,?,?)",
         (key, ref, len(audio.data), None, speech.id, voice, model, now()))
     entry = {"audio_ref": ref, "audio_bytes": len(audio.data), "duration_s": None}
