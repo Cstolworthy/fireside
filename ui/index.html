@@ -399,6 +399,7 @@
     <label>Voice server</label>
     <select id="cvconn"></select>
     <label>Voice</label>
+    <input id="cvfilter" placeholder="filter, e.g. en-US or Heart" autocomplete="off">
     <select id="cvvoice"><option value="">load voices…</option></select>
     <label>Chapters</label>
     <div id="cvlist" class="chaplist" style="max-height:170px"></div>
@@ -833,23 +834,45 @@ $('#locktoggle').onclick = () => {
 };
 
 // --- voices ----------------------------------------------------------------
+// English (US first, then UK) then everything else: nobody should scroll past
+// the Japanese voices to find the one they use every day.
+function isEnVoice(v) {
+  const id = (v && v.id) || '', s = id + ' ' + ((v && v.label) || '');
+  if (/(^|[^a-z])en([-_](us|gb|au|ca|ie|nz))?([^a-z]|$)/i.test(s)) return true;
+  return /^[ab][fm]_/i.test(id);   // Kokoro: af/am = US English, bf/bm = UK English
+}
+function voiceRank(v) {
+  const id = ((v && v.id) || ''), s = (id + ' ' + ((v && v.label) || '')).toLowerCase();
+  if (/^a[fm]_/i.test(id) || /(^|[^a-z])en[-_]us([^a-z]|$)/.test(s)) return 0;
+  if (/^b[fm]_/i.test(id) || /(^|[^a-z])en[-_]gb([^a-z]|$)/.test(s)) return 1;
+  return isEnVoice(v) ? 2 : 3;
+}
+function enFirst(list) {
+  return (list || []).map((v, i) => [v, i])
+    .sort((a, b) => voiceRank(a[0]) - voiceRank(b[0]) || a[1] - b[1]).map(x => x[0]);
+}
+function fillVoices(sel, list, pick) {
+  const sorted = enFirst(list); sel.innerHTML = '';
+  sorted.forEach(v => { const o = document.createElement('option'); o.value = v.id; o.textContent = v.label || v.id; sel.append(o); });
+  if (pick && sorted.some(v => v.id === pick)) sel.value = pick;
+}
+function filterSel(sel, q) {
+  q = (q || '').trim().toLowerCase();
+  [...sel.options].forEach(o => { const hit = !q || (o.value + ' ' + o.textContent).toLowerCase().includes(q); o.hidden = !hit; o.disabled = !hit; });
+  const c = sel.selectedOptions[0]; if (!c || c.disabled) { const f = [...sel.options].find(o => !o.disabled); if (f) sel.value = f.value; } }
 async function loadVoices() {
   const cid = $('#dconn').value; if (!cid) { idle('Add a voice server first.'); return; }
   busy('Loading voices…');
   try {
     const d = await jpost('/voices', { connection_id: cid });
     voices = d.voices || [];
-    const sel = $('#voice'); sel.innerHTML = '';
-    voices.forEach(v => { const o = document.createElement('option'); o.value = v.id; o.textContent = v.label || v.id; sel.append(o); });
-    if (PREFS.default_voice && voices.some(v => v.id === PREFS.default_voice)) sel.value = PREFS.default_voice;
+    fillVoices($('#voice'), voices, PREFS.default_voice);
     $('#vfilter').value = ''; applyFilter();
     idle(voices.length + ' voices loaded.');
   } catch (e) { fail(e); }
 }
 $('#loadvoices').onclick = loadVoices;
-function applyFilter() { const q = $('#vfilter').value.trim().toLowerCase(); const sel = $('#voice');
-  [...sel.options].forEach(o => { const hit = !q || (o.value + ' ' + o.textContent).toLowerCase().includes(q); o.hidden = !hit; o.disabled = !hit; });
-  const c = sel.selectedOptions[0]; if (!c || c.disabled) { const f = [...sel.options].find(o => !o.disabled); if (f) sel.value = f.value; } }
+function applyFilter() { filterSel($('#voice'), $('#vfilter').value); }
 $('#vfilter').oninput = applyFilter;
 
 // --- import ----------------------------------------------------------------
@@ -1142,13 +1165,17 @@ async function loadCvVoices() {
   if (!cid) { vs.innerHTML = '<option value="">—</option>'; return; }
   try {
     const d = await jpost('/voices', { connection_id: cid });
-    vs.innerHTML = '';
-    (d.voices || []).forEach(v => { const o = document.createElement('option'); o.value = v.id; o.textContent = v.label || v.id; vs.append(o); });
-    if (PREFS.default_voice && (d.voices || []).some(v => v.id === PREFS.default_voice)) vs.value = PREFS.default_voice;
+    // land on the voice already used on this book, else the default, else the
+    // last one picked anywhere, so a repeat conversion needs no hunting.
+    const cur = ((book && book.chapters.find(c => c.rendered && c.voice)) || {}).voice || '';
+    const pick = cur || PREFS.default_voice || localStorage.getItem('fs_lastvoice') || '';
+    fillVoices(vs, d.voices || [], pick);
     if (!vs.options.length) vs.innerHTML = '<option value="">no voices</option>';
+    const f = $('#cvfilter'); if (f) { f.value = ''; filterSel(vs, ''); }
   } catch (e) { vs.innerHTML = '<option value="">could not load voices</option>'; }
 }
 $('#cvconn').onchange = loadCvVoices;
+$('#cvfilter').oninput = () => filterSel($('#cvvoice'), $('#cvfilter').value);
 $('#cvcancel').onclick = () => { $('#convertdlg').hidden = true; };
 $('#cvall').onclick = () => { $('#convertdlg').hidden = true; runConvert(null, 'all ' + book.chapters.length); };
 $('#cvsel').onclick = () => { const list = cvTicked(); $('#convertdlg').hidden = true;
@@ -1158,6 +1185,7 @@ async function runConvert(list, label) {
   busy('Converting ' + label + '…');
   try {
     const vs = $('#cvvoice'), vopt = vs.selectedOptions[0];
+    try { if (vs.value) localStorage.setItem('fs_lastvoice', vs.value); } catch (e) {}
     const body = { user: USER, book: book.id, connection_id: $('#cvconn').value,
       voice: vs.value, voice_label: vopt ? vopt.textContent : '', speed: 1.0 };
     if (list) body.chapters = list;
@@ -1406,8 +1434,7 @@ async function sbLoadVoices() {
     SB_VOICES = []; sel.innerHTML = '<option value="">' + (e.message || 'voices failed') + '</option>'; return;
   }
   sel.innerHTML = '';
-  SB_VOICES.forEach(v => { const o = document.createElement('option'); o.value = v.id;
-    o.textContent = v.label || v.id; sel.append(o); });
+  fillVoices(sel, SB_VOICES, null);
   if (!SB_VOICES.length) sel.innerHTML = '<option value="">no voices on this server</option>';
   else sbStatus(SB_VOICES.length + ' voices.');
 }
@@ -1525,4 +1552,5 @@ window.addEventListener('load', async () => {
 </script>
 </body>
 </html>
+
 
