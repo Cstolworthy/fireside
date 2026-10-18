@@ -19,9 +19,9 @@ Built for long serialized fiction: no subscription wall, no account required, ru
 &#8226; Character-capacity accounting hooks for hosted use; self-host is free
 
 First run: open the WebUI, add a speech engine on the Settings page, drop in a book, and press play.</Overview>
-  <Category>MediaApp:Books Productivity: Tools:</Category>
+  <Category>MediaApp:Books Productivity:</Category>
   <WebUI>http://[IP]:[PORT:8788]/</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/Cstolworthy/fireside/main/unraid/fireside.xml</TemplateURL>
+  <TemplateURL>https://raw.githubusercontent.com/Cstolworthy/fireside/main/templates/fireside.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/Cstolworthy/fireside/main/assets/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>

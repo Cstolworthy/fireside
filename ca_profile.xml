@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<CommunityApplications>
+  <Profile>
+**fireside** - self-hosted text-to-audio for long-form reading.
+
+Drop in an EPUB or paste a public story link (Archive of Our Own, and general web pages) and fireside narrates it chapter by chapter, with per-chapter audio you can replay plus a continuous whole-book mode. No subscription wall, no account required.
+
+Bring your own speech engine: Azure, any OpenAI-compatible endpoint, MiniMax, or a local engine such as Kokoro, which makes it cost nothing per word. Metadata runs on SQLite by default, or MySQL/MariaDB if you prefer.
+
+Open source, MIT licensed. This repository holds the Community Applications template for the fireside Docker image.
+
+Support and issues: https://github.com/Cstolworthy/fireside/issues
+  </Profile>
+  <Icon>https://raw.githubusercontent.com/Cstolworthy/fireside/main/assets/icon.png</Icon>
+  <WebPage>https://github.com/Cstolworthy/fireside</WebPage>
+</CommunityApplications>
