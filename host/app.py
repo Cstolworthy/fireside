@@ -31,7 +31,9 @@ from host.host import Host
 from host import accounting, auth, credentials, db, jobs, library, playback
 from sources._fetch import fetch as _fetch
 
-UI_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ui")
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+UI_DIR = os.path.join(BASE_DIR, "ui")
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 HOST_VERSION = "2.0"
 
 
@@ -113,6 +115,11 @@ class App:
         with open(os.path.join(UI_DIR, "index.html"), "r", encoding="utf-8") as f:
             page = f.read().replace("__HOST_VERSION__", HOST_VERSION)
         return 200, {"_html": page}
+
+    def favicon(self, q, body):
+        """The browser-tab icon: the same mark the install screen shows."""
+        with open(os.path.join(ASSETS_DIR, "favicon.ico"), "rb") as f:
+            return 200, {"_raw": f.read(), "_mime": "image/x-icon"}
 
     # ---- library --------------------------------------------------------------
 
@@ -305,7 +312,7 @@ class App:
 
 
 GET_ROUTES = {
-    "/": "ui", "/index.html": "ui",
+    "/": "ui", "/index.html": "ui", "/favicon.ico": "favicon",
     "/health": "health", "/plugins": "plugins", "/library": "library_list",
     "/job": "job", "/progress": "progress", "/chapter": "chapter",
     "/position": "get_position", "/stop": "stop", "/text": "text",
@@ -320,7 +327,7 @@ POST_ROUTES = {
 
 # reachable without a session even when auth is required: the page, its health,
 # the sign-in surface, and the browser's cache of who it is.
-PUBLIC_ROUTES = {"/", "/index.html", "/health", "/auth/providers", "/auth/policy", "/me"}
+PUBLIC_ROUTES = {"/", "/index.html", "/favicon.ico", "/health", "/auth/providers", "/auth/policy", "/me"}
 
 # auth sub-routes the handler serves directly (they set cookies / redirect),
 # so they are not in the GET/POST dispatch tables above. Declared here so the

@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>fireside</title>
+<link rel="icon" href="/favicon.ico">
 <style>
   :root{
     --bg:#14110f; --surface:#1d1915; --raise:#272119; --line:#3a3128;
@@ -447,6 +448,7 @@ async function requireSession() {
   }
   AUTH.mode = AUTH.hasAccounts ? 'sign' : 'create';
   document.body.classList.add('locked');
+  $('#lock').hidden = false;        // reveal the door; body.locked hid the app
   renderAuth();
   $('#lockuser').focus();
   return false;
