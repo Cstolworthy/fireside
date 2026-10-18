@@ -299,13 +299,19 @@ class TestBookPageConvert(unittest.TestCase):
         self.assertIn("nf(bookChars)", html)
         self.assertIn("nf(selChars)", html)
 
-    def test_book_page_has_cover_controls(self):
+    def test_book_page_has_book_settings_panel(self):
+        # one settings panel holds the metadata and the cover controls; the
+        # lone "Set cover" button is gone.
         html = self._html()
-        for anchor in ('id="npcover"', 'id="npcoverimg"', 'id="coverbtn"',
-                       'id="coverauto"', 'id="coverfile"'):
+        for anchor in ('id="settingsbtn"', 'id="settingsdlg"', 'id="npcover"',
+                       'id="npcoverimg"', 'id="sisbn"', 'id="sfetch"',
+                       'id="scovprev"', 'id="scovurl"', 'id="scovfile"',
+                       'id="scovautobtn"', 'id="scovrmbtn"'):
             self.assertIn(anchor, html)
+        self.assertNotIn('id="coverbtn"', html)
         self.assertIn("/cover", html)                 # the shelf/book cover route
         self.assertIn("coverURL", html)
+        self.assertIn("/book/details", html)          # ISBN -> metadata lookup
 
 
 class TestConditionalRender(unittest.TestCase):

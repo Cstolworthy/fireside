@@ -49,6 +49,7 @@ def list_books(conn, user_id):
             "SELECT COUNT(*) c FROM chapters WHERE book_id=? AND audio_ref IS NOT NULL",
             (r["id"],)).fetchone()["c"]
         out.append({"id": r["id"], "title": r["title"],
+                    "author": (r["author"] or ""),
                     "created_at": r["created_at"], "chapters": n, "rendered": done,
                     "cover": r["cover_ref"] or ""})
     return out
@@ -62,7 +63,27 @@ def get_book(conn, book_id):
     return {"id": r["id"], "user_id": r["user_id"], "title": r["title"],
             "meta": meta, "created_at": r["created_at"],
             "cover": r["cover_ref"] or "", "cover_mime": r["cover_mime"] or "",
-            "isbn": (meta or {}).get("isbn", "")}
+            "author": r["author"] or "", "publisher": r["publisher"] or "",
+            "published": r["published"] or "", "description": r["description"] or "",
+            # the ISBN column is where it lives now; an old row may still carry
+            # one in its source metadata, so fall back to that.
+            "isbn": (r["isbn"] or "") or (meta or {}).get("isbn", "")}
+
+
+# The descriptive columns a book can carry, edited from the book-settings panel.
+_DETAIL_FIELDS = ("title", "author", "isbn", "publisher", "published", "description")
+
+
+def set_details(conn, book_id, **fields):
+    """Update the descriptive fields on a book. Only the known columns are
+    touched (the names come from a fixed list, never from the caller)."""
+    cols = [k for k in _DETAIL_FIELDS if k in fields]
+    if not cols:
+        return
+    sets = ",".join("%s=?" % c for c in cols)
+    conn.execute("UPDATE books SET %s WHERE id=?" % sets,
+                 tuple(fields[c] for c in cols) + (book_id,))
+    conn.commit()
 
 
 # ---- cover art ------------------------------------------------------------

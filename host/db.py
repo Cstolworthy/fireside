@@ -39,7 +39,10 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS books (
     id VARCHAR(128) PRIMARY KEY, user_id VARCHAR(128), title TEXT,
     source_json TEXT, cover_ref VARCHAR(255) DEFAULT '',
-    cover_mime VARCHAR(64) DEFAULT '', created_at VARCHAR(32));
+    cover_mime VARCHAR(64) DEFAULT '', author VARCHAR(255) DEFAULT '',
+    isbn VARCHAR(32) DEFAULT '', publisher VARCHAR(255) DEFAULT '',
+    published VARCHAR(64) DEFAULT '', description TEXT,
+    created_at VARCHAR(32));
 CREATE TABLE IF NOT EXISTS chapters (
     book_id VARCHAR(128), idx INT, title TEXT, chars INT,
     text_ref VARCHAR(255), audio_ref VARCHAR(255), audio_bytes INT, duration_s DOUBLE,
@@ -186,6 +189,11 @@ def _columns(conn, table):
 _ADDED_COLUMNS = [
     ("books", "cover_ref", "VARCHAR(255) DEFAULT ''"),
     ("books", "cover_mime", "VARCHAR(64) DEFAULT ''"),
+    ("books", "author", "VARCHAR(255) DEFAULT ''"),
+    ("books", "isbn", "VARCHAR(32) DEFAULT ''"),
+    ("books", "publisher", "VARCHAR(255) DEFAULT ''"),
+    ("books", "published", "VARCHAR(64) DEFAULT ''"),
+    ("books", "description", "TEXT"),
 ]
 
 

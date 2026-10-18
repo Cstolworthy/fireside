@@ -24,10 +24,13 @@ Endpoints (JSON unless noted):
 """
 
 import base64
+import ipaddress
 import json
 import os
 import re
+import socket
 import threading
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -210,6 +213,14 @@ class App:
         book_id = body.get("book", "")
         if not library.get_book(self.conn, book_id):
             return 404, {"error": "no such book"}
+        url = (body.get("url") or "").strip()
+        if url:
+            got = self._cover_from_url(url)
+            if not got:
+                return 400, {"error": "could not fetch an image from that URL"}
+            data, mime = got
+            library.set_cover(self.conn, self.storage, book_id, data, mime)
+            return 200, {"ok": True, "cover": library.get_book(self.conn, book_id)["cover"]}
         raw = body.get("data_b64") or ""
         try:
             data = base64.b64decode(raw) if raw else b""
@@ -223,18 +234,201 @@ class App:
                           body.get("mime") or "image/jpeg")
         return 200, {"ok": True, "cover": library.get_book(self.conn, book_id)["cover"]}
 
+    def clear_cover(self, q, body):
+        book_id = body.get("book", "")
+        if not library.get_book(self.conn, book_id):
+            return 404, {"error": "no such book"}
+        library.clear_cover(self.conn, book_id)
+        return 200, {"ok": True, "cover": ""}
+
+    # a cover URL is user input, so it only ever reaches the public internet:
+    # http(s), an image content-type (or a recognised image signature), and a
+    # host that does not resolve into a private / loopback / link-local range.
+    _IMAGE_MAGIC = ((b"\xff\xd8\xff", "image/jpeg"),
+                    (b"\x89PNG\r\n\x1a\n", "image/png"),
+                    (b"GIF87a", "image/gif"), (b"GIF89a", "image/gif"),
+                    (b"RIFF", "image/webp"))
+
+    def _url_allowed(self, url):
+        """True only for an http(s) URL whose host resolves to a public address.
+        A cover URL is user input, so it must never reach this box's own
+        network or a file on it."""
+        try:
+            p = urllib.parse.urlsplit(url)
+        except Exception:
+            return False
+        if p.scheme not in ("http", "https") or not p.hostname:
+            return False
+        try:
+            infos = socket.getaddrinfo(p.hostname, p.port or
+                                       (443 if p.scheme == "https" else 80))
+        except Exception:
+            return False
+        for info in infos:
+            try:
+                ip = ipaddress.ip_address(info[4][0])
+            except ValueError:
+                return False
+            if (ip.is_private or ip.is_loopback or ip.is_link_local
+                    or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+                return False
+        return True
+
+    def _cover_from_url(self, url):
+        if not self._url_allowed(url):
+            return None
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "fireside/2 (cover fetch)"})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                data = r.read(self.COVER_MAX_BYTES + 1)
+        except Exception:
+            return None
+        if not data or len(data) > self.COVER_MAX_BYTES:
+            return None
+        sniff = ""
+        for magic, m in self._IMAGE_MAGIC:
+            if data.startswith(magic):
+                sniff = m
+                break
+        if ctype.startswith("image/"):
+            mime = ctype
+        elif sniff:
+            mime = sniff
+        else:
+            return None
+        return data, mime
+
     def cover_auto(self, q, body):
         book_id = body.get("book", "")
         b = library.get_book(self.conn, book_id)
         if not b:
             return 404, {"error": "no such book"}
-        isbn = (b.get("meta") or {}).get("isbn") or body.get("isbn") or ""
+        isbn = b.get("isbn") or body.get("isbn") or (b.get("meta") or {}).get("isbn") or ""
         got = self._cover_by_isbn(isbn)
         if not got:
             return 404, {"error": "no cover found" + (" for that ISBN" if isbn else "")}
         data, mime = got
         library.set_cover(self.conn, self.storage, book_id, data, mime)
         return 200, {"ok": True, "cover": library.get_book(self.conn, book_id)["cover"]}
+
+    # ---- book details ---------------------------------------------------------
+    # An ISBN is the key to a book's public metadata. Given one, the settings
+    # panel can fill in author, description, publisher and date without the
+    # reader having typed any of it. OpenLibrary is keyless, so this works on a
+    # fresh install. Nothing here overwrites the book's own title.
+
+    DETAILS_MAX_CHARS = 4000
+    _OL_EDITION = "https://openlibrary.org/isbn/{isbn}.json"
+    _OL_KEY = "https://openlibrary.org{key}.json"
+
+    def _get_json(self, url):
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "fireside/2 (book details)"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read(4 * 1024 * 1024).decode("utf-8", "replace"))
+
+    @staticmethod
+    def _norm_isbn(isbn):
+        return re.sub(r"[^0-9Xx]", "", str(isbn or ""))
+
+    @staticmethod
+    def _valid_isbn(isbn):
+        return bool(re.fullmatch(r"\d{9}[\dXx]|\d{13}", isbn or ""))
+
+    def _details_by_isbn(self, isbn):
+        """Public metadata for an ISBN from OpenLibrary, or None."""
+        isbn = self._norm_isbn(isbn)
+        if not self._valid_isbn(isbn):
+            return None
+        try:
+            ed = self._get_json(self._OL_EDITION.format(isbn=isbn))
+        except Exception:
+            return None
+        out = {"isbn": isbn}
+        title = ed.get("title") or ""
+        if title and ed.get("subtitle"):
+            title += ": " + ed["subtitle"]
+        if title:
+            out["title"] = title
+        names = []
+        for a in (ed.get("authors") or [])[:6]:
+            key = a.get("key") if isinstance(a, dict) else None
+            if not key:
+                continue
+            try:
+                n = self._get_json(self._OL_KEY.format(key=key)).get("name")
+            except Exception:
+                n = ""
+            if n:
+                names.append(n)
+        if not names and ed.get("by_statement"):
+            names = [ed["by_statement"]]
+        if names:
+            out["author"] = ", ".join(names)
+        pubs = [p for p in (ed.get("publishers") or []) if p][:3]
+        if pubs:
+            out["publisher"] = ", ".join(pubs)
+        if ed.get("publish_date"):
+            out["published"] = str(ed["publish_date"])
+        desc = ed.get("description")
+        if not desc:
+            works = ed.get("works") or []
+            if works and isinstance(works[0], dict) and works[0].get("key"):
+                try:
+                    desc = self._get_json(
+                        self._OL_KEY.format(key=works[0]["key"])).get("description")
+                except Exception:
+                    desc = None
+        if isinstance(desc, dict):
+            desc = desc.get("value")
+        if desc:
+            out["description"] = str(desc).strip()[:self.DETAILS_MAX_CHARS]
+        return out
+
+    def fetch_details(self, q, body):
+        """Look a book up by ISBN and store what we learn. An ISBN in the body
+        is saved first (the panel just typed one); otherwise the stored one is
+        used. The cover is fetched too, but only when the book has none."""
+        book_id = body.get("book", "")
+        b = library.get_book(self.conn, book_id)
+        if not b:
+            return 404, {"error": "no such book"}
+        isbn = self._norm_isbn(body.get("isbn"))
+        if isbn:
+            library.set_details(self.conn, book_id, isbn=isbn)
+            b = library.get_book(self.conn, book_id)
+        else:
+            isbn = b.get("isbn") or ""
+        if not self._valid_isbn(isbn):
+            return 400, {"error": "that does not look like an ISBN"}
+        details = self._details_by_isbn(isbn)
+        if not details:
+            return 404, {"error": "no details found for that ISBN"}
+        fields = {k: details[k] for k in
+                  ("author", "publisher", "published", "description")
+                  if details.get(k)}
+        if not b.get("title") and details.get("title"):
+            fields["title"] = details["title"]
+        if fields:
+            library.set_details(self.conn, book_id, **fields)
+        if not b.get("cover"):
+            got = self._cover_by_isbn(isbn)
+            if got:
+                try:
+                    library.set_cover(self.conn, self.storage, book_id, got[0], got[1])
+                except Exception:
+                    pass
+        return 200, {"ok": True, "book": self._book_payload(book_id)}
+
+    def _book_payload(self, book_id):
+        b = library.get_book(self.conn, book_id) or {}
+        return {"id": book_id, "title": b.get("title", ""),
+                "author": b.get("author", ""), "cover": b.get("cover", ""),
+                "isbn": b.get("isbn", ""), "publisher": b.get("publisher", ""),
+                "published": b.get("published", ""),
+                "description": b.get("description", "")}
 
     def _pick_reader(self, req):
         for p in self.host.readers:
@@ -348,8 +542,7 @@ class App:
                 "provider": r["provider"], "voice": r["voice"],
                 "voice_label": r["voice_label"], "model": r["model"],
                 "audio_ref": r["audio_ref"], "audio_bytes": r["audio_bytes"]})
-        return 200, {"book": {"id": book_id, "title": b.get("title", ""),
-                              "cover": b.get("cover", ""), "isbn": b.get("isbn", "")},
+        return 200, {"book": self._book_payload(book_id),
                      "chapters": [
             {"idx": c["idx"], "title": c["title"], "chars": c["chars"],
              "rendered": bool(c["audio_ref"]),
@@ -666,7 +859,8 @@ GET_ROUTES = {
 POST_ROUTES = {
     "/import": "import_book", "/render": "render", "/voices": "voices",
     "/speak": "speak",
-    "/cover": "put_cover", "/cover/auto": "cover_auto",
+    "/cover": "put_cover", "/cover/auto": "cover_auto", "/cover/clear": "clear_cover",
+    "/book/details": "fetch_details",
     "/position": "put_position", "/claim": "claim", "/ack": "ack",
     "/credential": "put_credential", "/auth/registration": "set_registration",
     "/connections": "connection_save", "/connections/delete": "connection_delete",
