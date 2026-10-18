@@ -62,9 +62,9 @@
   .cover{border-radius:6px;padding:12px;display:flex;align-items:flex-end;font:600 15px/1.2 var(--serif);color:#f3e7cf;background:linear-gradient(160deg,#5a3b2a,#2a1c14)}
   .resume{display:flex;gap:24px;align-items:center}
   .resume .cover{width:130px;flex:none;aspect-ratio:2/3}
-  .shelf{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:12px}
-  .bk{cursor:pointer}
-  .bk .cover{aspect-ratio:2/3;font-size:14px;margin-bottom:8px}
+  .shelf{display:grid;grid-template-columns:repeat(auto-fill,170px);gap:22px;margin-top:12px;justify-content:start}
+  .bk{cursor:pointer;max-width:170px}
+  .bk .cover{aspect-ratio:2/3;font-size:14px;margin-bottom:8px;max-width:170px}
   .bk .spine{margin:8px 0 6px}
   /* playing */
   .np{display:grid;grid-template-columns:1fr 260px;gap:40px}
@@ -94,7 +94,7 @@
     main{padding:22px 18px 70px}
     .np{grid-template-columns:1fr;gap:22px}
     .np aside{order:2}
-    .shelf{grid-template-columns:1fr 1fr}
+    .shelf{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:16px}
     .resume{flex-direction:column;align-items:flex-start}
     .resume .cover{width:104px}
   }
