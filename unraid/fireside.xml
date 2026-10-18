@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>fireside</Name>
+  <Repository>cstolworthy/fireside:latest</Repository>
+  <Registry>https://hub.docker.com/r/cstolworthy/fireside</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/Cstolworthy/fireside/issues</Support>
+  <Project>https://github.com/Cstolworthy/fireside</Project>
+  <Overview>Drop in an EPUB or paste a public story link and fireside narrates it, chapter by chapter.
+
+Built for long serialized fiction: no subscription wall, no account required, runs on your own machine. Bring your own TTS key (Azure, OpenAI-compatible, MiniMax) or point it at a local engine such as Kokoro and it costs nothing per word. Open source (MIT).
+
+&#8226; EPUB, pasted story links, and Archive of Our Own (with optional login cookie)
+&#8226; Per-chapter audio you can replay, plus continuous "whole book" mode
+&#8226; Local filesystem storage by default; SQLite metadata by default, MySQL/MariaDB optional
+&#8226; Character-capacity accounting hooks for hosted use; self-host is free
+
+First run: open the WebUI, add a speech engine on the Settings page, drop in a book, and press play.</Overview>
+  <Category>MediaApp:Books Productivity: Tools:</Category>
+  <WebUI>http://[IP]:[PORT:8788]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/Cstolworthy/fireside/main/unraid/fireside.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/Cstolworthy/fireside/main/assets/icon.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="WebUI Port" Target="8788" Default="8788" Mode="tcp" Description="Port for the fireside WebUI and API." Type="Port" Display="always" Required="true" Mask="false">8788</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/fireside/data" Mode="rw" Description="Library metadata and content-addressed audio blobs. Point this at appdata so your library survives container updates." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/fireside/data</Config>
+  <Config Name="Data Dir" Target="FIRESIDE_DATA" Default="/data" Mode="" Description="Where the host keeps its state inside the container. Leave as /data unless you changed the path above." Type="Variable" Display="advanced" Required="false" Mask="false">/data</Config>
+  <Config Name="Database Engine" Target="FIRESIDE_DB_TYPE" Default="sqlite" Mode="" Description="sqlite (default, zero setup) or mysql. Set to mysql to use an external MySQL/MariaDB server; metadata moves to that server, audio blobs stay under the Data path." Type="Variable" Display="always" Required="false" Mask="false">sqlite</Config>
+  <Config Name="Database Connection" Target="FIRESIDE_DB_CONN" Default="" Mode="" Description="Only used when Database Engine is mysql. Form: user:password@host:3306/dbname (or a full mysql:// DSN). Matches the FIRESIDE_DB_CONN env var in the README." Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="Plugins Root" Target="FIRESIDE_PLUGINS_ROOT" Default="plugins" Mode="" Description="Directory the host scans for reader/speech/storage plugins. Leave default unless you mount a custom plugin set." Type="Variable" Display="advanced" Required="false" Mask="false">plugins</Config>
+</Container>
