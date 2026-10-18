@@ -117,3 +117,35 @@ class TestRender(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ReservedWordColumns(unittest.TestCase):
+    """MySQL reserves the word `key`; the render-cache column must be quoted so
+    the dialect stays valid once FIRESIDE_DB_TYPE=mysql."""
+
+    class _Spy:
+        def __init__(self, real):
+            self._real = real
+            self.sql = []
+
+        def execute(self, sql, *args):
+            self.sql.append(sql)
+            return self._real.execute(sql, *args)
+
+        def commit(self):
+            return self._real.commit()
+
+    def test_render_cache_quotes_key(self):
+        tmp = tempfile.mkdtemp(prefix="fireside-jobs-")
+        storage = LocalBackend(tmp + "/blobs")
+        real = connect(":memory:")
+        library.create_user(real, "u1")
+        bid = library.add_book(real, storage, "u1", _book(("aa",)))
+        spy = self._Spy(real)
+        jobs.render_book(spy, storage, FakeSpeech(), "u1", bid, voice="v1")
+        hits = [s for s in spy.sql if "render_cache" in s.lower()]
+        self.assertTrue(hits, "render cache was never touched")
+        for sql in hits:
+            low = sql.lower()
+            self.assertNotIn(" key=", low)
+            self.assertNotIn("(key", low)
+            self.assertIn("`key`", low)
