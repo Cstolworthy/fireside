@@ -9,6 +9,7 @@ job row carries progress; the client knows nothing about the pipeline.
 import hashlib
 import uuid
 
+from host import library
 from host.db import now
 
 
@@ -27,13 +28,14 @@ def _chapter_row(conn, book_id, idx):
 
 
 def render_chapter(conn, storage, speech, book_id, idx, voice="", model="", speed=1.0,
-                   cred=None, opts=None):
+                   cred=None, opts=None, voice_label=""):
     """Render one chapter. Returns "cached" or "rendered"."""
     row = _chapter_row(conn, book_id, idx)
     key = render_key(row["text_ref"], speech.id, voice, model, speed)
     cached = conn.execute("SELECT * FROM render_cache WHERE key=?", (key,)).fetchone()
     if cached:
-        _write_chapter_audio(conn, book_id, idx, cached, speech.id, voice, model, speed)
+        _write_chapter_audio(conn, book_id, idx, cached, speech.id, voice, model, speed,
+                             voice_label=voice_label)
         conn.commit()
         return "cached"
     text = storage.get(row["text_ref"]).decode("utf-8")
@@ -48,17 +50,24 @@ def render_chapter(conn, storage, speech, book_id, idx, voice="", model="", spee
         " VALUES(?,?,?,?,?,?,?,?)",
         (key, ref, len(audio.data), None, speech.id, voice, model, now()))
     entry = {"audio_ref": ref, "audio_bytes": len(audio.data), "duration_s": None}
-    _write_chapter_audio(conn, book_id, idx, entry, speech.id, voice, model, speed)
+    _write_chapter_audio(conn, book_id, idx, entry, speech.id, voice, model, speed,
+                         voice_label=voice_label)
     conn.commit()
     return "rendered"
 
 
-def _write_chapter_audio(conn, book_id, idx, entry, provider, voice, model, speed):
+def _write_chapter_audio(conn, book_id, idx, entry, provider, voice, model, speed,
+                         voice_label=""):
     conn.execute(
         "UPDATE chapters SET audio_ref=?,audio_bytes=?,duration_s=?,"
         "provider=?,voice=?,model=?,speed=? WHERE book_id=? AND idx=?",
         (entry["audio_ref"], entry["audio_bytes"], entry["duration_s"],
          provider, voice, model, float(speed or 1.0), book_id, idx))
+    # keep every voice, not just the newest: the chapter row points at the
+    # default, the renditions table is what lets the player offer a choice
+    library.add_rendition(conn, book_id, idx, provider, voice, model, speed,
+                          entry["audio_ref"], entry["audio_bytes"], entry["duration_s"],
+                          voice_label=voice_label)
 
 
 def start_job(conn, user_id, book_id, provider, voice="", model="", total=0, kind="render"):
@@ -74,7 +83,8 @@ def start_job(conn, user_id, book_id, provider, voice="", model="", total=0, kin
 
 
 def render_book(conn, storage, speech, user_id, book_id, voice="", model="",
-                speed=1.0, cred=None, opts=None, only=None, job_id=None):
+                speed=1.0, cred=None, opts=None, only=None, job_id=None,
+                voice_label=""):
     """Render all (or `only`) chapters of a book. Synchronous; returns the job id.
 
     Progress and per-chapter outcome are written to the job row so a client can
@@ -91,7 +101,7 @@ def render_book(conn, storage, speech, user_id, book_id, voice="", model="",
     try:
         for i in idxs:
             render_chapter(conn, storage, speech, book_id, i, voice, model, speed,
-                           cred=cred, opts=opts)
+                           cred=cred, opts=opts, voice_label=voice_label)
             done += 1
             conn.execute("UPDATE jobs SET current=?,updated_at=? WHERE id=?",
                          (done, now(), job_id))

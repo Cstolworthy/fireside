@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS render_cache (
     `key` VARCHAR(191) PRIMARY KEY, audio_ref VARCHAR(255), audio_bytes INT,
     duration_s DOUBLE, provider VARCHAR(64), voice VARCHAR(128),
     model VARCHAR(128), created_at VARCHAR(32));
+CREATE TABLE IF NOT EXISTS renditions (
+    rk VARCHAR(191) PRIMARY KEY, book_id VARCHAR(128), idx INT,
+    provider VARCHAR(64), voice VARCHAR(128), voice_label VARCHAR(255),
+    model VARCHAR(128), speed DOUBLE, audio_ref VARCHAR(255), audio_bytes INT,
+    duration_s DOUBLE, created_at VARCHAR(32));
 CREATE TABLE IF NOT EXISTS jobs (
     id VARCHAR(128) PRIMARY KEY, user_id VARCHAR(128), book_id VARCHAR(128), kind VARCHAR(32),
     provider VARCHAR(64), voice VARCHAR(128), model VARCHAR(128), status VARCHAR(32),

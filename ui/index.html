@@ -277,6 +277,7 @@
             <button class="play" id="tog" aria-label="Play">▶</button>
             <button class="spd" id="speed">1.0×</button>
           </div>
+          <div id="npvoices" style="display:none;margin-top:12px"></div>
           <div class="spine" id="npspine"></div>
           <p class="small" id="npnote" style="margin-top:8px"></p>
           <div class="chaplistwrap">
@@ -342,6 +343,8 @@
     <select id="cvconn"></select>
     <label>Voice</label>
     <select id="cvvoice"><option value="">load voices…</option></select>
+    <label>Chapters</label>
+    <div id="cvlist" class="chaplist" style="max-height:170px"></div>
     <div class="connrow">
       <button class="btn quiet" id="cvcancel" type="button">Cancel</button>
       <button class="btn quiet" id="cvsel" type="button">Convert selected</button>
@@ -357,6 +360,7 @@ let USER = localStorage.getItem(UKEY) || '';
 let plugins = null, sources = [], voices = [], books = [], book = null, cur = -1;
 let state = {};                 // idx -> ready | avail | down | voice | fail | miss | todo
 let SELECT = new Set();         // chapter idx chosen for a conditional convert
+let selVoice = '';              // the voice being played: provider\u0000voice\u0000model
 const BADGE = { ready: 'on device', avail: 'voiced', voice: 'voicing', down: '…', fail: 'failed', todo: '', miss: 'missing' };
 let lastName = localStorage.getItem(LKEY) || '';
 const cache = new Map();        // audio_ref -> {url, bytes}   verified this session
@@ -843,9 +847,10 @@ async function openBook(id, jumpPlay) {
     const meta = bookById(id) || { title: '(book)' };
     book = { id, title: meta.title, chapters: prog.chapters || [] };
     lastName = id; localStorage.setItem(LKEY, id);
-    state = {}; SELECT.clear(); book.chapters.forEach(c => { state[c.idx] = cache.has(c.audio_ref) ? 'ready' : (c.rendered ? 'avail' : 'todo'); });
+    SELECT.clear();
+    selVoice = defaultVoiceKey();       // the newest voice, until the reader picks another
+    refreshStates();
     cur = -1;
-    const last = cache.size ? -1 : -1;  // resume position handled by loadedmetadata
     renderPlay();
     if (jumpPlay) show('play');
     try { const pos = await api('/position?user=' + encodeURIComponent(USER) + '&book=' + encodeURIComponent(id));
@@ -855,11 +860,54 @@ async function openBook(id, jumpPlay) {
   } catch (e) { fail(e); }
 }
 
+// --- voices on a book: more than one conversion means a picker -------------
+function rkey(r) { return (r.provider || '') + '\u0000' + (r.voice || '') + '\u0000' + (r.model || ''); }
+function rlabel(r) { return r.voice_label || r.voice || r.provider || 'voice'; }
+function bookVoices() {
+  const seen = new Map();
+  if (!book) return [];
+  book.chapters.forEach(c => (c.renditions || []).forEach(r => {
+    const k = rkey(r); if (!seen.has(k)) seen.set(k, r);
+  }));
+  return [...seen.entries()].map(([key, r]) => ({ key, ...r }));
+}
+function defaultVoiceKey() {
+  const c = book && book.chapters.find(x => x.rendered && x.voice);
+  return c ? rkey(c) : '';
+}
+// the copy of this chapter in the chosen voice, or the default when none is set
+function renditionFor(c) {
+  const rs = c.renditions || [];
+  if (selVoice) { const m = rs.find(r => rkey(r) === selVoice); if (m) return m; }
+  if (c.voice) { const d = rs.find(r => rkey(r) === rkey(c)); if (d) return d; }
+  return rs.length ? rs[rs.length - 1] : null;
+}
+function chapterState(c) {
+  const r = renditionFor(c);
+  if (!r || !r.audio_ref) return 'todo';
+  return cache.has(r.audio_ref) ? 'ready' : 'avail';
+}
+function refreshStates() { if (book) book.chapters.forEach(c => { state[c.idx] = chapterState(c); }); }
+function renderVoicePicker() {
+  const box = $('#npvoices'); if (!box) return;
+  const vs = bookVoices();
+  if (!book || vs.length < 2) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  box.style.display = 'flex';
+  box.innerHTML = '';
+  const lab = document.createElement('span'); lab.className = 'small'; lab.textContent = 'Voice';
+  const sel = document.createElement('select'); sel.id = 'npvoice';
+  vs.forEach(v => { const o = document.createElement('option'); o.value = v.key; o.textContent = rlabel(v); sel.append(o); });
+  if (vs.some(v => v.key === selVoice)) sel.value = selVoice;
+  sel.onchange = () => { selVoice = sel.value; refreshStates(); drawSpine(); renderPlay(); };
+  box.append(lab, sel);
+}
+
 // --- chapter list: pick a chapter to play, tick one to convert ------------
 function renderPlay() {
   if (!book) { $('#npempty').style.display = 'block'; $('#np').style.display = 'none'; return; }
   $('#npempty').style.display = 'none'; $('#np').style.display = 'block';
   $('#npchars').textContent = nf(book.chapters.reduce((a, c) => a + (c.chars || 0), 0));
+  renderVoicePicker();
   drawSpine();
   if (cur < 0) { $('#npkicker').textContent = book.title; $('#nptitle').textContent = 'Choose a chapter'; $('#nptext').innerHTML = ''; return; }
   const c = book.chapters.find(x => x.idx === cur);
@@ -894,7 +942,8 @@ function renderSelCount() { const s = $('#nplistsel'); if (!s) return;
 // unvoiced one just shows its text until you convert it.
 function selectChapter(idx) {
   const c = book && book.chapters.find(x => x.idx === idx); if (!c) return;
-  if (c.rendered) play(idx, true);
+  const r = renditionFor(c);
+  if (r && r.audio_ref) play(idx, true);
   else { cur = idx; renderPlay(); loadText(idx); }
 }
 function drawSpine() {
@@ -912,7 +961,11 @@ function drawNote() {
   if (state[cur] === 'ready') n.textContent = 'This chapter is on your device, checked and ready.';
   else if (state[cur] === 'fail') { n.textContent = 'This download failed its check. Use Download for offline to try again.'; n.className = 'note bad'; }
   else if (state[cur] === 'avail') n.textContent = 'Still on the server. Fireside downloads and checks it before playing.';
-  else if (state[cur] === 'todo') n.textContent = 'Not voiced yet. Use Convert to voice first.';
+  else if (state[cur] === 'todo') {
+    const other = (c.renditions || []).length;
+    n.textContent = other ? 'Not converted in this voice yet. Pick another voice, or convert it in this one.'
+                          : 'Not voiced yet. Use Convert to voice first.';
+  }
 }
 async function loadText(idx) {
   try { const d = await api('/text?book=' + encodeURIComponent(book.id) + '&idx=' + idx);
@@ -925,21 +978,34 @@ async function loadText(idx) {
 }
 
 // --- convert to voice (book-level; all, or just the ticked chapters) -------
+function cvTicked() { return [...document.querySelectorAll('#cvlist input[type=checkbox]')].filter(x => x.checked).map(x => +x.dataset.idx); }
+function cvSync() {
+  const n = cvTicked().length, total = book ? book.chapters.length : 0;
+  $('#cvsel').disabled = !n;
+  $('#cvsel').textContent = n ? 'Convert ' + n + ' selected' : 'Convert selected';
+  $('#cvcount').textContent = 'Convert all ' + total + ' chapter' + (total === 1 ? '' : 's') +
+    (n ? ', or just the ' + n + ' ticked below.' : '. Tick chapters below to convert only those.');
+}
 function openConvert() {
   needUser(); if (!book || !book.chapters.length) return;
   $('#err').textContent = '';
-  const total = book.chapters.length, n = SELECT.size;
-  $('#cvcount').textContent = 'Convert all ' + total + ' chapter' + (total === 1 ? '' : 's') +
-    (n ? ', or only the ' + n + ' you ticked.' : '. Tick chapters to convert just those.');
   const sc = $('#cvconn'); sc.innerHTML = '';
   CONNS.filter(c => c.enabled !== false).forEach(c => { const o = document.createElement('option');
     o.value = c.id; o.textContent = (c.label || c.provider) + (c.system ? ' (shared)' : ''); sc.append(o); });
   if (PREFS.default_connection_id && CONNS.some(c => c.id === PREFS.default_connection_id)) sc.value = PREFS.default_connection_id;
   else if (CONNS.length) sc.value = CONNS[0].id;
-  $('#cvall').textContent = 'Convert all ' + total;
-  $('#cvsel').disabled = !n;
-  $('#cvsel').textContent = n ? 'Convert ' + n + ' selected' : 'Convert selected';
+  const box = $('#cvlist'); box.innerHTML = '';
+  book.chapters.forEach(c => {
+    const row = document.createElement('label'); row.className = 'chap';
+    const chk = document.createElement('input'); chk.type = 'checkbox'; chk.className = 'chk';
+    chk.dataset.idx = c.idx; chk.checked = SELECT.has(c.idx); chk.onchange = cvSync;
+    const t = document.createElement('span'); t.className = 'ctitle';
+    t.textContent = (c.idx + 1) + '. ' + (c.title || ('Chapter ' + (c.idx + 1)));
+    row.append(chk, t); box.append(row);
+  });
+  $('#cvall').textContent = 'Convert all ' + book.chapters.length;
   $('#convertdlg').hidden = false;
+  cvSync();
   loadCvVoices();
 }
 async function loadCvVoices() {
@@ -957,14 +1023,15 @@ async function loadCvVoices() {
 $('#cvconn').onchange = loadCvVoices;
 $('#cvcancel').onclick = () => { $('#convertdlg').hidden = true; };
 $('#cvall').onclick = () => { $('#convertdlg').hidden = true; runConvert(null, 'all ' + book.chapters.length); };
-$('#cvsel').onclick = () => { const list = [...SELECT]; $('#convertdlg').hidden = true;
+$('#cvsel').onclick = () => { const list = cvTicked(); $('#convertdlg').hidden = true;
   runConvert(list, list.length + ' chapter' + (list.length === 1 ? '' : 's')); };
 async function runConvert(list, label) {
   $('#err').textContent = '';
   busy('Converting ' + label + '…');
   try {
+    const vs = $('#cvvoice'), vopt = vs.selectedOptions[0];
     const body = { user: USER, book: book.id, connection_id: $('#cvconn').value,
-      voice: $('#cvvoice').value, speed: 1.0 };
+      voice: vs.value, voice_label: vopt ? vopt.textContent : '', speed: 1.0 };
     if (list) body.chapters = list;
     const r = await jpost('/render', body);
     while (true) {
@@ -982,12 +1049,16 @@ async function runConvert(list, label) {
 $('#convertbtn').onclick = openConvert;
 
 // --- verify-before-play ----------------------------------------------------
-async function fetchChapter(id, idx, ref, nbytes) {
+async function fetchChapter(id, idx, ref, nbytes, r) {
   const key = ref || (id + ':' + idx);
   if (cache.has(key)) return cache.get(key);
-  const r = await fetch('/chapter?book=' + encodeURIComponent(id) + '&idx=' + idx);
-  if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || ('HTTP ' + r.status)); }
-  const buf = await r.arrayBuffer();
+  let q = '/chapter?book=' + encodeURIComponent(id) + '&idx=' + idx;
+  if (r && r.voice) q += '&voice=' + encodeURIComponent(r.voice)
+    + '&provider=' + encodeURIComponent(r.provider || '')
+    + (r.model ? '&model=' + encodeURIComponent(r.model) : '');
+  const resp = await fetch(q);
+  if (!resp.ok) { const d = await resp.json().catch(() => ({})); throw new Error(d.error || ('HTTP ' + resp.status)); }
+  const buf = await resp.arrayBuffer();
   const bytes = new Uint8Array(buf);
   if (nbytes && bytes.length !== nbytes) throw new Error('size mismatch (' + bytes.length + ' != ' + nbytes + ')');
   if (ref) { const got = sha256hex(bytes); if (got !== ref) throw new Error('checksum mismatch — refusing to play'); }
@@ -999,11 +1070,13 @@ async function fetchChapter(id, idx, ref, nbytes) {
 async function play(idx, autoplay = true) {
   if (!book) return; $('#err').textContent = '';
   const c = book.chapters.find(x => x.idx === idx); if (!c) return;
-  const vl = $('#voice').selectedOptions[0] ? $('#voice').selectedOptions[0].textContent : $('#voice').value;
-  state[idx] = state[idx] === 'ready' ? 'ready' : 'down'; drawSpine();
+  const vl = renditionFor(c) ? rlabel(renditionFor(c)) : ($('#voice').selectedOptions[0] ? $('#voice').selectedOptions[0].textContent : '');
+  const rd = renditionFor(c);
+  if (!rd || !rd.audio_ref) { cur = idx; renderPlay(); loadText(idx); idle('Not converted in this voice yet.'); return; }
+  state[idx] = cache.has(rd.audio_ref) ? 'ready' : 'down'; drawSpine();
   busy((autoplay ? 'Downloading chapter ' : 'Loading chapter ') + (idx + 1) + '…');
   try {
-    const e = await fetchChapter(book.id, idx, c.audio_ref, c.audio_bytes);
+    const e = await fetchChapter(book.id, idx, rd.audio_ref, rd.audio_bytes, rd);
     const a = $('#audio'); a.src = e.url;
     if (autoplay) { await jpost('/claim', { user: USER, book: book.id, device: DEVICE }); a.play().catch(() => {}); }
     cur = idx; state[idx] = 'ready';
@@ -1047,8 +1120,9 @@ $a.addEventListener('loadedmetadata', async () => {
 $a.addEventListener('ended', () => {
   if (!book || cur < 0) return;
   const nx = cur + 1; const c = book.chapters.find(x => x.idx === nx);
-  if (c && c.rendered) play(nx);
-  else idle('Paused at the next chapter (not voiced yet).');
+  const r = c && renditionFor(c);
+  if (r && r.audio_ref) play(nx);
+  else idle('Paused at the next chapter (not voiced in this voice yet).');
 });
 let stopTimer = null;
 function pollStop() {
@@ -1065,18 +1139,20 @@ function pollStop() {
 // --- offline (pull-only) ---------------------------------------------------
 $('#offline').onclick = async () => {
   if (!book) return; needUser(); $('#err').textContent = '';
-  const ready = book.chapters.filter(c => c.rendered), notReady = book.chapters.filter(c => !c.rendered);
-  if (!ready.length) { idle('Nothing voiced yet — voice the book first.'); return; }
+  const ready = [], notReady = [];
+  book.chapters.forEach(c => { const r = renditionFor(c);
+    if (r && r.audio_ref) ready.push({ c, r }); else notReady.push(c); });
+  if (!ready.length) { idle('Nothing voiced in this voice yet — convert the book first.'); return; }
   busy('Downloading ' + ready.length + ' chapter(s) for offline…');
   let done = 0;
   try {
-    for (const c of ready) {
+    for (const { c, r } of ready) {
       state[c.idx] = 'down'; drawSpine();
-      await fetchChapter(book.id, c.idx, c.audio_ref, c.audio_bytes);
+      await fetchChapter(book.id, c.idx, r.audio_ref, r.audio_bytes, r);
       state[c.idx] = 'ready'; drawSpine(); done++; bar(done, ready.length);
       progress('Downloading for offline  ·  ' + done + ' of ' + ready.length);
     }
-    idle(done + ' chapter(s) ready offline' + (notReady.length ? '  ·  ' + notReady.length + ' not voiced yet.' : '.'));
+    idle(done + ' chapter(s) ready offline' + (notReady.length ? '  ·  ' + notReady.length + ' not voiced in this voice.' : '.'));
   } catch (e) { if (cur >= 0) state[cur] = 'fail'; drawSpine(); fail(e); }
 };
 
