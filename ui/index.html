@@ -232,6 +232,7 @@
   <nav class="tabs" id="tabs">
     <button data-v="lib" class="on">Library</button>
     <button data-v="play">Now playing</button>
+    <button data-v="sand">Voice sandbox</button>
   </nav>
 </header>
 <main>
@@ -292,6 +293,30 @@
         </aside>
       </div>
     </div>
+  </section>
+
+  <!-- voice sandbox: hear any voice read a line before you commit a book to it -->
+  <section class="view" id="v-sand">
+    <h2>Voice sandbox</h2>
+    <p class="sub">Type a line, pick a voice, hear it. Nothing is saved and nothing is metered.</p>
+    <label>Text <span class="small" id="sbcount">0 / 1000</span></label>
+    <textarea id="sbtext" maxlength="1000" rows="4" autocomplete="off">The quick brown fox jumps over the lazy dog. Let us hear how this one sounds.</textarea>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:12px">
+      <div style="flex:1 1 220px"><label>Voice server</label><select id="sbconn"></select></div>
+      <div style="flex:1 1 220px"><label>Voice <span class="small" id="sbvname"></span></label><select id="sbvoice"><option value="">load voices…</option></select></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;margin-top:10px">
+      <label style="margin:0;flex:0 0 auto">Speed <span class="small" id="sbspeedv">1.0×</span></label>
+      <input id="sbspeed" type="range" min="0.5" max="2" step="0.05" value="1" style="flex:1">
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+      <button class="btn" id="sbsay" type="button">Convert and play</button>
+      <button class="btn quiet" id="sbscan" type="button">Scan voices</button>
+      <button class="btn quiet" id="sbstop" type="button" hidden>Stop</button>
+    </div>
+    <p class="small" id="sbstatus" style="min-height:18px"></p>
+    <audio id="sbaudio" controls style="width:100%;margin-top:8px;display:none"></audio>
+    <p class="hint" id="sbnote"></p>
   </section>
 
   <!-- settings -->
@@ -528,7 +553,7 @@ function connById(id) { return CONNS.find(c => c.id === id); }
 async function loadConnections() {
   try { const d = await api('/connections'); CONNS = d.connections || []; PREFS = d; }
   catch (_) { CONNS = []; }
-  renderConns(); renderDefaultPicker();
+  renderConns(); renderDefaultPicker(); renderSandboxPicker();
 }
 
 function renderConns() {
@@ -1155,6 +1180,136 @@ $('#offline').onclick = async () => {
     idle(done + ' chapter(s) ready offline' + (notReady.length ? '  ·  ' + notReady.length + ' not voiced in this voice.' : '.'));
   } catch (e) { if (cur >= 0) state[cur] = 'fail'; drawSpine(); fail(e); }
 };
+
+// --- voice sandbox ---------------------------------------------------------
+// Say one line in one voice, live: /speak is a straight synth (nothing stored,
+// nothing metered) and the bytes play right here. The scan button walks the
+// voice list, playing each voice for five seconds before moving on.
+let SB_VOICES = [];
+let sbScan = null;                       // {voices, i, timer, url} while scanning
+
+function sbStatus(t) { const el = $('#sbstatus'); if (el) el.textContent = t || ''; }
+
+function renderSandboxPicker() {
+  const sel = $('#sbconn'); if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '';
+  CONNS.filter(c => c.enabled !== false).forEach(c => {
+    const o = document.createElement('option'); o.value = c.id;
+    o.textContent = (c.label || c.provider) + (c.system ? ' (shared)' : '');
+    sel.append(o);
+  });
+  const want = (cur && CONNS.some(c => c.id === cur && c.enabled !== false)) ? cur
+             : (PREFS.default_connection_id && CONNS.some(c => c.id === PREFS.default_connection_id && c.enabled !== false)) ? PREFS.default_connection_id
+             : (sel.options.length ? sel.options[0].value : '');
+  if (want) sel.value = want;
+  if (sel.value) sbLoadVoices();
+}
+
+async function sbLoadVoices() {
+  const cid = $('#sbconn').value, sel = $('#sbvoice');
+  if (!cid) { SB_VOICES = []; sel.innerHTML = '<option value="">add a voice server first</option>'; return; }
+  sel.innerHTML = '<option value="">loading…</option>';
+  try {
+    const d = await jpost('/voices', { connection_id: cid });
+    SB_VOICES = d.voices || [];
+  } catch (e) {
+    SB_VOICES = []; sel.innerHTML = '<option value="">' + (e.message || 'voices failed') + '</option>'; return;
+  }
+  sel.innerHTML = '';
+  SB_VOICES.forEach(v => { const o = document.createElement('option'); o.value = v.id;
+    o.textContent = v.label || v.id; sel.append(o); });
+  if (!SB_VOICES.length) sel.innerHTML = '<option value="">no voices on this server</option>';
+  else sbStatus(SB_VOICES.length + ' voices.');
+}
+
+async function sbSpeak(voice) {
+  const text = ($('#sbtext').value || '').trim();
+  if (!text) { fail('type something first'); return null; }
+  const r = await api('/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, connection_id: $('#sbconn').value, voice,
+      speed: parseFloat($('#sbspeed').value || '1') }) });
+  return await r.blob();
+}
+
+async function sbSay() {
+  const v = $('#sbvoice').value;
+  if (!v) { fail('pick a voice first'); return; }
+  busy('Rendering that line…');
+  try {
+    const blob = await sbSpeak(v);
+    if (!blob) { idle(''); return; }
+    const au = $('#sbaudio'); au.style.display = 'block';
+    au.src = URL.createObjectURL(blob); await au.play();
+    const opt = $('#sbvoice').options[$('#sbvoice').selectedIndex];
+    idle('Playing ' + (opt ? opt.textContent : v) + '.');
+  } catch (e) { fail(e); }
+}
+
+function sbStopScan(quiet) {
+  if (sbScan && sbScan.timer) clearInterval(sbScan.timer);
+  if (sbScan && sbScan.url) URL.revokeObjectURL(sbScan.url);
+  sbScan = null;
+  const st = $('#sbstop'), sc = $('#sbscan');
+  if (st) st.hidden = true; if (sc) sc.hidden = false;
+  const au = $('#sbaudio'); if (au) au.pause();
+  if (!quiet) sbStatus('Stopped.');
+}
+
+async function sbScanRun() {
+  if (sbScan) { sbStopScan(); return; }
+  const voices = SB_VOICES.slice();
+  if (!voices.length) { fail('no voices to scan'); return; }
+  const chars = Math.min(($('#sbtext').value || '').trim().length, 1000);
+  const est = chars * voices.length;
+  if (est > 20000 && !confirm('Scanning ' + voices.length + ' voices sends about '
+      + est.toLocaleString() + ' characters to this server. On a paid key that is real money. Go ahead?')) return;
+  sbScan = { voices, i: 0, timer: null, url: null };
+  $('#sbscan').hidden = true; $('#sbstop').hidden = false;
+  sbScanStep();
+}
+
+async function sbScanStep() {
+  if (!sbScan) return;
+  if (sbScan.i >= sbScan.voices.length) { sbStopScan(true); sbStatus('Scan done.'); return; }
+  const v = sbScan.voices[sbScan.i];
+  const label = v.label || v.id;
+  $('#sbvoice').value = v.id;
+  const vn = $('#sbvname'); if (vn) vn.textContent = label;
+  sbStatus('Scanning ' + (sbScan.i + 1) + ' / ' + sbScan.voices.length + ': ' + label);
+  let blob = null;
+  try { blob = await sbSpeak(v.id); }
+  catch (e) { if (!sbScan) return; sbStatus('Skipped ' + label + ': ' + e.message); }
+  if (!sbScan) return;
+  if (blob) {
+    if (sbScan.url) URL.revokeObjectURL(sbScan.url);
+    sbScan.url = URL.createObjectURL(blob);
+    const au = $('#sbaudio'); au.style.display = 'block'; au.src = sbScan.url;
+    try { await au.play(); } catch (_) {}
+  }
+  if (!sbScan) return;
+  let n = 5;
+  sbStatus('Scanning ' + (sbScan.i + 1) + ' / ' + sbScan.voices.length + ': ' + label + ' — next in ' + n + 's');
+  sbScan.timer = setInterval(() => {
+    if (!sbScan) return;
+    n -= 1;
+    if (n <= 0) { clearInterval(sbScan.timer); sbScan.timer = null; sbScan.i += 1; sbScanStep(); }
+    else sbStatus('Scanning ' + (sbScan.i + 1) + ' / ' + sbScan.voices.length + ': ' + label + ' — next in ' + n + 's');
+  }, 1000);
+}
+
+(function wireSandbox() {
+  const conn = $('#sbconn'); if (!conn) return;
+  conn.onchange = sbLoadVoices;
+  $('#sbvoice').onchange = () => { const vn = $('#sbvname');
+    const o = $('#sbvoice').options[$('#sbvoice').selectedIndex]; if (vn) vn.textContent = o ? o.textContent : ''; };
+  $('#sbsay').onclick = sbSay;
+  $('#sbscan').onclick = sbScanRun;
+  $('#sbstop').onclick = () => sbStopScan();
+  const sp = $('#sbspeed'); sp.oninput = () => { $('#sbspeedv').textContent = parseFloat(sp.value).toFixed(2) + '×'; };
+  const tx = $('#sbtext'); const count = () => { $('#sbcount').textContent = tx.value.length + ' / 1000'; };
+  tx.oninput = count; count();
+})();
 
 // --- a script error must never leave a silent blank page --------------------
 // If anything throws while the page starts, reveal the door with the reason

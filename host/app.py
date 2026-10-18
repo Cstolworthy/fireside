@@ -14,6 +14,8 @@ Endpoints (JSON unless noted):
   GET  /progress?user=&book=                 per-chapter title, chars, rendered status
   GET  /text?book=&idx=                      the chapter text (story page, no audio)
   GET  /chapter?book=&idx=                   raw audio bytes (verify-before-play)
+  POST /speak    {text, connection_id|provider, voice, model, speed}  free-text
+                synth, straight back as audio (the voice sandbox; nothing stored)
   GET  /position?user=&book=                 current position
   POST /position {user, book, chapter_index, offset_seconds, device}
   POST /claim    {user, book, device}        take ownership; stops the other
@@ -304,6 +306,49 @@ class App:
         return 200, {"_raw": data, "_mime": "audio/mpeg", "bytes": len(data),
                      "checksum": r["audio_ref"]}
 
+    # ---- voice sandbox --------------------------------------------------------
+    # Say a short bit of free text in one voice, right now, and hand the audio
+    # straight back. Not a render: nothing is stored, nothing is metered, and the
+    # only limit is the provider's own. The sandbox page drives this once per
+    # voice for the scan button.
+
+    SPEAK_MAX_CHARS = 1000
+
+    def speak(self, q, body):
+        uid = self._uid(q, body)
+        text = (body.get("text") or "").strip()
+        if not text:
+            return 400, {"error": "nothing to say"}
+        if len(text) > self.SPEAK_MAX_CHARS:
+            return 400, {"error": "text is longer than %d characters" % self.SPEAK_MAX_CHARS}
+        cid = body.get("connection_id") or ""
+        provider = body.get("provider", "")
+        cred = None
+        if cid:
+            c = connections.get(self.conn, cid)
+            if not connections.may_use(c, uid, auth.is_admin(self.conn, uid)):
+                return 403, {"error": "no such connection"}
+            cred = connections.resolve(self.conn, uid, cid)
+            if cred is None:
+                return 403, {"error": "connection is switched off"}
+            provider = c["provider"]
+        if provider not in self.host.speech:
+            return 400, {"error": "unknown provider"}
+        if cred is None:
+            cred = body.get("cred") or credentials.get_credential(self.conn, uid, provider)
+        voice = body.get("voice", "")
+        model = body.get("model", "")
+        speed = float(body.get("speed", 1.0) or 1.0)
+        if self.rate_limiter is not None and not self.rate_limiter.allow(uid):
+            return 429, {"error": "rate limited"}
+        speech = self.host.speech[provider].obj
+        audio = speech.synth(text, voice, {"model": model, "speed": speed}, cred)
+        data = getattr(audio, "data", None) or getattr(audio, "bytes", None) or b""
+        if not data:
+            return 502, {"error": "the voice server returned no audio"}
+        return 200, {"_raw": data, "_mime": getattr(audio, "mime", "audio/mpeg"),
+                     "bytes": len(data), "chars": len(text)}
+
     # ---- playback -------------------------------------------------------------
 
     def get_position(self, q, body):
@@ -533,6 +578,7 @@ GET_ROUTES = {
 }
 POST_ROUTES = {
     "/import": "import_book", "/render": "render", "/voices": "voices",
+    "/speak": "speak",
     "/position": "put_position", "/claim": "claim", "/ack": "ack",
     "/credential": "put_credential", "/auth/registration": "set_registration",
     "/connections": "connection_save", "/connections/delete": "connection_delete",
