@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS users (
     id VARCHAR(128) PRIMARY KEY, name VARCHAR(255) DEFAULT '', created_at VARCHAR(32));
 CREATE TABLE IF NOT EXISTS books (
     id VARCHAR(128) PRIMARY KEY, user_id VARCHAR(128), title TEXT,
-    source_json TEXT DEFAULT '', created_at VARCHAR(32));
+    source_json TEXT, created_at VARCHAR(32));
 CREATE TABLE IF NOT EXISTS chapters (
     book_id VARCHAR(128), idx INT, title TEXT, chars INT,
     text_ref VARCHAR(255), audio_ref VARCHAR(255), audio_bytes INT, duration_s DOUBLE,

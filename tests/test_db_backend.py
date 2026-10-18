@@ -2,6 +2,8 @@ import os
 import unittest
 from unittest.mock import patch
 
+import re
+
 from host import db
 
 
@@ -104,3 +106,16 @@ class Schema(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SchemaPortability(unittest.TestCase):
+    """The one schema must parse on MySQL as well as SQLite.
+
+    MySQL rejects a literal DEFAULT on TEXT/BLOB/JSON columns (errno 1101), so a
+    column like `source_json TEXT DEFAULT ''` boots on SQLite and crash-loops on
+    MySQL. This guard keeps the schema honest for both engines.
+    """
+
+    def test_text_columns_have_no_literal_default(self):
+        bad = re.findall(r"\b(TEXT|BLOB|GEOMETRY|JSON)\s+DEFAULT\b", db.SCHEMA, re.I)
+        self.assertEqual(bad, [], "MySQL rejects DEFAULT on %s column(s)" % bad)
