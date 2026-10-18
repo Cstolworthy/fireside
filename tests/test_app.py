@@ -209,6 +209,40 @@ class TestApp(unittest.TestCase):
             self._post("/voices", {"provider": "nope"})
         self.assertEqual(cm.exception.code, 400)
 
+    def test_speak_sandbox(self):
+        # the voice sandbox says free text in one voice and hands the audio
+        # straight back, with no book and nothing stored.
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d/speak" % self.port,
+            data=json.dumps({"provider": "fake", "voice": "vv",
+                             "text": "hi there"}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as r:
+            self.assertEqual(r.status, 200)
+            self.assertEqual(r.read(), b"A:vv:hi there")
+
+    def test_speak_rejects_over_1000_chars(self):
+        import urllib.error
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d/speak" % self.port,
+            data=json.dumps({"provider": "fake", "voice": "vv",
+                             "text": "x" * 1001}).encode(),
+            headers={"Content-Type": "application/json"})
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 400)
+
+    def test_speak_needs_text(self):
+        import urllib.error
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d/speak" % self.port,
+            data=json.dumps({"provider": "fake", "voice": "vv",
+                             "text": "  "}).encode(),
+            headers={"Content-Type": "application/json"})
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req)
+        self.assertEqual(cm.exception.code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

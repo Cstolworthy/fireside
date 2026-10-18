@@ -33,7 +33,21 @@ First run: open the WebUI, add a speech engine on the Settings page, drop in a b
   <Config Name="WebUI Port" Target="8788" Default="8788" Mode="tcp" Description="Port for the fireside WebUI and API." Type="Port" Display="always" Required="true" Mask="false">8788</Config>
   <Config Name="Data" Target="/data" Default="/mnt/user/appdata/fireside/data" Mode="rw" Description="Library metadata and content-addressed audio blobs. Point this at appdata so your library survives container updates." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/fireside/data</Config>
   <Config Name="Data Dir" Target="FIRESIDE_DATA" Default="/data" Mode="" Description="Where the host keeps its state inside the container. Leave as /data unless you changed the path above." Type="Variable" Display="advanced" Required="false" Mask="false">/data</Config>
-  <Config Name="Database Engine" Target="FIRESIDE_DB_TYPE" Default="sqlite" Mode="" Description="sqlite (default, zero setup) or mysql. Set to mysql to use an external MySQL/MariaDB server; metadata moves to that server, audio blobs stay under the Data path." Type="Variable" Display="always" Required="false" Mask="false">sqlite</Config>
-  <Config Name="Database Connection" Target="FIRESIDE_DB_CONN" Default="" Mode="" Description="Only used when Database Engine is mysql. Form: user:password@host:3306/dbname (or a full mysql:// DSN). Matches the FIRESIDE_DB_CONN env var in the README." Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="Database Engine" Target="FIRESIDE_DB_TYPE" Default="sqlite" Mode="" Description="sqlite (default, zero setup) or mysql.
+
+Leave this as sqlite and fireside keeps its metadata in a file under the Data path. Nothing else to do.
+
+Set it to mysql to move metadata (accounts, books, chapters, connections) to an external MySQL/MariaDB server, then fill in Database Connection below. Audio blobs stay under the Data path either way." Type="Variable" Display="always" Required="false" Mask="false">sqlite</Config>
+  <Config Name="Database Connection" Target="FIRESIDE_DB_CONN" Default="" Mode="" Description="Only used when Database Engine is mysql.
+
+Form: user:password@host:3306/dbname (a full mysql:// DSN also works).
+Example: fireside:secret@192.168.1.10:3306/fireside
+
+The database and user must exist first. In the MySQL server run:
+  CREATE DATABASE fireside CHARACTER SET utf8mb4;
+  CREATE USER 'fireside'@'%' IDENTIFIED BY 'secret';
+  GRANT ALL ON fireside.* TO 'fireside'@'%';
+
+Fireside creates its own tables on first start." Type="Variable" Display="always" Required="false" Mask="true"></Config>
   <Config Name="Plugins Root" Target="FIRESIDE_PLUGINS_ROOT" Default="plugins" Mode="" Description="Directory the host scans for reader/speech/storage plugins. Leave default unless you mount a custom plugin set." Type="Variable" Display="advanced" Required="false" Mask="false">plugins</Config>
 </Container>
