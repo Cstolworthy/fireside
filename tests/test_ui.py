@@ -391,3 +391,29 @@ class TestConditionalRender(unittest.TestCase):
         by_idx = {c["idx"]: c for c in prog}
         self.assertFalse(by_idx[0]["rendered"])
         self.assertTrue(by_idx[1]["rendered"])
+
+
+class TestShelfSize(unittest.TestCase):
+    """One book must not stretch to a poster.
+
+    The shelf columns used to be a 3-way split of the page, so a single book
+    filled a third of a ~880px column (a ~420px-tall cover). The columns are now
+    a fixed thumbnail width and each card is capped, so one book and ten look
+    the same size.
+    """
+
+    def _html(self):
+        with open(os.path.join(UI_DIR, "index.html"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_shelf_columns_are_thumbnail_sized(self):
+        html = self._html()
+        self.assertIn("repeat(auto-fill,170px)", html)
+        self.assertNotIn("grid-template-columns:repeat(3,1fr)", html)
+
+    def test_book_card_is_capped(self):
+        html = self._html()
+        self.assertIn(
+            ".bk .cover{aspect-ratio:2/3;font-size:14px;margin-bottom:8px;max-width:170px}",
+            html,
+        )
