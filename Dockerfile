@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 WORKDIR /app
 # MySQL backend support; SQLite is the default and needs no extra package
-RUN pip install --no-cache-dir pymysql==1.1.1
+RUN pip install --no-cache-dir pymysql==1.1.1 cryptography==43.0.3
 COPY . .
 ENV PYTHONUNBUFFERED=1 \
     FIRESIDE_DATA=/data \
