@@ -100,56 +100,130 @@
   }
   /* --- the door: the whole app sits behind a session ---------------------- */
   body.locked > header, body.locked > main { display:none }
-  .lock{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
+  .lock{position:fixed;inset:0;z-index:60;overflow:auto;display:grid;place-items:center;
     background:radial-gradient(120% 90% at 50% 0,#241c13 0,var(--bg) 62%);padding:24px}
   .lock[hidden]{display:none}
-  .lockcard{width:100%;max-width:360px;text-align:center}
-  .lockcard h1{font:600 30px/1.1 var(--serif);letter-spacing:.4px;margin:0 0 6px}
-  .lockcard .sub{color:var(--soft);margin:0 0 22px;font-size:14px;line-height:1.45}
-  .lockcard input{width:100%;margin:8px 0;padding:11px 13px;border:1px solid var(--line);
-    border-radius:9px;background:var(--surface);color:var(--text);font:15px var(--ui)}
-  .lockcard input:focus{outline:none;border-color:var(--flame)}
-  .lockcard .btn{width:100%;margin-top:12px;padding:12px;border:0;border-radius:9px;
+  .lock .card{width:100%;max-width:360px;background:var(--surface);border:1px solid var(--line);
+    border-radius:16px;padding:32px;box-shadow:0 12px 40px #0006}
+  .lock .mark{font:600 20px/1 var(--serif);letter-spacing:.01em;color:var(--soft)}
+  .lock h1{font:600 28px/1.25 var(--serif);margin:24px 0 8px}
+  .lock .sub{color:var(--soft);font-size:15px;margin-bottom:24px}
+  .lock .field + .field{margin-top:16px}
+  .lock label{display:block;font-weight:500;font-size:15px;margin-bottom:6px;
+    color:var(--text);text-transform:none;letter-spacing:0}
+  .lock .in{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;
+    padding:11px 14px;font-size:16px}
+  .lock .in:focus{outline:none;border-color:var(--flame)}
+  .lock .btn{width:100%;margin-top:24px;padding:12px;border:0;border-radius:999px;
     background:var(--flame);color:var(--on-flame);font:600 15px var(--ui);cursor:pointer}
-  .lockcard .btn[disabled]{opacity:.55;cursor:default}
-  .lockcard .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--line);
+  .lock .btn[disabled]{opacity:.55;cursor:default}
+  .lock .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--line);
     font-weight:500;margin-top:8px}
-  .lockcard .toggle{margin-top:14px;color:var(--soft);background:none;border:0;
-    font:14px var(--ui);cursor:pointer;text-decoration:underline}
-  .lockcard .err{min-height:18px;margin-top:10px;color:var(--warn);font-size:13px}
+  .lock .err{min-height:22px;margin-top:8px;font-size:14px;color:var(--warn);text-align:center}
+  .lock .toggle{display:block;margin:8px auto 0;background:none;border:0;color:var(--soft);
+    font:14px var(--ui);text-decoration:underline;text-underline-offset:3px;cursor:pointer;padding:4px 8px}
+  .lock .toggle[hidden]{display:none}
+  .lock .sso{margin-top:20px;padding-top:20px;border-top:1px solid var(--line)}
+  .lock .sso:empty{display:none}
   .whoChip{color:var(--soft)}
+  /* --- top-right: the bell and the account menu (the whole user surface) -- */
+  .topright{margin-left:auto;display:flex;align-items:center;gap:4px;position:relative}
+  .bell{position:relative;background:none;border:0;color:var(--soft);cursor:pointer;font-size:17px;line-height:1;padding:6px}
+  .bell .dot{position:absolute;top:3px;right:3px;width:9px;height:9px;border-radius:50%;background:var(--warn);border:1.5px solid var(--bg);display:none}
+  .bell.alert .dot{display:block}
+  .bell.shake{animation:bsake .55s}
+  @keyframes bsake{0%,100%{transform:rotate(0)}20%{transform:rotate(-14deg)}40%{transform:rotate(12deg)}60%{transform:rotate(-8deg)}80%{transform:rotate(6deg)}}
+  .avatar{width:32px;height:32px;border-radius:50%;border:1px solid var(--line);background:linear-gradient(160deg,#7a5a3a,#3a2a1c);color:#f3e7cf;font:600 13px var(--ui);cursor:pointer;display:flex;align-items:center;justify-content:center;text-transform:uppercase}
+  .menu{position:absolute;right:0;top:44px;z-index:50;min-width:220px;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 40px #0008;padding:6px}
+  .menu[hidden]{display:none}
+  .menu .who{padding:9px 11px;font-size:12px;color:var(--faint);border-bottom:1px solid var(--line);margin-bottom:6px;word-break:break-word}
+  .menu .who[hidden]{display:none}
+  .menu button{display:block;width:100%;text-align:left;background:none;border:0;color:var(--text);padding:9px 11px;border-radius:8px;font-size:14px;cursor:pointer}
+  .menu button:hover{background:var(--raise)}
+  .menu button[disabled]{color:var(--faint);cursor:default}
+  /* --- notices: a persistent ribbon, toasts that pass, the bell's list ---- */
+  #ribbon{position:fixed;left:0;right:0;bottom:0;z-index:70;display:none;align-items:center;gap:10px;padding:10px 16px;background:var(--surface);border-top:1px solid var(--line);font-size:13px;color:var(--text)}
+  #ribbon.on{display:flex}
+  #ribbon.ok{background:#1e2a1c;border-top-color:var(--ready);color:#d9ead0}
+  #ribbon.bad{background:#2a1c1c;border-top-color:var(--warn);color:#f0d6d0}
+  #ribbon .rtext{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #ribbon .rtime{color:var(--faint);font-variant-numeric:tabular-nums;font-size:12px}
+  #ribbon .rprog{flex:0 0 180px;height:4px;background:var(--raise);border-radius:3px;overflow:hidden;display:none}
+  #ribbon .rprog i{display:block;height:100%;width:0;background:var(--flame);transition:width .3s}
+  #ribbon .rbtn{background:none;border:1px solid var(--line);border-radius:999px;color:inherit;padding:4px 12px;cursor:pointer;font-size:12px}
+  #toasts{position:fixed;right:16px;bottom:56px;z-index:80;display:flex;flex-direction:column;gap:8px;max-width:330px}
+  .toast{background:var(--raise);border:1px solid var(--line);border-left:3px solid var(--flame);border-radius:9px;padding:10px 12px;font-size:13px;box-shadow:0 10px 30px #0007}
+  .toast.bad{border-left-color:var(--warn)}.toast.ok{border-left-color:var(--ready)}
+  /* add belongs on the library screen */
+  .addpanel{margin-top:16px;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--surface)}
+  .addpanel[hidden]{display:none}
+  /* settings: one card per voice server */
+  .conncard{border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:12px 0;background:var(--surface)}
+  .connhead{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .conntitle{font-weight:600;font-size:15px}
+  .badge{font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:var(--faint);border:1px solid var(--line);border-radius:999px;padding:2px 9px}
+  .connhead .useme{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--soft);text-transform:none;letter-spacing:0}
+  .conncard label{margin-top:10px}
+  .connrow{display:flex;gap:8px;margin-top:14px}
 </style>
 </head>
 <body>
 <div class="lock" id="lock" hidden>
-  <form class="lockcard" id="lockform" autocomplete="on">
+  <form class="card" id="lockform" autocomplete="on" novalidate>
+    <div class="mark">fireside</div>
     <h1 id="locktitle">sign in</h1>
     <p class="sub" id="locksub"></p>
-    <input id="lockuser" name="username" placeholder="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false">
-    <input id="lockpass" name="password" type="password" placeholder="password" autocomplete="current-password">
+    <div class="field">
+      <label for="lockuser">Username</label>
+      <input class="in" id="lockuser" name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="lockpass">Password</label>
+      <input class="in" id="lockpass" name="password" type="password" autocomplete="current-password">
+    </div>
+    <div class="field" id="lockconfirm" hidden>
+      <label for="lockpass2">Confirm password</label>
+      <input class="in" id="lockpass2" name="password2" type="password" autocomplete="new-password">
+    </div>
     <button class="btn" id="lockgo" type="submit">Sign in</button>
-    <div class="err" id="autherr"></div>
-    <button class="toggle" id="locktoggle" type="button" style="display:none"></button>
-    <div id="lockproviders"></div>
+    <p class="err" id="autherr" role="alert" aria-live="polite"></p>
+    <button class="toggle" id="locktoggle" type="button" hidden></button>
+    <div id="lockproviders" class="sso"></div>
   </form>
 </div>
 <header>
   <div class="brand">
     <h1>fireside</h1>
     <p>Books and web stories, voiced. <span id="ver">v__HOST_VERSION__</span></p>
-    <div id="who"><span id="auth"></span></div>
+    <div class="topright" id="who">
+      <button class="bell" id="bell" type="button" aria-label="Alerts">🔔<span class="dot"></span></button>
+      <button class="avatar" id="avatar" type="button" aria-label="Account menu">?</button>
+      <div class="menu" id="usermenu" hidden>
+        <div class="who" id="auth"></div>
+        <button id="menuset" type="button">Settings</button>
+        <button id="signout" type="button">Sign out</button>
+      </div>
+      <div class="menu" id="alertmenu" hidden></div>
+    </div>
   </div>
   <nav class="tabs" id="tabs">
     <button data-v="lib" class="on">Library</button>
     <button data-v="play">Now playing</button>
-    <button data-v="add">Add</button>
-    <button data-v="set">Settings</button>
   </nav>
 </header>
 <main>
   <!-- library -->
   <section class="view on" id="v-lib">
     <div id="resume"></div>
+    <div style="margin-top:28px"><button class="btn" id="addbtn" type="button">＋ Add a book</button></div>
+    <div class="addpanel" id="addpanel" hidden>
+      <p class="sub">Drop an EPUB or paste a story link. Fireside reads it, breaks it into chapters, and voices each one.</p>
+      <div class="drop" id="drop" style="margin-top:14px">Drop an <b>.epub</b> here<br><span class="small">or click to choose</span>
+        <input type="file" id="file" accept=".epub,application/epub+zip" hidden></div>
+      <label>Or paste a story link</label>
+      <div style="display:flex;gap:8px"><input id="url" placeholder="https://…" autocomplete="off"><button id="loadurl" class="btn" style="flex:0 0 96px">Load</button></div>
+      <p class="hint">A locked AO3 work needs your cookie under Settings, or drop the work's EPUB.</p>
+    </div>
     <p class="small" id="shelflabel" style="margin:34px 0 0;display:none">On your shelf</p>
     <div class="shelf" id="shelf"></div>
     <p class="small" id="libempty" style="color:var(--faint)">Nothing here yet. Add a book to start.</p>
@@ -192,46 +266,46 @@
     </div>
   </section>
 
-  <!-- add -->
-  <section class="view" id="v-add">
-    <h2>Add a book</h2>
-    <p class="sub">Drop an EPUB or paste a story link. Fireside reads it, breaks it into chapters, and voices each one.</p>
-    <div class="drop" id="drop" style="margin-top:18px">Drop an <b>.epub</b> here<br><span class="small">or click to choose</span>
-      <input type="file" id="file" accept=".epub,application/epub+zip" hidden></div>
-    <label>Or paste a story link</label>
-    <div style="display:flex;gap:8px"><input id="url" placeholder="https://…" autocomplete="off"><button id="loadurl" class="btn" style="flex:0 0 96px">Load</button></div>
-    <p class="hint">A locked AO3 work needs your cookie under Settings, or drop the work's EPUB.</p>
-  </section>
-
   <!-- settings -->
   <section class="view" id="v-set">
     <h2>Settings</h2>
-    <p class="sub">What the server uses to voice your books. Keys stay in this browser and reach only this server.</p>
-    <label>Voice engine</label>
-    <select id="provider"></select>
-    <div id="cred"></div>
+    <p class="sub">Voice servers live on this server. Keys never reach your browser.</p>
+    <div id="conns"></div>
+    <div style="margin-top:14px"><button class="btn quiet" id="addconn" type="button">＋ Add a voice server</button></div>
+    <div class="addpanel" id="connform" hidden>
+      <label>Kind of server</label>
+      <select id="cprovider"></select>
+      <label>Label</label>
+      <input id="clabel" placeholder="e.g. Tower Kokoro" autocomplete="off">
+      <div id="cfields"></div>
+      <div style="display:flex;gap:8px;margin-top:16px">
+        <button class="btn" id="csave" type="button">Save server</button>
+        <button class="btn quiet" id="ccancel" type="button">Cancel</button>
+      </div>
+    </div>
+    <h3 style="margin-top:30px">Default voice</h3>
+    <p class="sub">Which server and voice a new book uses.</p>
+    <label>Server</label>
+    <select id="dconn"></select>
     <label>Voice</label>
     <input id="vfilter" placeholder="filter, e.g. en-US or Jenny" autocomplete="off">
     <select id="voice"><option value="">load voices…</option></select>
     <div style="display:flex;gap:8px;margin-top:10px">
-      <button class="btn quiet" id="loadvoices">Load voices</button>
-      <button class="btn" id="save">Remember<span class="tag" id="dirty" style="display:none">unsaved</span></button>
+      <button class="btn quiet" id="loadvoices" type="button">Load voices</button>
+      <button class="btn" id="save" type="button">Save</button>
     </div>
     <div id="srcpanel" style="display:none">
       <label>Text sources</label>
-      <p class="hint" style="margin-top:0">Each source asks for what it needs (AO3 asks for a cookie). Settings stay in this browser.</p>
+      <p class="hint" style="margin-top:0">Each source asks for what it needs (AO3 asks for a cookie). These stay in this browser.</p>
       <div id="sources"></div>
     </div>
   </section>
 
-  <div class="status" id="status" style="display:none">
-    <span class="spin" id="spin" style="display:none"></span>
-    <span id="statustext"></span><span class="grow"></span><span id="statustime" style="color:var(--faint);font-size:12px"></span>
-  </div>
-  <div class="bar" id="bar"><i id="barfill"></i></div>
   <div class="err" id="err"></div>
   <audio id="audio" preload="metadata"></audio>
 </main>
+<div id="ribbon" class=""><span class="spin" id="rspin" style="display:none"></span><span class="rtext" id="rtext"></span><span class="rtime" id="rtime"></span><span class="rprog" id="rprog"><i id="rprogfill"></i></span><button class="rbtn" id="rdismiss" type="button" hidden>Dismiss</button></div>
+<div id="toasts"></div>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -297,19 +371,54 @@ async function api(path, opts) {
 const jpost = (p, o) => api(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(o) });
 
 // --- status ----------------------------------------------------------------
-let _t0 = 0, _tick = null;
-function busy(t) { _t0 = Date.now(); $('#status').style.display = 'flex'; $('#spin').style.display = 'inline-block';
-  $('#statustext').textContent = t; $('#statustime').textContent = '0s';
-  clearInterval(_tick); _tick = setInterval(() => $('#statustime').textContent = Math.round((Date.now()-_t0)/1000) + 's', 500); }
-function progress(t) { $('#statustext').textContent = t; }
-function bar(d, n) { if (!n) return; $('#bar').style.display = 'block'; $('#barfill').style.width = Math.round(100*d/n) + '%'; }
-function idle(t) { clearInterval(_tick); $('#spin').style.display = 'none'; $('#statustime').textContent = '';
-  $('#bar').style.display = 'none'; $('#barfill').style.width = '0%';
-  if (t) { $('#status').style.display = 'flex'; progress(t);
-    setTimeout(() => { if ($('#statustext').textContent === t) $('#status').style.display = 'none'; }, 4000); }
-  else { $('#status').style.display = 'none'; $('#statustext').textContent = ''; } }
-function fail(e) { clearInterval(_tick); $('#spin').style.display = 'none'; $('#bar').style.display = 'none';
-  $('#status').style.display = 'none'; $('#err').textContent = String(e && e.message ? e.message : e); }
+// --- notices: one ribbon that persists, toasts that pass, and the bell -----
+// A voice run can take minutes and the page must stay usable: the ribbon is
+// fixed to the bottom so it follows you across tabs, the bell keeps the errors
+// you did not see, and a toast is the nudge for the one you did.
+let ALERTS = [];
+let _t0 = 0, _tick = null, _hideTimer = null;
+function _ribbon(cls, t) { const r = $('#ribbon'); clearTimeout(_hideTimer);
+  r.className = cls; $('#rtext').textContent = t || ''; }
+function busy(t) { _t0 = Date.now(); _ribbon('on', t);
+  $('#rspin').style.display = 'inline-block'; $('#rtime').textContent = '0s';
+  $('#rprog').style.display = 'none'; $('#rdismiss').hidden = true;
+  clearInterval(_tick); _tick = setInterval(() => $('#rtime').textContent = Math.round((Date.now()-_t0)/1000) + 's', 500); }
+function progress(t) { $('#rtext').textContent = t; }
+function bar(d, n) { if (!n) { $('#rprog').style.display = 'none'; return; }
+  $('#rprog').style.display = 'block'; $('#rprogfill').style.width = Math.round(100*d/n) + '%'; }
+function idle(t) { clearInterval(_tick); $('#rspin').style.display = 'none'; $('#rtime').textContent = '';
+  $('#rprog').style.display = 'none'; $('#rprogfill').style.width = '0%';
+  if (!t) { _ribbon('', ''); $('#rdismiss').hidden = true; return; }
+  _ribbon('on ok', t); $('#rdismiss').hidden = false;
+  toast('ok', t);
+  _hideTimer = setTimeout(() => { _ribbon('', ''); }, 6000); }
+function fail(e) { clearInterval(_tick); $('#rspin').style.display = 'none'; $('#rtime').textContent = '';
+  $('#rprog').style.display = 'none';
+  const msg = String(e && e.message ? e.message : e);
+  _ribbon('on bad', msg); $('#rdismiss').hidden = false; $('#err').textContent = msg;
+  toast('bad', msg); bellRaise(); }
+function toast(kind, text) { const t = document.createElement('div');
+  t.className = 'toast ' + (kind || ''); t.textContent = text; $('#toasts').append(t);
+  setTimeout(() => { t.style.transition = 'opacity .4s'; t.style.opacity = '0';
+    setTimeout(() => t.remove(), 420); }, 5200); }
+function bellRaise() { ALERTS.unshift({ kind: 'bad', text: $('#rtext').textContent, at: Date.now() });
+  const b = $('#bell'); b.classList.add('alert'); renderAlerts();
+  b.classList.remove('shake'); void b.offsetWidth; b.classList.add('shake');
+  setTimeout(() => b.classList.remove('shake'), 700); }
+function renderAlerts() { const m = $('#alertmenu'); m.innerHTML = '';
+  if (!ALERTS.length) { const p = document.createElement('button'); p.disabled = true; p.textContent = 'No alerts'; m.append(p); return; }
+  ALERTS.slice(0, 8).forEach(a => { const d = document.createElement('div'); d.className = 'who';
+    d.style.color = a.kind === 'bad' ? 'var(--warn)' : 'var(--soft)'; d.textContent = a.text; m.append(d); });
+  const clr = document.createElement('button'); clr.textContent = 'Clear all';
+  clr.onclick = () => { ALERTS = []; $('#bell').classList.remove('alert'); renderAlerts(); m.hidden = true; };
+  m.append(clr); }
+$('#rdismiss').onclick = () => { _ribbon('', ''); $('#rdismiss').hidden = true; };
+$('#bell').onclick = () => { $('#alertmenu').hidden = !$('#alertmenu').hidden; $('#usermenu').hidden = true;
+  if (!$('#alertmenu').hidden) renderAlerts(); };
+$('#avatar').onclick = () => { $('#usermenu').hidden = !$('#usermenu').hidden; $('#alertmenu').hidden = true; };
+$('#menuset').onclick = () => { $('#usermenu').hidden = true; show('set'); };
+document.addEventListener('click', e => { const w = $('#who'); if (w && !w.contains(e.target)) {
+  $('#usermenu').hidden = true; $('#alertmenu').hidden = true; } });
 const fmt = n => n > 1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1, Math.round(n/1024))+' KB';
 const nf = n => (n || 0).toLocaleString('en-US');
 const mmss = s => { s = Math.max(0, Math.round(s||0)); return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0'); };
@@ -322,34 +431,99 @@ function show(v) {
 }
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.dataset.v));
 
-// --- settings (localStorage) ----------------------------------------------
+// --- settings: voice servers, kept on the server ---------------------------
+// The old model kept the key in this browser. It does not any more: a server
+// holds the values, the admin configures the household ones, and a user sees
+// only whether a secret is set. A user may override the non-secret fields and
+// switch a shared server off for themselves, and may add their own.
 let saved = {}; try { saved = JSON.parse(localStorage.getItem(SKEY) || '{}'); } catch (_) {}
-function credValues() { const o = {}; document.querySelectorAll('#cred [data-field]').forEach(el => { if (el.value) o[el.dataset.field] = el.value; }); return o; }
+let CONNS = [], PREFS = { default_connection_id: '', default_voice: '' };
 function srcValues() { const o = {}; document.querySelectorAll('#sources [data-src]').forEach(el => { if (el.value) { (o[el.dataset.src] = o[el.dataset.src] || {})[el.dataset.field] = el.value; } }); return o; }
 function readerCred() { const all = srcValues(); const o = {}; Object.values(all).forEach(v => Object.assign(o, v)); return o; }
+function providerFields(pid) { const p = (plugins.speech || []).find(x => x.id === pid); return p ? (p.settings || []) : []; }
+function connById(id) { return CONNS.find(c => c.id === id); }
 
-// --- plugins ---------------------------------------------------------------
-function renderCredFields(fields) {
-  const box = $('#cred'); box.innerHTML = '';
-  (fields || []).forEach(f => {
-    const lab = document.createElement('label'); lab.textContent = f.label || f.name; box.append(lab);
-    const inp = document.createElement('input');
-    inp.type = f.kind === 'password' ? 'password' : 'text';
-    inp.dataset.field = f.name;
-    inp.placeholder = f.help ? '' : (f.name || '');
-    const v = (saved.creds || {})[f.name]; if (v) inp.value = v;
-    box.append(inp);
-    if (f.help) { const h = document.createElement('div'); h.className = 'hint'; h.textContent = f.help; box.append(h); }
+async function loadConnections() {
+  try { const d = await api('/connections'); CONNS = d.connections || []; PREFS = d; }
+  catch (_) { CONNS = []; }
+  renderConns(); renderDefaultPicker();
+}
+
+function renderConns() {
+  const box = $('#conns'); box.innerHTML = '';
+  if (!CONNS.length) { const p = document.createElement('p'); p.className = 'small'; p.textContent = 'No voice servers yet.'; box.append(p); return; }
+  CONNS.forEach(c => {
+    const card = document.createElement('div'); card.className = 'conncard';
+    const head = document.createElement('div'); head.className = 'connhead';
+    const t = document.createElement('div'); t.className = 'conntitle'; t.textContent = c.label || c.provider;
+    const badge = document.createElement('span'); badge.className = 'badge';
+    badge.textContent = c.system ? 'Shared' : 'Yours'; head.append(t, badge);
+    if (c.system) {
+      const w = document.createElement('label'); w.className = 'useme';
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = c.enabled !== false;
+      cb.onchange = async () => { c.enabled = cb.checked;
+        try { await jpost('/connections/override', { id: c.id, enabled: cb.checked }); idle(c.enabled ? 'On for you.' : 'Off for you.'); }
+        catch (e) { cb.checked = !cb.checked; fail(e); } };
+      w.append(cb, document.createTextNode(' use for me')); head.append(w);
+    }
+    card.append(head);
+    (c.fields || []).forEach(f => {
+      const lab = document.createElement('label'); lab.textContent = f.label || f.name; card.append(lab);
+      const inp = document.createElement('input'); inp.type = f.sensitive ? 'password' : 'text';
+      inp.dataset.field = f.name; inp.dataset.conn = c.id;
+      if (c.system && !c.editable) inp.dataset.override = '1';
+      if (f.sensitive) inp.placeholder = f.set ? '•••••• saved' : 'not set';
+      else inp.value = f.value || '';
+      card.append(inp);
+    });
+    const row = document.createElement('div'); row.className = 'connrow';
+    if (c.editable) {
+      const sv = document.createElement('button'); sv.className = 'btn'; sv.type = 'button'; sv.textContent = 'Save';
+      sv.onclick = () => saveConn(c, card); row.append(sv);
+      const rm = document.createElement('button'); rm.className = 'btn quiet'; rm.type = 'button'; rm.textContent = 'Remove';
+      rm.onclick = async () => { if (!confirm('Remove ' + (c.label || c.provider) + '?')) return;
+        try { await jpost('/connections/delete', { id: c.id }); await loadConnections(); idle('Removed.'); } catch (e) { fail(e); } };
+      row.append(rm);
+    } else {
+      const sv = document.createElement('button'); sv.className = 'btn quiet'; sv.type = 'button'; sv.textContent = 'Save my changes';
+      sv.onclick = () => saveOverride(c, card); row.append(sv);
+    }
+    card.append(row); box.append(card);
   });
 }
-function providerFields(pid) { const p = (plugins.speech || []).find(x => x.id === pid); return p ? (p.settings || []) : []; }
+
+function _inputs(el, connId, overrideOnly) {
+  const o = {};
+  el.querySelectorAll('[data-field]').forEach(i => {
+    if (i.dataset.conn !== connId) return;
+    if (overrideOnly && i.dataset.override !== '1') return;
+    if (!overrideOnly && i.dataset.override === '1') return;
+    if (i.value) o[i.dataset.field] = i.value;
+  });
+  return o;
+}
+async function saveConn(c, card) {
+  busy('Saving ' + (c.label || c.provider) + '…');
+  try { await jpost('/connections', { id: c.id, provider: c.provider, label: c.label, data: _inputs(card, c.id, false) });
+    await loadConnections(); idle('Saved.'); } catch (e) { fail(e); }
+}
+async function saveOverride(c, card) {
+  busy('Saving your changes…');
+  try { await jpost('/connections/override', { id: c.id, data: _inputs(card, c.id, true) });
+    await loadConnections(); idle('Saved for you.'); } catch (e) { fail(e); }
+}
+
+function renderDefaultPicker() {
+  const sel = $('#dconn'); if (!sel) return;
+  sel.innerHTML = '';
+  CONNS.filter(c => c.enabled !== false).forEach(c => { const o = document.createElement('option'); o.value = c.id;
+    o.textContent = (c.label || c.provider) + (c.system ? ' (shared)' : ''); sel.append(o); });
+  if (PREFS.default_connection_id && CONNS.some(c => c.id === PREFS.default_connection_id)) sel.value = PREFS.default_connection_id;
+  else if (CONNS.length) sel.value = CONNS[0].id;
+}
 
 async function loadPlugins() {
   plugins = await api('/plugins');
-  const sel = $('#provider'); sel.innerHTML = '';
-  (plugins.speech || []).forEach(p => { const o = document.createElement('option'); o.value = p.id; o.textContent = p.label || p.id; sel.append(o); });
-  if (saved.provider && (plugins.speech||[]).some(p => p.id === saved.provider)) sel.value = saved.provider;
-  renderCredFields(providerFields(sel.value));
   const readers = (plugins.readers || []).filter(r => (r.settings || []).length);
   if (readers.length) {
     $('#srcpanel').style.display = 'block';
@@ -368,13 +542,40 @@ async function loadPlugins() {
       box.append(wrap);
     });
   }
+  await loadConnections();
 }
-$('#provider').onchange = () => { renderCredFields(providerFields($('#provider').value)); };
-$('#save').onclick = () => {
-  saved = { provider: $('#provider').value, voice: $('#voice').value, voiceLabel: $('#voice').selectedOptions[0] ? $('#voice').selectedOptions[0].textContent : '',
-            creds: credValues(), sources: srcValues() };
-  localStorage.setItem(SKEY, JSON.stringify(saved));
-  $('#dirty').style.display = 'none'; idle('Settings saved in this browser.');
+
+// --- add a voice server (yours; the admin can share one) -------------------
+$('#addconn').onclick = () => { const p = $('#connform'); p.hidden = !p.hidden;
+  if (!p.hidden) { fillProviderSelect(); renderAddFields(); } };
+$('#ccancel').onclick = () => { $('#connform').hidden = true; };
+function fillProviderSelect() { const sel = $('#cprovider');
+  if (sel.options.length) return;
+  (plugins.speech || []).forEach(p => { const o = document.createElement('option'); o.value = p.id; o.textContent = p.label || p.id; sel.append(o); });
+  sel.onchange = renderAddFields; }
+function renderAddFields() { const box = $('#cfields'); box.innerHTML = '';
+  providerFields($('#cprovider').value).forEach(f => {
+    const lab = document.createElement('label'); lab.textContent = f.label || f.name;
+    const inp = document.createElement('input'); inp.type = f.kind === 'password' ? 'password' : 'text';
+    inp.dataset.field = f.name; inp.placeholder = f.kind === 'password' ? '(secret)' : (f.default || '');
+    box.append(lab, inp);
+    if (f.help) { const h = document.createElement('div'); h.className = 'hint'; h.textContent = f.help; box.append(h); } }); }
+$('#csave').onclick = async () => {
+  const data = {}; document.querySelectorAll('#cfields [data-field]').forEach(el => { if (el.value) data[el.dataset.field] = el.value; });
+  busy('Adding the server…');
+  try { await jpost('/connections', { provider: $('#cprovider').value, label: $('#clabel').value, data });
+    $('#connform').hidden = true; $('#clabel').value = ''; await loadConnections(); idle('Server added.'); }
+  catch (e) { fail(e); }
+};
+$('#save').onclick = async () => {
+  busy('Saving…');
+  try {
+    await jpost('/prefs', { default_connection_id: $('#dconn').value, default_voice: $('#voice').value });
+    PREFS.default_connection_id = $('#dconn').value; PREFS.default_voice = $('#voice').value;
+    saved = Object.assign({}, saved, { voice: $('#voice').value, sources: srcValues() });
+    localStorage.setItem(SKEY, JSON.stringify(saved));
+    idle('Saved.');
+  } catch (e) { fail(e); }
 };
 // --- the door: the whole app is behind a session ---------------------------
 let AUTH = { user: '', admin: false, hasAccounts: false, registrationOpen: true,
@@ -384,15 +585,20 @@ function authMsg(t) { $('#autherr').textContent = t || ''; }
 
 function renderAuth() {
   const create = AUTH.mode === 'create';
+  const closed = !create && AUTH.hasAccounts && !AUTH.registrationOpen;
   $('#locktitle').textContent = create ? 'set up fireside' : 'sign in';
   $('#locksub').textContent = create
     ? (AUTH.hasAccounts
         ? 'make another account on this server.'
         : 'create the first account. it will be the admin.')
-    : 'your books, your place in them, kept on this server.';
+    : (closed ? 'accounts are made by the admin.'
+              : 'your books, your place in them, kept on this server.');
   $('#lockgo').textContent = create ? 'Create account' : 'Sign in';
-  const canToggle = AUTH.registrationOpen || !AUTH.hasAccounts;
-  $('#locktoggle').style.display = canToggle ? 'inline-block' : 'none';
+  $('#lockpass').setAttribute('autocomplete', create ? 'new-password' : 'current-password');
+  $('#lockconfirm').hidden = !create;            // double entry only when creating
+  $('#lockpass2').value = '';
+  const canToggle = !closed;
+  $('#locktoggle').hidden = !canToggle;
   $('#locktoggle').textContent = create ? 'I already have an account' : 'Create a new account';
   authMsg('');
   const provs = $('#lockproviders'); provs.innerHTML = '';
@@ -406,8 +612,14 @@ function renderAuth() {
 
 async function authSubmit() {
   const u = $('#lockuser').value.trim(), p = $('#lockpass').value;
-  if (!u) return authMsg('enter a username');
   const create = AUTH.mode === 'create';
+  if (!u) return authMsg('enter a username');
+  if (create) {
+    // same rules the server enforces, said before the round trip
+    if (u.length < 3) return authMsg('username must be at least 3 characters');
+    if (p.length < 8) return authMsg('password must be at least 8 characters');
+    if (p !== $('#lockpass2').value) return authMsg('passwords do not match');
+  }
   const route = create ? '/auth/local/register' : '/auth/local/login';
   authMsg(''); $('#lockgo').disabled = true;
   try {
@@ -415,7 +627,9 @@ async function authSubmit() {
       body: JSON.stringify({ username: u, password: p }) });
     location.reload();                        // cleanest: reload into the session
   } catch (e) {
-    authMsg(e.message || (create ? 'could not create that account' : 'sign-in failed'));
+    // never say which half was wrong: a sign-in failure is always one line
+    authMsg(create ? (e.message || 'could not create that account')
+                   : 'invalid username or password.');
     $('#lockgo').disabled = false;
   }
 }
@@ -432,16 +646,13 @@ async function requireSession() {
     USER = me.user; AUTH.user = me.user; AUTH.admin = !!me.admin;
     localStorage.setItem(UKEY, USER);
     const label = me.user.includes(':') ? me.user.split(':')[1] : me.user;
-    const s = document.createElement('span'); s.className = 'whoChip';
-    s.textContent = label + (AUTH.admin ? ' · admin' : '');
-    const out = document.createElement('button'); out.textContent = 'Sign out';
-    out.className = 'link'; out.style.width = 'auto';
-    out.onclick = async () => {
+    who.textContent = label + (AUTH.admin ? ' · admin' : '');
+    $('#avatar').textContent = (label.replace(/[^A-Za-z0-9]/, '')[0] || '?');
+    $('#signout').onclick = async () => {
       try { await api('/auth/logout', { method: 'POST',
         headers: { 'Content-Type': 'application/json' }, body: '{}' }); } catch (_) {}
       localStorage.removeItem(UKEY); location.reload();
     };
-    who.append(s, out);
     $('#lock').hidden = true;
     document.body.classList.remove('locked');
     return true;
@@ -455,6 +666,7 @@ async function requireSession() {
 }
 
 $('#lockform').onsubmit = (e) => { e.preventDefault(); authSubmit(); };
+['#lockuser', '#lockpass', '#lockpass2'].forEach(sel => $(sel).addEventListener('input', () => authMsg('')));
 $('#locktoggle').onclick = () => {
   AUTH.mode = AUTH.mode === 'create' ? 'sign' : 'create';
   renderAuth();
@@ -462,14 +674,14 @@ $('#locktoggle').onclick = () => {
 
 // --- voices ----------------------------------------------------------------
 async function loadVoices() {
-  const pid = $('#provider').value; if (!pid) return;
+  const cid = $('#dconn').value; if (!cid) { idle('Add a voice server first.'); return; }
   busy('Loading voices…');
   try {
-    const d = await jpost('/voices', { provider: pid, cred: credValues() });
+    const d = await jpost('/voices', { connection_id: cid });
     voices = d.voices || [];
     const sel = $('#voice'); sel.innerHTML = '';
     voices.forEach(v => { const o = document.createElement('option'); o.value = v.id; o.textContent = v.label || v.id; sel.append(o); });
-    if (saved.voice && voices.some(v => v.id === saved.voice)) sel.value = saved.voice;
+    if (PREFS.default_voice && voices.some(v => v.id === PREFS.default_voice)) sel.value = PREFS.default_voice;
     $('#vfilter').value = ''; applyFilter();
     idle(voices.length + ' voices loaded.');
   } catch (e) { fail(e); }
@@ -481,6 +693,7 @@ function applyFilter() { const q = $('#vfilter').value.trim().toLowerCase(); con
 $('#vfilter').oninput = applyFilter;
 
 // --- import ----------------------------------------------------------------
+$('#addbtn').onclick = () => { const p = $('#addpanel'); p.hidden = !p.hidden; if (!p.hidden) $('#drop').scrollIntoView({ block: 'nearest' }); };
 $('#drop').onclick = () => $('#file').click();
 $('#file').onchange = e => e.target.files[0] && ingestFile(e.target.files[0]);
 ['dragenter','dragover'].forEach(ev => $('#drop').addEventListener(ev, e => { e.preventDefault(); $('#drop').classList.add('hot'); }));
@@ -611,8 +824,8 @@ $('#renderall').onclick = async () => {
   const vl = $('#voice').selectedOptions[0] ? $('#voice').selectedOptions[0].textContent : $('#voice').value;
   busy('Voicing the whole book in ' + vl + '…');
   try {
-    const r = await jpost('/render', { user: USER, book: book.id, provider: $('#provider').value,
-      voice: $('#voice').value, speed: 1.0, cred: credValues() });
+    const r = await jpost('/render', { user: USER, book: book.id, connection_id: $('#dconn').value,
+      voice: $('#voice').value, speed: 1.0 });
     while (true) {
       await new Promise(res => setTimeout(res, 1200));
       const j = await api('/job?id=' + encodeURIComponent(r.job_id));
@@ -744,7 +957,6 @@ window.addEventListener('load', async () => {
   const ok = await requireSession();
   if (!ok) return;
   try { await loadPlugins(); } catch (e) { fail(e); }
-  if (saved.voice) { const o = document.createElement('option'); o.value = saved.voice; o.textContent = (saved.voiceLabel || saved.voice) + ' (saved)'; $('#voice').prepend(o); }
   await loadLibrary();
   if (lastName) { try { await openBook(lastName); } catch (_) {} }
   syncTog();

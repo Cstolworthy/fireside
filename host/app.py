@@ -28,7 +28,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
-from host import accounting, auth, credentials, db, jobs, library, playback
+from host import accounting, auth, connections, credentials, db, jobs, library, playback
 from sources._fetch import fetch as _fetch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -103,10 +103,20 @@ class App:
         return 200, out
 
     def voices(self, q, body):
+        uid = self._uid(q, body)
         provider = body.get("provider") or q.get("provider") or ""
+        cid = body.get("connection_id") or q.get("connection_id") or ""
+        cred = body.get("cred") or {}
+        if cid:
+            c = connections.get(self.conn, cid)
+            if not connections.may_use(c, uid, auth.is_admin(self.conn, uid)):
+                return 403, {"error": "no such connection"}
+            resolved = connections.resolve(self.conn, uid, cid)
+            if resolved is None:
+                return 403, {"error": "connection is switched off"}
+            provider, cred = c["provider"], resolved
         if provider not in self.host.speech:
             return 400, {"error": "unknown provider"}
-        cred = body.get("cred") or {}
         raw = self.host.speech[provider].obj.list_voices(cred)
         return 200, {"voices": [v.dict() if hasattr(v, "dict") else dict(v) for v in raw]}
 
@@ -163,17 +173,28 @@ class App:
     def render(self, q, body):
         user = self._uid(q, body)
         book_id = body["book"]
-        provider = body["provider"]
+        cid = body.get("connection_id") or ""
+        cred = None
+        provider = body.get("provider", "")
+        if cid:
+            c = connections.get(self.conn, cid)
+            if not connections.may_use(c, user, auth.is_admin(self.conn, user)):
+                return 403, {"error": "no such connection"}
+            cred = connections.resolve(self.conn, user, cid)
+            if cred is None:
+                return 403, {"error": "connection is switched off"}
+            provider = c["provider"]
         voice = body.get("voice", "")
         model = body.get("model", "")
         speed = float(body.get("speed", 1.0) or 1.0)
         only = body.get("chapters")
         if provider not in self.host.speech:
             return 400, {"error": "unknown provider"}
+        if cred is None:
+            cred = body.get("cred") or credentials.get_credential(self.conn, user, provider)
         if self.rate_limiter is not None and not self.rate_limiter.allow(user):
             return 429, {"error": "rate limited"}
         speech = self.host.speech[provider].obj
-        cred = body.get("cred") or credentials.get_credential(self.conn, user, provider)
         rows = library.chapters(self.conn, book_id)
         est = sum(c["chars"] or 0 for c in rows)
         todo = [c["idx"] for c in rows]
@@ -277,6 +298,105 @@ class App:
                                    body.get("data") or {})
         return 200, {"ok": True, "providers": credentials.providers(self.conn, self._uid(q, body))}
 
+    # ---- connections (voice servers, kept on the server) ---------------------
+
+    def _field_defs(self, provider):
+        p = self.host.speech.get(provider)
+        return self._fields(p.obj) if p else []
+
+    def _sensitive(self, name, kind):
+        return kind == "password" or name in ("key", "token", "cookie", "password", "secret")
+
+    def _conn_view(self, c, uid, is_admin):
+        """A connection as the client may see it: never a secret value."""
+        fields = []
+        for f in self._field_defs(c["provider"]):
+            name = f.get("name") or f.get("key") or ""
+            kind = f.get("kind") or f.get("type") or "text"
+            merged = dict(c["data"]); merged.update(c.get("override") or {})
+            val = merged.get(name)
+            sensitive = self._sensitive(name, kind)
+            fields.append({"name": name, "label": f.get("label") or name, "kind": kind,
+                           "sensitive": sensitive, "set": val not in (None, ""),
+                           "value": "" if sensitive else (val or "")})
+        return {"id": c["id"], "scope": c["scope"], "provider": c["provider"],
+                "label": c["label"], "mine": c["mine"], "system": c["system"],
+                "enabled": c["enabled"],
+                "editable": connections.may_edit(c, uid, is_admin), "fields": fields}
+
+    def connections_list(self, q, body):
+        uid = self._uid(q, body)
+        is_admin = auth.is_admin(self.conn, uid)
+        out = [self._conn_view(c, uid, is_admin)
+               for c in connections.list_for(self.conn, uid)]
+        prefs = connections.get_prefs(self.conn, uid)
+        return 200, {"connections": out, "admin": is_admin,
+                     "default_connection_id": prefs["default_connection_id"],
+                     "default_voice": prefs["default_voice"]}
+
+    def _writable_fields(self, provider, uid, is_admin):
+        """The field-name -> kind map for a provider (who may write what is
+        decided by the caller)."""
+        return {f.get("name") or f.get("key"): (f.get("kind") or f.get("type") or "text")
+                for f in self._field_defs(provider)}
+
+    def connection_save(self, q, body):
+        uid = self._uid(q, body)
+        is_admin = auth.is_admin(self.conn, uid)
+        cid = body.get("id") or None
+        scope = body.get("scope") or connections.PERSONAL
+        provider = body.get("provider") or ""
+        if cid:
+            cur = connections.get(self.conn, cid)
+            if not connections.may_edit(cur, uid, is_admin):
+                return 403, {"error": "not yours to edit"}
+            provider, scope = provider or cur["provider"], cur["scope"]
+        elif scope == connections.SYSTEM and not is_admin:
+            return 403, {"error": "only an admin adds a shared server"}
+        if provider not in self.host.speech:
+            return 400, {"error": "unknown provider"}
+        defs = self._writable_fields(provider, uid, is_admin)
+        data = {k: v for k, v in (body.get("data") or {}).items()
+                if k in defs and (is_admin or not self._sensitive(k, defs[k]))}
+        cid = connections.upsert(self.conn, uid, provider, body.get("label", ""),
+                                 data, scope=scope, conn_id=cid)
+        return 200, {"ok": True, "id": cid}
+
+    def connection_delete(self, q, body):
+        uid = self._uid(q, body)
+        cur = connections.get(self.conn, body.get("id") or "")
+        if not connections.may_edit(cur, uid, auth.is_admin(self.conn, uid)):
+            return 403, {"error": "not yours to remove"}
+        connections.delete(self.conn, cur["id"])
+        return 200, {"ok": True}
+
+    def connection_override(self, q, body):
+        """A user's own switch and non-secret edits for one connection."""
+        uid = self._uid(q, body)
+        if not uid:
+            return 401, {"error": "auth required"}
+        cur = connections.get(self.conn, body.get("id") or "")
+        if not connections.may_use(cur, uid, auth.is_admin(self.conn, uid)):
+            return 403, {"error": "no such connection"}
+        defs = self._writable_fields(cur["provider"], uid, False)
+        data = {k: v for k, v in (body.get("data") or {}).items()
+                if k in defs and not self._sensitive(k, defs[k])}
+        connections.set_override(self.conn, uid, cur["id"],
+                                 enabled=body.get("enabled"), data=data)
+        return 200, {"ok": True}
+
+    def prefs_set(self, q, body):
+        uid = self._uid(q, body)
+        if not uid:
+            return 401, {"error": "auth required"}
+        kw = {}
+        if "default_connection_id" in body:
+            kw["connection_id"] = body.get("default_connection_id") or ""
+        if "default_voice" in body:
+            kw["voice"] = body.get("default_voice") or ""
+        connections.set_prefs(self.conn, uid, **kw)
+        return 200, {"ok": True}
+
     # ---- auth (social sign-in; the session lives in sqlite) ------------------
 
     def auth_providers(self, q, body):
@@ -316,6 +436,7 @@ GET_ROUTES = {
     "/health": "health", "/plugins": "plugins", "/library": "library_list",
     "/job": "job", "/progress": "progress", "/chapter": "chapter",
     "/position": "get_position", "/stop": "stop", "/text": "text",
+    "/connections": "connections_list",
     "/auth/providers": "auth_providers", "/me": "me", "/auth/policy": "auth_policy",
     "/auth/users": "auth_users",
 }
@@ -323,6 +444,8 @@ POST_ROUTES = {
     "/import": "import_book", "/render": "render", "/voices": "voices",
     "/position": "put_position", "/claim": "claim", "/ack": "ack",
     "/credential": "put_credential", "/auth/registration": "set_registration",
+    "/connections": "connection_save", "/connections/delete": "connection_delete",
+    "/connections/override": "connection_override", "/prefs": "prefs_set",
 }
 
 # reachable without a session even when auth is required: the page, its health,
