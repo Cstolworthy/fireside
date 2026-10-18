@@ -22,6 +22,62 @@ def _first_heading(xhtml: str, fallback: str) -> str:
     return fallback
 
 
+_IMAGE_EXT = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+              "gif": "image/gif", "webp": "image/webp", "bmp": "image/bmp",
+              "svg": "image/svg+xml"}
+
+
+def _isbn_of(opf: str) -> str:
+    """The first dc:identifier that looks like an ISBN (10 or 13), else ""."""
+    for m in re.finditer(r"(?is)<dc:identifier[^>]*>(.*?)</dc:identifier>", opf):
+        v = text_of(m.group(1)).strip()
+        v = re.sub(r"(?i)^urn:isbn:", "", v)
+        v = re.sub(r"[^0-9Xx]", "", v)
+        if re.fullmatch(r"\d{9}[\dXx]", v) or re.fullmatch(r"\d{13}", v):
+            return v.upper()
+    return ""
+
+
+def _cover_of(z, manifest, opf: str, base: str):
+    """The epub's own cover image as (bytes, mime), or None.
+
+    Three ways an epub names its cover, tried in order: the EPUB2
+    <meta name="cover"> id, the EPUB3 properties="cover-image" flag, then any
+    image whose href says cover. Falling back to the first image at all keeps a
+    slightly-off epub from losing its art.
+    """
+    href = ""
+    m = re.search(r'(?is)<meta[^>]*name="cover"[^>]*content="([^"]+)"', opf)
+    if m and m.group(1) in manifest:
+        href = manifest[m.group(1)][0]
+    if not href:
+        for h, _mt, props in manifest.values():
+            if "cover-image" in (props or ""):
+                href = h
+                break
+    if not href:
+        for h, mt, _props in manifest.values():
+            if mt.startswith("image/") and "cover" in h.lower():
+                href = h
+                break
+    if not href:
+        for h, mt, _props in manifest.values():
+            if mt.startswith("image/"):
+                href = h
+                break
+    if not href:
+        return None
+    p = (href if not base else os.path.join(base, href)).replace("\\", "/")
+    try:
+        data = z.read(p)
+    except KeyError:
+        return None
+    if not data:
+        return None
+    ext = p.rsplit(".", 1)[-1].lower() if "." in p else "jpg"
+    return data, _IMAGE_EXT.get(ext, "image/jpeg")
+
+
 def parse_epub(data: bytes, name: str) -> dict:
     """bytes of an .epub -> {'title':..., 'chapters':[{'title','text'}...]}"""
     z = zipfile.ZipFile(io.BytesIO(data))
@@ -52,8 +108,10 @@ def parse_epub(data: bytes, name: str) -> dict:
         i = re.search(r'id="([^"]+)"', tag)
         h = re.search(r'href="([^"]+)"', tag)
         mt = re.search(r'media-type="([^"]+)"', tag)
+        pr = re.search(r'properties="([^"]+)"', tag)
         if i and h:
-            manifest[i.group(1)] = (h.group(1), (mt.group(1) if mt else ""))
+            manifest[i.group(1)] = (h.group(1), (mt.group(1) if mt else ""),
+                                    (pr.group(1) if pr else ""))
 
     order = []
     for m in re.finditer(r"(?is)<itemref\b[^>]*/?>", opf):
@@ -62,7 +120,7 @@ def parse_epub(data: bytes, name: str) -> dict:
             order.append(manifest[i.group(1)])
 
     chapters = []
-    for idx, (href, mt) in enumerate(order):
+    for idx, (href, mt, _props) in enumerate(order):
         if "html" not in mt and not href.lower().endswith((".xhtml", ".html", ".htm")):
             continue
         p = href if not base else os.path.join(base, href)
@@ -79,7 +137,11 @@ def parse_epub(data: bytes, name: str) -> dict:
 
     if not chapters:
         raise ValueError("no readable chapters found")
-    return {"title": title, "chapters": chapters}
+    out = {"title": title, "chapters": chapters, "isbn": _isbn_of(opf)}
+    cov = _cover_of(z, manifest, opf, base)
+    if cov:
+        out["cover"], out["cover_mime"] = cov
+    return out
 
 
 class Epub:
@@ -92,6 +154,8 @@ class Epub:
     def read(self, req, fetch, cred=None) -> dict:
         book = parse_epub(req["data"], req.get("filename") or "book.epub")
         book["meta"] = {"source": self.id}
+        if book.get("isbn"):
+            book["meta"]["isbn"] = book["isbn"]
         return book
 
     def settings(self):

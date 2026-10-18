@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS users (
     id VARCHAR(128) PRIMARY KEY, name VARCHAR(255) DEFAULT '', created_at VARCHAR(32));
 CREATE TABLE IF NOT EXISTS books (
     id VARCHAR(128) PRIMARY KEY, user_id VARCHAR(128), title TEXT,
-    source_json TEXT, created_at VARCHAR(32));
+    source_json TEXT, cover_ref VARCHAR(255) DEFAULT '',
+    cover_mime VARCHAR(64) DEFAULT '', created_at VARCHAR(32));
 CREATE TABLE IF NOT EXISTS chapters (
     book_id VARCHAR(128), idx INT, title TEXT, chars INT,
     text_ref VARCHAR(255), audio_ref VARCHAR(255), audio_bytes INT, duration_s DOUBLE,
@@ -170,12 +171,43 @@ def sqlite_path(path=None):
     return path
 
 
+def _columns(conn, table):
+    """The column names of `table` on whichever engine is behind `conn`."""
+    if db_type() == "mysql":
+        rows = conn.execute("SHOW COLUMNS FROM `%s`" % table).fetchall()
+        return {(r["Field"] if isinstance(r, dict) else r[0]) for r in rows}
+    rows = conn.execute("PRAGMA table_info(%s)" % table).fetchall()
+    return {r["name"] for r in rows}
+
+
+# Columns added after the first schema shipped. An existing database predates
+# them, and CREATE TABLE IF NOT EXISTS will not touch a table that is already
+# there, so each one is added in place. Idempotent and safe on both engines.
+_ADDED_COLUMNS = [
+    ("books", "cover_ref", "VARCHAR(255) DEFAULT ''"),
+    ("books", "cover_mime", "VARCHAR(64) DEFAULT ''"),
+]
+
+
+def migrate(conn):
+    """Bring an existing database up to the current schema, in place."""
+    for table, name, ddl in _ADDED_COLUMNS:
+        if name in _columns(conn, table):
+            continue
+        try:
+            conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, name, ddl))
+            conn.commit()
+        except Exception:               # a concurrent migration already did it
+            pass
+    return conn
+
+
 def connect(path=None):
     """Open the configured backend. `path` is the SQLite file (default dir)."""
     if db_type() == "mysql":
         conn = MySQLConnection(db_url())
         conn.executescript(SCHEMA)
-        return conn
+        return migrate(conn)
     url = db_conn()
     if path is None and url:
         if url.startswith("sqlite://"):
@@ -186,7 +218,7 @@ def connect(path=None):
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
     conn.commit()
-    return conn
+    return migrate(conn)
 
 
 def now():

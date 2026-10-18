@@ -49,7 +49,8 @@ def list_books(conn, user_id):
             "SELECT COUNT(*) c FROM chapters WHERE book_id=? AND audio_ref IS NOT NULL",
             (r["id"],)).fetchone()["c"]
         out.append({"id": r["id"], "title": r["title"],
-                    "created_at": r["created_at"], "chapters": n, "rendered": done})
+                    "created_at": r["created_at"], "chapters": n, "rendered": done,
+                    "cover": r["cover_ref"] or ""})
     return out
 
 
@@ -57,8 +58,38 @@ def get_book(conn, book_id):
     r = conn.execute("SELECT * FROM books WHERE id=?", (book_id,)).fetchone()
     if not r:
         return None
+    meta = json.loads(r["source_json"] or "{}")
     return {"id": r["id"], "user_id": r["user_id"], "title": r["title"],
-            "meta": json.loads(r["source_json"] or "{}"), "created_at": r["created_at"]}
+            "meta": meta, "created_at": r["created_at"],
+            "cover": r["cover_ref"] or "", "cover_mime": r["cover_mime"] or "",
+            "isbn": (meta or {}).get("isbn", "")}
+
+
+# ---- cover art ------------------------------------------------------------
+# A cover is one more blob behind a ref, named on the book row. The bytes are
+# the book's own (pulled from the epub) or fetched by ISBN; the host never
+# invents one. `cover_ref` doubles as the cache-busting version in the UI.
+
+def set_cover(conn, storage, book_id, data, mime="image/jpeg"):
+    ref = storage.put(bytes(data))
+    conn.execute("UPDATE books SET cover_ref=?,cover_mime=? WHERE id=?",
+                 (ref, mime or "image/jpeg", book_id))
+    conn.commit()
+    return ref
+
+
+def clear_cover(conn, book_id):
+    conn.execute("UPDATE books SET cover_ref='',cover_mime='' WHERE id=?", (book_id,))
+    conn.commit()
+
+
+def cover(conn, storage, book_id):
+    """(bytes, mime) for the book's cover, or None."""
+    r = conn.execute("SELECT cover_ref,cover_mime FROM books WHERE id=?",
+                     (book_id,)).fetchone()
+    if not r or not r["cover_ref"]:
+        return None
+    return storage.get(r["cover_ref"]), (r["cover_mime"] or "image/jpeg")
 
 
 def chapters(conn, book_id):
