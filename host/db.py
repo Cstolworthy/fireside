@@ -82,6 +82,17 @@ CREATE TABLE IF NOT EXISTS admins (
     user_id VARCHAR(128) PRIMARY KEY, created_at VARCHAR(32));
 CREATE TABLE IF NOT EXISTS settings (
     `key` VARCHAR(191) PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS connections (
+    id VARCHAR(128) PRIMARY KEY, owner_id VARCHAR(128), scope VARCHAR(16),
+    provider VARCHAR(64), label VARCHAR(255), data TEXT,
+    created_at VARCHAR(32), updated_at VARCHAR(32));
+CREATE TABLE IF NOT EXISTS connection_overrides (
+    user_id VARCHAR(128), connection_id VARCHAR(128), enabled INT DEFAULT 1,
+    data TEXT, updated_at VARCHAR(32),
+    PRIMARY KEY (user_id, connection_id));
+CREATE TABLE IF NOT EXISTS user_prefs (
+    user_id VARCHAR(128) PRIMARY KEY, default_connection_id VARCHAR(128),
+    default_voice VARCHAR(255), updated_at VARCHAR(32));
 """
 
 

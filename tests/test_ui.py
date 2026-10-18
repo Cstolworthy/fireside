@@ -218,3 +218,38 @@ class TestBootSafetyNet(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAppShell(unittest.TestCase):
+    """The chrome: a user menu (settings hidden inside it), the add flow on the
+    library screen, and a persistent notices ribbon with toasts and a bell."""
+
+    def _html(self):
+        with open(os.path.join(UI_DIR, "index.html"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_settings_lives_in_the_account_menu(self):
+        html = self._html()
+        self.assertIn('id="avatar"', html)
+        self.assertIn('id="usermenu"', html)
+        self.assertIn('id="menuset"', html)
+        self.assertNotIn('data-v="set"', html)     # settings is not a tab
+        self.assertNotIn('data-v="add"', html)     # neither is add
+
+    def test_add_is_on_the_library_screen(self):
+        html = self._html()
+        lib = html.split('id="v-lib"')[1].split("</section>")[0]
+        self.assertIn('id="addbtn"', lib)
+        self.assertIn('id="addpanel"', lib)
+        self.assertIn('id="drop"', lib)
+
+    def test_notices_ribbon_toasts_and_bell(self):
+        html = self._html()
+        for anchor in ('id="ribbon"', 'id="rprog"', 'id="toasts"', 'id="bell"',
+                       "bellRaise()", "toast('bad'", "toast('ok'"):
+            self.assertIn(anchor, html)
+
+    def test_connections_settings_surface_is_present(self):
+        html = self._html()
+        for anchor in ('id="conns"', 'id="dconn"', 'id="addconn"', 'id="cprovider"'):
+            self.assertIn(anchor, html)
