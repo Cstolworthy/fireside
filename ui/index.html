@@ -240,7 +240,6 @@ let plugins = null, sources = [], voices = [], books = [], book = null, cur = -1
 let state = {};                 // idx -> ready | avail | down | voice | fail | miss | todo
 let lastName = localStorage.getItem(LKEY) || '';
 const cache = new Map();        // audio_ref -> {url, bytes}   verified this session
-const $who = $('#user'); if (USER) $who.value = USER;
 
 // --- tiny SHA-256 (crypto.subtle is unavailable on plain-HTTP LAN origins) ----
 function sha256hex(bytes) {
