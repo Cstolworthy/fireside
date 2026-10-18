@@ -174,11 +174,17 @@ State lives in SQLite under `FIRESIDE_DATA` by default - nothing to install, one
 file to back up. Point it at MySQL or MariaDB when you want the data somewhere
 else (a shared host, an existing database server, a second box):
 
-    FIRESIDE_DB=mysql://user:password@host:3306/fireside
+    FIRESIDE_DB_TYPE=mysql
+    FIRESIDE_DB_CONN=user:password@host:3306/fireside
 
-The database is created on first start if the account may create it. The query
-layer is the same either way; the engine is chosen once, at connect. Unset
-`FIRESIDE_DB` (or set `sqlite:///path/to.db`) to stay on SQLite.
+The two variables are independent: `FIRESIDE_DB_TYPE` picks the engine
+(`sqlite` by default, or `mysql`), and `FIRESIDE_DB_CONN` is the connection
+string for it - a MySQL DSN (`user:pass@host:3306/db`, or a full
+`mysql://...` URL) or a SQLite file path. The database is created on first
+start if the account may create it. The query layer is the same either way;
+the engine is chosen once, at connect. Leave both unset to stay on the default
+SQLite file under `FIRESIDE_DATA`. The older single variable
+`FIRESIDE_DB=mysql://...` still works and sets both.
 
 Sign-in has two shapes, and a deployment can offer both:
 

@@ -6,11 +6,20 @@ by content hash. Everything mutable and queryable lives here, in the data dir.
 One shape, two engines. The host speaks one connection dialect - `?`
 placeholders, rows addressed by column name, execute/executescript/commit/close -
 and this module presents it over SQLite (the default) or a MySQL-compatible
-server when FIRESIDE_DB names one. No other module knows which engine is behind
-the connection.
+server when configured. No other module knows which engine is behind the
+connection.
 
-  FIRESIDE_DB unset / sqlite:///path/to.db   SQLite under FIRESIDE_DATA
-  FIRESIDE_DB=mysql://user:pass@host:3306/fireside   MySQL / MariaDB
+Two variables, engine and connection, set independently:
+
+  FIRESIDE_DB_TYPE=sqlite|mysql      the engine (default: sqlite)
+  FIRESIDE_DB_CONN=<connection>      sqlite: a file path, or sqlite:///path ('' =
+                                     the default under FIRESIDE_DATA)
+                                     mysql:  user:pass@host:3306/dbname, or a
+                                     full mysql://... DSN
+
+The legacy single-variable form still works, so an existing deployment need not
+move: FIRESIDE_DB=mysql://user:pass@host:3306/fireside (or sqlite:///path/to.db)
+sets both the engine and the connection when the two variables above are unset.
 
 The schema uses only types both engines accept: VARCHAR keys (MySQL needs a
 key length; SQLite does not care), TEXT for prose, DOUBLE and BIGINT for numbers.
@@ -79,18 +88,54 @@ def default_data_dir():
     )
 
 
+def _env(name):
+    return (os.environ.get(name) or "").strip()
+
+
+def db_type(explicit=None):
+    """The configured engine: 'sqlite' (default) or 'mysql'.
+
+    FIRESIDE_DB_TYPE names it directly. When that is unset the engine is read
+    from the legacy FIRESIDE_DB URL, so a single-variable deployment is unchanged.
+    """
+    if explicit:
+        return "mysql" if str(explicit).strip().lower() in ("mysql", "mariadb") else "sqlite"
+    t = _env("FIRESIDE_DB_TYPE").lower()
+    if t in ("mysql", "mariadb"):
+        return "mysql"
+    if t in ("sqlite", "sqlite3"):
+        return "sqlite"
+    return "mysql" if _env("FIRESIDE_DB").startswith("mysql") else "sqlite"
+
+
+def db_conn(explicit=None):
+    """The connection string for the configured engine.
+
+    Unset (or empty) means the SQLite default under FIRESIDE_DATA. Falls back to
+    the legacy FIRESIDE_DB when FIRESIDE_DB_CONN is unset.
+    """
+    if explicit is not None:
+        return explicit
+    return _env("FIRESIDE_DB_CONN") or _env("FIRESIDE_DB")
+
+
 def db_url():
-    """The configured backend, or '' for the SQLite default."""
-    return (os.environ.get("FIRESIDE_DB") or "").strip()
+    """One connection string for the configured backend, engine included."""
+    kind = db_type()
+    conn = db_conn()
+    if kind == "mysql":
+        if not conn:
+            return ""
+        return conn if conn.startswith("mysql") else "mysql://" + conn
+    if not conn or conn.startswith("sqlite://"):
+        return conn
+    return "sqlite://" + conn
 
 
 def backend_name(url=None):
-    url = db_url() if url is None else url
-    if url.startswith("mysql"):
-        return "mysql"
-    if url.startswith("sqlite"):
-        return "sqlite"
-    return "sqlite"
+    if url is None:
+        return db_type()
+    return "mysql" if url.startswith("mysql") else "sqlite"
 
 
 def sqlite_path(path=None):
@@ -107,13 +152,16 @@ def sqlite_path(path=None):
 
 def connect(path=None):
     """Open the configured backend. `path` is the SQLite file (default dir)."""
-    url = db_url()
-    if backend_name(url) == "mysql":
-        conn = MySQLConnection(url)
+    if db_type() == "mysql":
+        conn = MySQLConnection(db_url())
         conn.executescript(SCHEMA)
         return conn
-    if url.startswith("sqlite://") and path is None:
-        path = url[len("sqlite://"):] or None
+    url = db_conn()
+    if path is None and url:
+        if url.startswith("sqlite://"):
+            path = url[len("sqlite://"):] or None
+        else:
+            path = url
     conn = sqlite3.connect(sqlite_path(path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)

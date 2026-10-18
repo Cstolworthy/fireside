@@ -7,7 +7,8 @@ services:
     environment:
       - FIRESIDE_DATA=/data
       # point at a MySQL/MariaDB server instead of the default SQLite file
-      # - FIRESIDE_DB=mysql://fireside:secret@db:3306/fireside
+      # - FIRESIDE_DB_TYPE=mysql
+      # - FIRESIDE_DB_CONN=fireside:secret@db:3306/fireside
     volumes:
       - ./data:/data   # library DB + content-addressed audio blobs
     restart: unless-stopped
