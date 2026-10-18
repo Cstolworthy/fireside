@@ -208,6 +208,14 @@
   .modal .sheet{width:100%;max-width:420px;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:26px;box-shadow:0 20px 60px #000a}
   .modal .sheet h3{font:600 20px var(--serif);margin-bottom:4px}
   .modal .connrow{justify-content:flex-end;flex-wrap:wrap}
+  .setrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px}
+  .setrow input{flex:1 1 170px;min-width:0}
+  .coverprev{margin:8px 0 2px}
+  .coverprev img{display:block;width:110px;border-radius:8px;border:1px solid var(--line)}
+  .coverprev .none{width:110px;aspect-ratio:2/3;border:1px dashed var(--line);border-radius:8px;display:grid;place-items:center;font:12px/1.3 sans-serif;color:#8a7a66;text-align:center}
+  .smeta{margin-top:10px;border-top:1px solid var(--line);padding-top:10px}
+  .smeta .row{margin:4px 0}
+  .smeta .desc{white-space:pre-wrap;margin-top:8px}
 </style>
 </head>
 <body>
@@ -289,6 +297,8 @@
           <div class="npcover" id="npcover" hidden><img id="npcoverimg" alt="Cover art"></div>
           <p class="small" id="npkicker"></p>
           <h2 id="nptitle"></h2>
+          <p class="small" id="npauthor" style="margin-top:4px" hidden></p>
+          <p class="sub" id="npdesc" style="margin-top:8px" hidden></p>
           <div id="nptext" style="margin-top:16px"></div>
         </div>
         <aside>
@@ -310,9 +320,7 @@
           <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn quiet" id="convertbtn">Convert to voice</button>
             <button class="btn quiet" id="offline">Download for offline</button>
-            <button class="btn quiet" id="coverbtn" type="button">Set cover</button>
-            <button class="btn quiet" id="coverauto" type="button" hidden>Find cover</button>
-            <input type="file" id="coverfile" accept="image/*" hidden>
+            <button class="btn quiet" id="settingsbtn" type="button">Book settings</button>
           </div>
         </aside>
       </div>
@@ -399,6 +407,33 @@
       <button class="btn quiet" id="cvsel" type="button">Convert selected</button>
       <button class="btn" id="cvall" type="button">Convert all</button>
     </div>
+  </div>
+</div>
+
+<div class="modal" id="settingsdlg" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="Book settings">
+    <h3>Book settings</h3>
+    <p class="small" id="stitle"></p>
+    <label>ISBN</label>
+    <div class="setrow">
+      <input type="text" id="sisbn" placeholder="978…" autocomplete="off" inputmode="numeric">
+      <button class="btn quiet" id="sfetch" type="button">Fetch details</button>
+    </div>
+    <p class="small" id="snote" style="margin-top:6px"></p>
+    <div id="smeta" class="smeta" hidden></div>
+    <label style="margin-top:14px">Cover</label>
+    <div class="coverprev" id="scovprev"></div>
+    <div class="setrow">
+      <input type="url" id="scovurl" placeholder="Paste an image URL" autocomplete="off">
+      <button class="btn quiet" id="scovurlbtn" type="button">Use URL</button>
+    </div>
+    <div class="setrow">
+      <button class="btn quiet" id="scovfilebtn" type="button">Upload a file…</button>
+      <button class="btn quiet" id="scovautobtn" type="button" hidden>Find by ISBN</button>
+      <button class="btn quiet" id="scovrmbtn" type="button" hidden>Remove</button>
+      <input type="file" id="scovfile" accept="image/*" hidden>
+    </div>
+    <div class="connrow" style="margin-top:16px"><button class="btn" id="scovdone" type="button">Done</button></div>
   </div>
 </div>
 
@@ -878,13 +913,12 @@ function fillCover(el, id, title, ref) {
     img.loading = 'lazy'; img.src = coverURL(id, ref); el.append(img); }
   else el.textContent = title;
 }
-// The book page's own cover: the art when there is one, and the ISBN button
-// only when the book actually carried an ISBN to look up.
+// The book page's own cover: the art when there is one. Setting one lives in
+// the Book settings panel.
 function renderCover() {
   const box = $('#npcover'); if (!box) return;
   if (book && book.cover) { $('#npcoverimg').src = coverURL(book.id, book.cover); box.hidden = false; }
   else { $('#npcoverimg').removeAttribute('src'); box.hidden = true; }
-  const auto = $('#coverauto'); if (auto) auto.hidden = !(book && book.isbn);
 }
 function renderResume() {
   const box = $('#resume'); box.innerHTML = '';
@@ -911,7 +945,9 @@ async function openBook(id, jumpPlay) {
     const meta = bookById(id) || { title: '(book)' };
     const bk = prog.book || {};
     book = { id, title: bk.title || meta.title, cover: bk.cover || '',
-             isbn: bk.isbn || '', chapters: prog.chapters || [] };
+             isbn: bk.isbn || '', author: bk.author || '',
+             description: bk.description || '', publisher: bk.publisher || '',
+             published: bk.published || '', chapters: prog.chapters || [] };
     lastName = id; localStorage.setItem(LKEY, id);
     SELECT.clear();
     selVoice = defaultVoiceKey();       // the newest voice, until the reader picks another
@@ -976,6 +1012,9 @@ function renderPlay() {
   renderVoicePicker();
   drawSpine();
   renderCover();
+  const au = $('#npauthor'), de = $('#npdesc');
+  if (au) { au.textContent = book.author || ''; au.hidden = !book.author; }
+  if (de) { de.textContent = book.description || ''; de.hidden = !book.description; }
   if (cur < 0) { $('#npkicker').textContent = book.title; $('#nptitle').textContent = 'Choose a chapter'; $('#nptext').innerHTML = ''; return; }
   const c = book.chapters.find(x => x.idx === cur);
   $('#npkicker').textContent = book.title + ' · Chapter ' + (cur + 1) + ' of ' + book.chapters.length;
@@ -1137,23 +1176,90 @@ async function runConvert(list, label) {
 }
 $('#convertbtn').onclick = openConvert;
 
-// --- cover art: set one from a file, or find one by the book's ISBN -------
-$('#coverbtn').onclick = () => { if (book) $('#coverfile').click(); };
-$('#coverfile').onchange = async e => {
+// --- book settings: metadata by ISBN, plus a cover from a URL or a file ----
+// One place for everything that describes a book, instead of a lone "Set
+// cover". The ISBN drives the rest: fetch it and the author, description,
+// publisher and date fill in from OpenLibrary, with a cover if the book has none.
+
+function openSettings() {
+  if (!book) return;
+  $('#stitle').textContent = book.title || '';
+  $('#sisbn').value = book.isbn || '';
+  $('#snote').textContent = '';
+  $('#scovurl').value = '';
+  renderSettings();
+  $('#settingsdlg').hidden = false;
+}
+function renderSettings() {
+  const prev = $('#scovprev'); prev.innerHTML = '';
+  if (book && book.cover) {
+    const img = document.createElement('img'); img.alt = '';
+    img.src = coverURL(book.id, book.cover); prev.append(img);
+  } else {
+    const d = document.createElement('div'); d.className = 'none'; d.textContent = 'No cover yet';
+    prev.append(d);
+  }
+  $('#scovrmbtn').hidden = !(book && book.cover);
+  $('#scovautobtn').hidden = !((book && book.isbn) || ($('#sisbn').value || '').trim());
+  const meta = $('#smeta'); meta.innerHTML = '';
+  if (book && (book.author || book.publisher || book.published || book.description)) {
+    const add = (label, val) => { if (!val) return;
+      const p = document.createElement('p'); p.className = 'row small';
+      p.textContent = label + ': ' + val; meta.append(p); };
+    add('Author', book.author); add('Publisher', book.publisher); add('Published', book.published);
+    if (book.description) {
+      const p = document.createElement('p'); p.className = 'desc small'; p.textContent = book.description; meta.append(p);
+    }
+    meta.hidden = false;
+  } else meta.hidden = true;
+}
+async function settingsReload(msg) {
+  await loadLibrary(); await openBook(book.id);
+  $('#stitle').textContent = book.title || '';
+  renderSettings(); if (msg) idle(msg);
+}
+$('#settingsbtn').onclick = openSettings;
+$('#scovdone').onclick = () => { $('#settingsdlg').hidden = true; };
+$('#sfetch').onclick = async () => {
+  if (!book) return;
+  const isbn = ($('#sisbn').value || '').trim();
+  $('#err').textContent = ''; $('#snote').textContent = ''; busy('Looking up the book…');
+  try {
+    await jpost('/book/details', { book: book.id, isbn });
+    await settingsReload('Details updated.');
+    $('#snote').textContent = 'Fetched from OpenLibrary.';
+  } catch (err) { fail(err); }
+};
+$('#scovurlbtn').onclick = async () => {
+  const url = ($('#scovurl').value || '').trim();
+  if (!url || !book) return;
+  $('#err').textContent = ''; busy('Setting the cover…');
+  try { await jpost('/cover', { book: book.id, url }); $('#scovurl').value = '';
+    await settingsReload('Cover set.'); }
+  catch (err) { fail(err); }
+};
+$('#scovfilebtn').onclick = () => { if (book) $('#scovfile').click(); };
+$('#scovfile').onchange = async e => {
   const f = e.target.files && e.target.files[0]; e.target.value = '';
   if (!f || !book) return; $('#err').textContent = ''; busy('Setting the cover…');
   try {
     const data_b64 = await fileB64(f);
     await jpost('/cover', { book: book.id, data_b64, mime: f.type || 'image/jpeg' });
-    idle('Cover set.'); await loadLibrary(); await openBook(book.id);
+    await settingsReload('Cover set.');
   } catch (err) { fail(err); }
 };
-$('#coverauto').onclick = async () => {
+$('#scovautobtn').onclick = async () => {
   if (!book) return; $('#err').textContent = ''; busy('Looking for a cover…');
   try {
-    await jpost('/cover/auto', { book: book.id });
-    idle('Cover found.'); await loadLibrary(); await openBook(book.id);
+    const isbn = ($('#sisbn').value || '').trim();
+    await jpost('/cover/auto', { book: book.id, isbn });
+    await settingsReload('Cover found.');
   } catch (err) { fail(err); }
+};
+$('#scovrmbtn').onclick = async () => {
+  if (!book) return; $('#err').textContent = ''; busy('Removing the cover…');
+  try { await jpost('/cover/clear', { book: book.id }); await settingsReload('Cover removed.'); }
+  catch (err) { fail(err); }
 };
 
 // --- verify-before-play ----------------------------------------------------
