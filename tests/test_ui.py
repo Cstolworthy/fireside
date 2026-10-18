@@ -195,6 +195,14 @@ class TestBootSafetyNet(unittest.TestCase):
         self.assertIn("$('#lock').hidden = true", html)    # signed in
         self.assertIn("$('#lock').hidden = false", html)   # signed out
 
+    def test_signin_errors_are_generic(self):
+        # the brief's rule: never say which half was wrong
+        html = self._html()
+        self.assertIn("invalid username or password.", html)
+        self.assertIn("id=\"lockuser\"", html)
+        self.assertIn("id=\"lockpass\"", html)
+        self.assertIn("id=\"lockpass2\"", html)  # confirm field exists
+
     def test_id_refs_cover_all_selector_forms(self):
         html = self._html()
         defined = set(re.findall(r'id="([A-Za-z0-9_\-]+)"', html))

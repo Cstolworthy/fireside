@@ -100,37 +100,56 @@
   }
   /* --- the door: the whole app sits behind a session ---------------------- */
   body.locked > header, body.locked > main { display:none }
-  .lock{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
+  .lock{position:fixed;inset:0;z-index:60;overflow:auto;display:grid;place-items:center;
     background:radial-gradient(120% 90% at 50% 0,#241c13 0,var(--bg) 62%);padding:24px}
   .lock[hidden]{display:none}
-  .lockcard{width:100%;max-width:360px;text-align:center}
-  .lockcard h1{font:600 30px/1.1 var(--serif);letter-spacing:.4px;margin:0 0 6px}
-  .lockcard .sub{color:var(--soft);margin:0 0 22px;font-size:14px;line-height:1.45}
-  .lockcard input{width:100%;margin:8px 0;padding:11px 13px;border:1px solid var(--line);
-    border-radius:9px;background:var(--surface);color:var(--text);font:15px var(--ui)}
-  .lockcard input:focus{outline:none;border-color:var(--flame)}
-  .lockcard .btn{width:100%;margin-top:12px;padding:12px;border:0;border-radius:9px;
+  .lock .card{width:100%;max-width:360px;background:var(--surface);border:1px solid var(--line);
+    border-radius:16px;padding:32px;box-shadow:0 12px 40px #0006}
+  .lock .mark{font:600 20px/1 var(--serif);letter-spacing:.01em;color:var(--soft)}
+  .lock h1{font:600 28px/1.25 var(--serif);margin:24px 0 8px}
+  .lock .sub{color:var(--soft);font-size:15px;margin-bottom:24px}
+  .lock .field + .field{margin-top:16px}
+  .lock label{display:block;font-weight:500;font-size:15px;margin-bottom:6px;
+    color:var(--text);text-transform:none;letter-spacing:0}
+  .lock .in{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;
+    padding:11px 14px;font-size:16px}
+  .lock .in:focus{outline:none;border-color:var(--flame)}
+  .lock .btn{width:100%;margin-top:24px;padding:12px;border:0;border-radius:999px;
     background:var(--flame);color:var(--on-flame);font:600 15px var(--ui);cursor:pointer}
-  .lockcard .btn[disabled]{opacity:.55;cursor:default}
-  .lockcard .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--line);
+  .lock .btn[disabled]{opacity:.55;cursor:default}
+  .lock .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--line);
     font-weight:500;margin-top:8px}
-  .lockcard .toggle{margin-top:14px;color:var(--soft);background:none;border:0;
-    font:14px var(--ui);cursor:pointer;text-decoration:underline}
-  .lockcard .err{min-height:18px;margin-top:10px;color:var(--warn);font-size:13px}
+  .lock .err{min-height:22px;margin-top:8px;font-size:14px;color:var(--warn);text-align:center}
+  .lock .toggle{display:block;margin:8px auto 0;background:none;border:0;color:var(--soft);
+    font:14px var(--ui);text-decoration:underline;text-underline-offset:3px;cursor:pointer;padding:4px 8px}
+  .lock .toggle[hidden]{display:none}
+  .lock .sso{margin-top:20px;padding-top:20px;border-top:1px solid var(--line)}
+  .lock .sso:empty{display:none}
   .whoChip{color:var(--soft)}
 </style>
 </head>
 <body>
 <div class="lock" id="lock" hidden>
-  <form class="lockcard" id="lockform" autocomplete="on">
+  <form class="card" id="lockform" autocomplete="on" novalidate>
+    <div class="mark">fireside</div>
     <h1 id="locktitle">sign in</h1>
     <p class="sub" id="locksub"></p>
-    <input id="lockuser" name="username" placeholder="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false">
-    <input id="lockpass" name="password" type="password" placeholder="password" autocomplete="current-password">
+    <div class="field">
+      <label for="lockuser">Username</label>
+      <input class="in" id="lockuser" name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="lockpass">Password</label>
+      <input class="in" id="lockpass" name="password" type="password" autocomplete="current-password">
+    </div>
+    <div class="field" id="lockconfirm" hidden>
+      <label for="lockpass2">Confirm password</label>
+      <input class="in" id="lockpass2" name="password2" type="password" autocomplete="new-password">
+    </div>
     <button class="btn" id="lockgo" type="submit">Sign in</button>
-    <div class="err" id="autherr"></div>
-    <button class="toggle" id="locktoggle" type="button" style="display:none"></button>
-    <div id="lockproviders"></div>
+    <p class="err" id="autherr" role="alert" aria-live="polite"></p>
+    <button class="toggle" id="locktoggle" type="button" hidden></button>
+    <div id="lockproviders" class="sso"></div>
   </form>
 </div>
 <header>
@@ -384,15 +403,20 @@ function authMsg(t) { $('#autherr').textContent = t || ''; }
 
 function renderAuth() {
   const create = AUTH.mode === 'create';
+  const closed = !create && AUTH.hasAccounts && !AUTH.registrationOpen;
   $('#locktitle').textContent = create ? 'set up fireside' : 'sign in';
   $('#locksub').textContent = create
     ? (AUTH.hasAccounts
         ? 'make another account on this server.'
         : 'create the first account. it will be the admin.')
-    : 'your books, your place in them, kept on this server.';
+    : (closed ? 'accounts are made by the admin.'
+              : 'your books, your place in them, kept on this server.');
   $('#lockgo').textContent = create ? 'Create account' : 'Sign in';
-  const canToggle = AUTH.registrationOpen || !AUTH.hasAccounts;
-  $('#locktoggle').style.display = canToggle ? 'inline-block' : 'none';
+  $('#lockpass').setAttribute('autocomplete', create ? 'new-password' : 'current-password');
+  $('#lockconfirm').hidden = !create;            // double entry only when creating
+  $('#lockpass2').value = '';
+  const canToggle = !closed;
+  $('#locktoggle').hidden = !canToggle;
   $('#locktoggle').textContent = create ? 'I already have an account' : 'Create a new account';
   authMsg('');
   const provs = $('#lockproviders'); provs.innerHTML = '';
@@ -406,8 +430,14 @@ function renderAuth() {
 
 async function authSubmit() {
   const u = $('#lockuser').value.trim(), p = $('#lockpass').value;
-  if (!u) return authMsg('enter a username');
   const create = AUTH.mode === 'create';
+  if (!u) return authMsg('enter a username');
+  if (create) {
+    // same rules the server enforces, said before the round trip
+    if (u.length < 3) return authMsg('username must be at least 3 characters');
+    if (p.length < 8) return authMsg('password must be at least 8 characters');
+    if (p !== $('#lockpass2').value) return authMsg('passwords do not match');
+  }
   const route = create ? '/auth/local/register' : '/auth/local/login';
   authMsg(''); $('#lockgo').disabled = true;
   try {
@@ -415,7 +445,9 @@ async function authSubmit() {
       body: JSON.stringify({ username: u, password: p }) });
     location.reload();                        // cleanest: reload into the session
   } catch (e) {
-    authMsg(e.message || (create ? 'could not create that account' : 'sign-in failed'));
+    // never say which half was wrong: a sign-in failure is always one line
+    authMsg(create ? (e.message || 'could not create that account')
+                   : 'invalid username or password.');
     $('#lockgo').disabled = false;
   }
 }
@@ -455,6 +487,7 @@ async function requireSession() {
 }
 
 $('#lockform').onsubmit = (e) => { e.preventDefault(); authSubmit(); };
+['#lockuser', '#lockpass', '#lockpass2'].forEach(sel => $(sel).addEventListener('input', () => authMsg('')));
 $('#locktoggle').onclick = () => {
   AUTH.mode = AUTH.mode === 'create' ? 'sign' : 'create';
   renderAuth();
