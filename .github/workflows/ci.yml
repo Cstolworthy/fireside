@@ -39,14 +39,17 @@ jobs:
         id: reg
         run: |
           IMAGES="ghcr.io/cstolworthy/fireside"
+          HAS_HUB=false
           if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
             IMAGES="${IMAGES}"$'\n'"docker.io/${{ secrets.DOCKERHUB_USERNAME }}/fireside"
+            HAS_HUB=true
           fi
           {
             echo "images<<EOF"
             echo "$IMAGES"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+          echo "has_hub=$HAS_HUB" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
@@ -57,7 +60,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request' && secrets.DOCKERHUB_USERNAME != ''
+        if: github.event_name != 'pull_request' && steps.reg.outputs.has_hub == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
