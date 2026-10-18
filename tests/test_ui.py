@@ -89,13 +89,15 @@ class TestBrowserUi(unittest.TestCase):
                           "the UI calls %r, which the host does not serve" % base)
 
     def test_sign_in_chip_is_wired(self):
-        # the page carries a sign-in surface, and it talks only to served routes
+        # the whole app sits behind a session: a door is served, it talks only to
+        # served routes, and the signed-in chip carries the way back out.
         html = open(os.path.join(UI_DIR, "index.html"), encoding="utf-8").read()
         self.assertIn('id="auth"', html)
-        self.assertIn('id="namebox"', html)
-        self.assertIn("/auth/providers", html)
+        self.assertIn('id="lock"', html)
+        self.assertIn("/auth/policy", html)
+        self.assertIn("/auth/local/login", html)
         self.assertIn("/auth/logout", html)
-        self.assertIn("Sign in with ", html)
+        self.assertIn("Continue with ", html)
 
     def test_plugins_declare_speech_settings(self):
         # the fake root above ships no settings; ask the host to load the real
@@ -151,3 +153,4 @@ class TestBrowserUi(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

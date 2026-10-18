@@ -97,14 +97,46 @@
     .resume{flex-direction:column;align-items:flex-start}
     .resume .cover{width:104px}
   }
+  /* --- the door: the whole app sits behind a session ---------------------- */
+  body.locked > header, body.locked > main { display:none }
+  .lock{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(120% 90% at 50% 0,#241c13 0,var(--bg) 62%);padding:24px}
+  .lock[hidden]{display:none}
+  .lockcard{width:100%;max-width:360px;text-align:center}
+  .lockcard h1{font:600 30px/1.1 var(--serif);letter-spacing:.4px;margin:0 0 6px}
+  .lockcard .sub{color:var(--soft);margin:0 0 22px;font-size:14px;line-height:1.45}
+  .lockcard input{width:100%;margin:8px 0;padding:11px 13px;border:1px solid var(--line);
+    border-radius:9px;background:var(--surface);color:var(--text);font:15px var(--ui)}
+  .lockcard input:focus{outline:none;border-color:var(--flame)}
+  .lockcard .btn{width:100%;margin-top:12px;padding:12px;border:0;border-radius:9px;
+    background:var(--flame);color:var(--on-flame);font:600 15px var(--ui);cursor:pointer}
+  .lockcard .btn[disabled]{opacity:.55;cursor:default}
+  .lockcard .btn.ghost{background:transparent;color:var(--text);border:1px solid var(--line);
+    font-weight:500;margin-top:8px}
+  .lockcard .toggle{margin-top:14px;color:var(--soft);background:none;border:0;
+    font:14px var(--ui);cursor:pointer;text-decoration:underline}
+  .lockcard .err{min-height:18px;margin-top:10px;color:var(--warn);font-size:13px}
+  .whoChip{color:var(--soft)}
 </style>
 </head>
 <body>
+<div class="lock" id="lock" hidden>
+  <form class="lockcard" id="lockform" autocomplete="on">
+    <h1 id="locktitle">sign in</h1>
+    <p class="sub" id="locksub"></p>
+    <input id="lockuser" name="username" placeholder="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false">
+    <input id="lockpass" name="password" type="password" placeholder="password" autocomplete="current-password">
+    <button class="btn" id="lockgo" type="submit">Sign in</button>
+    <div class="err" id="autherr"></div>
+    <button class="toggle" id="locktoggle" type="button" style="display:none"></button>
+    <div id="lockproviders"></div>
+  </form>
+</div>
 <header>
   <div class="brand">
     <h1>fireside</h1>
     <p>Books and web stories, voiced. <span id="ver">v__HOST_VERSION__</span></p>
-    <div id="who"><span id="auth"></span><span id="namebox"><span>listening as</span><input id="user" placeholder="your name" autocomplete="off" style="width:130px"><button id="saveuser" class="link" style="width:auto">set</button></span></div>
+    <div id="who"><span id="auth"></span></div>
   </div>
   <nav class="tabs" id="tabs">
     <button data-v="lib" class="on">Library</button>
@@ -252,6 +284,7 @@ function sha256hex(bytes) {
 // --- http ------------------------------------------------------------------
 async function api(path, opts) {
   const r = await fetch(path, opts);
+  if (r.status === 401) { try { await requireSession(); } catch (_) {} }
   const ct = r.headers.get('content-type') || '';
   if (ct.includes('application/json')) {
     const d = await r.json();
@@ -343,53 +376,88 @@ $('#save').onclick = () => {
   localStorage.setItem(SKEY, JSON.stringify(saved));
   $('#dirty').style.display = 'none'; idle('Settings saved in this browser.');
 };
-$('#user').oninput = () => { $('#user').dataset.dirty = '1'; };
-$('#saveuser').onclick = async () => { USER = $('#user').value.trim(); localStorage.setItem(UKEY, USER); loadLibrary(); idle('Listening as ' + (USER || '(unset)')); };
+// --- the door: the whole app is behind a session ---------------------------
+let AUTH = { user: '', admin: false, hasAccounts: false, registrationOpen: true,
+             providers: [], mode: 'sign' };
 
-// --- sign-in (social providers; the session lives on the server) -----------
-async function initAuth() {
-  let providers = [], me = { authenticated: false, user: '' };
-  try { providers = (await api('/auth/providers')).providers || []; } catch (_) {}
+function authMsg(t) { $('#autherr').textContent = t || ''; }
+
+function renderAuth() {
+  const create = AUTH.mode === 'create';
+  $('#locktitle').textContent = create ? 'set up fireside' : 'sign in';
+  $('#locksub').textContent = create
+    ? (AUTH.hasAccounts
+        ? 'make another account on this server.'
+        : 'create the first account. it will be the admin.')
+    : 'your books, your place in them, kept on this server.';
+  $('#lockgo').textContent = create ? 'Create account' : 'Sign in';
+  const canToggle = AUTH.registrationOpen || !AUTH.hasAccounts;
+  $('#locktoggle').style.display = canToggle ? 'inline-block' : 'none';
+  $('#locktoggle').textContent = create ? 'I already have an account' : 'Create a new account';
+  authMsg('');
+  const provs = $('#lockproviders'); provs.innerHTML = '';
+  AUTH.providers.filter(p => p.kind !== 'local' && p.start).forEach(p => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'btn ghost'; b.textContent = 'Continue with ' + p.label;
+    b.onclick = () => { location.href = p.start; };
+    provs.append(b);
+  });
+}
+
+async function authSubmit() {
+  const u = $('#lockuser').value.trim(), p = $('#lockpass').value;
+  if (!u) return authMsg('enter a username');
+  const create = AUTH.mode === 'create';
+  const route = create ? '/auth/local/register' : '/auth/local/login';
+  authMsg(''); $('#lockgo').disabled = true;
+  try {
+    await api(route, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: u, password: p }) });
+    location.reload();                        // cleanest: reload into the session
+  } catch (e) {
+    authMsg(e.message || (create ? 'could not create that account' : 'sign-in failed'));
+    $('#lockgo').disabled = false;
+  }
+}
+
+async function requireSession() {
+  let pol = {}, me = { authenticated: false, user: '' };
+  try { pol = await api('/auth/policy'); } catch (_) {}
+  AUTH.providers = pol.providers || [];
+  AUTH.hasAccounts = !!pol.has_accounts;
+  AUTH.registrationOpen = pol.registration_open !== false;
   try { me = await api('/me'); } catch (_) {}
-  const box = $('#auth'); box.innerHTML = '';
+  const who = $('#auth'); who.innerHTML = '';
   if (me.authenticated) {
+    USER = me.user; AUTH.user = me.user; AUTH.admin = !!me.admin;
+    localStorage.setItem(UKEY, USER);
     const label = me.user.includes(':') ? me.user.split(':')[1] : me.user;
-    USER = me.user; localStorage.setItem(UKEY, USER); $('#user').value = USER;
-    const s = document.createElement('span'); s.textContent = 'signed in · ' + label;
-    const out = document.createElement('button'); out.textContent = 'Sign out'; out.style.width = 'auto'; out.className = 'link';
-    out.onclick = async () => { try { await api('/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); } catch (_) {}
-      localStorage.removeItem(UKEY); USER = ''; location.reload(); };
-    box.append(s, out);
-    $('#namebox').style.display = 'none';
-  } else {
-    providers.filter(p => p.kind !== 'local' && p.start).forEach(p => {
-      const b = document.createElement('button'); b.textContent = 'Sign in with ' + p.label; b.className = 'link'; b.style.width = 'auto';
-      b.onclick = () => { location.href = p.start; };
-      box.append(b);
-    });
-    if (providers.some(p => p.kind === 'local')) localForm(box);
+    const s = document.createElement('span'); s.className = 'whoChip';
+    s.textContent = label + (AUTH.admin ? ' · admin' : '');
+    const out = document.createElement('button'); out.textContent = 'Sign out';
+    out.className = 'link'; out.style.width = 'auto';
+    out.onclick = async () => {
+      try { await api('/auth/logout', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: '{}' }); } catch (_) {}
+      localStorage.removeItem(UKEY); location.reload();
+    };
+    who.append(s, out);
+    $('#lock').hidden = true;
+    document.body.classList.remove('locked');
+    return true;
   }
+  AUTH.mode = AUTH.hasAccounts ? 'sign' : 'create';
+  document.body.classList.add('locked');
+  renderAuth();
+  $('#lockuser').focus();
+  return false;
 }
-function localForm(box) {
-  const u = document.createElement('input'); u.placeholder = 'username'; u.autocomplete = 'username'; u.style.width = '112px';
-  const p = document.createElement('input'); p.placeholder = 'password'; p.type = 'password'; p.autocomplete = 'current-password'; p.style.width = '112px';
-  const si = document.createElement('button'); si.textContent = 'Sign in'; si.className = 'link'; si.style.width = 'auto';
-  const cr = document.createElement('button'); cr.textContent = 'Create account'; cr.className = 'link'; cr.style.width = 'auto';
-  async function go(route) {
-    const username = u.value.trim();
-    if (!username) return fail('enter a username');
-    try {
-      await api(route, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: username, password: p.value }) });
-      location.reload();
-    } catch (e) {
-      fail(route.indexOf('register') >= 0 ? 'could not create that account' : 'sign-in failed');
-    }
-  }
-  si.onclick = () => go('/auth/local/login');
-  cr.onclick = () => go('/auth/local/register');
-  box.append(u, p, si, cr);
-}
+
+$('#lockform').onsubmit = (e) => { e.preventDefault(); authSubmit(); };
+$('#locktoggle').onclick = () => {
+  AUTH.mode = AUTH.mode === 'create' ? 'sign' : 'create';
+  renderAuth();
+};
 
 // --- voices ----------------------------------------------------------------
 async function loadVoices() {
@@ -659,7 +727,8 @@ $('#offline').onclick = async () => {
 
 // --- boot ------------------------------------------------------------------
 window.addEventListener('load', async () => {
-  try { await initAuth(); } catch (_) {}
+  const ok = await requireSession();
+  if (!ok) return;
   try { await loadPlugins(); } catch (e) { fail(e); }
   if (saved.voice) { const o = document.createElement('option'); o.value = saved.voice; o.textContent = (saved.voiceLabel || saved.voice) + ' (saved)'; $('#voice').prepend(o); }
   await loadLibrary();
@@ -669,3 +738,4 @@ window.addEventListener('load', async () => {
 </script>
 </body>
 </html>
+

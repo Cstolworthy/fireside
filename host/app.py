@@ -275,28 +275,52 @@ class App:
     def auth_providers(self, q, body):
         return 200, {"providers": self.auth.providers()}
 
+    def auth_policy(self, q, body):
+        """What a stranger may do before they have a session."""
+        return 200, {
+            "providers": self.auth.providers(),
+            "has_accounts": auth.account_count(self.conn) > 0,
+            "registration_open": auth.registration_open(self.conn),
+        }
+
+    def auth_users(self, q, body):
+        uid = (q or {}).get("_user") or ""
+        if not auth.is_admin(self.conn, uid):
+            return 403, {"error": "admin only"}
+        return 200, {"users": auth.local_accounts(self.conn),
+                     "registration_open": auth.registration_open(self.conn),
+                     "you": uid}
+
+    def set_registration(self, q, body):
+        uid = (q or {}).get("_user") or ""
+        if not auth.is_admin(self.conn, uid):
+            return 403, {"error": "admin only"}
+        v = auth.set_registration(self.conn, bool((body or {}).get("open")))
+        return 200, {"ok": True, "registration": v}
+
     def me(self, q, body):
         uid = (q or {}).get("_user") or ""
-        return 200, {"user": uid, "authenticated": bool(uid)}
+        return 200, {"user": uid, "authenticated": bool(uid),
+                     "admin": auth.is_admin(self.conn, uid)}
 
 
 GET_ROUTES = {
     "/": "ui", "/index.html": "ui",
     "/health": "health", "/plugins": "plugins", "/library": "library_list",
     "/job": "job", "/progress": "progress", "/chapter": "chapter",
-    "/text": "text",
-    "/position": "get_position", "/stop": "stop",
-    "/auth/providers": "auth_providers", "/me": "me",
+    "/position": "get_position", "/stop": "stop", "/text": "text",
+    "/auth/providers": "auth_providers", "/me": "me", "/auth/policy": "auth_policy",
+    "/auth/users": "auth_users",
 }
 POST_ROUTES = {
     "/import": "import_book", "/render": "render", "/voices": "voices",
     "/position": "put_position", "/claim": "claim", "/ack": "ack",
-    "/credential": "put_credential",
+    "/credential": "put_credential", "/auth/registration": "set_registration",
 }
 
 # reachable without a session even when auth is required: the page, its health,
 # the sign-in surface, and the browser's cache of who it is.
-PUBLIC_ROUTES = {"/", "/index.html", "/health", "/auth/providers", "/me"}
+PUBLIC_ROUTES = {"/", "/index.html", "/health", "/auth/providers", "/auth/policy", "/me"}
 
 # auth sub-routes the handler serves directly (they set cookies / redirect),
 # so they are not in the GET/POST dispatch tables above. Declared here so the
@@ -404,7 +428,8 @@ def make_handler(app):
                 except auth.AuthError as e:
                     return self._json(401, {"error": str(e)})
                 token = auth.create_session(app.conn, uid, "local")
-                return self._json(200, {"ok": True, "user": uid},
+                return self._json(200, {"ok": True, "user": uid,
+                                        "admin": auth.is_admin(app.conn, uid)},
                                   cookie=self._cookie_str(
                                       auth.SESSION_COOKIE, token,
                                       max_age=auth.SESSION_TTL))
@@ -485,12 +510,19 @@ if __name__ == "__main__":
                     help="data dir for the DB and blobs (default: $FIRESIDE_DATA)")
     ap.add_argument("--hosted", action="store_true")
     ap.add_argument("--require-auth", action="store_true",
-                    help="reject requests with no session (auto-on when --hosted)")
+                    help="reject requests with no session (default: on)")
+    ap.add_argument("--open", action="store_true",
+                    help="serve without requiring a session (development only)")
     args = ap.parse_args()
     if args.data:                      # one knob sets DB + blob root alike
         os.environ["FIRESIDE_DATA"] = args.data
-    require = (args.require_auth or args.hosted
-               or _truthy(os.environ.get("FIRESIDE_REQUIRE_AUTH")))
+    # A session is required unless the operator explicitly opens the server
+    # (--open / FIRESIDE_OPEN=1). --require-auth / --hosted still force it on.
+    require = args.require_auth or args.hosted or (not args.open)
+    if _truthy(os.environ.get("FIRESIDE_REQUIRE_AUTH")):
+        require = True
+    if _truthy(os.environ.get("FIRESIDE_OPEN")):
+        require = False
     app, httpd = serve(App(plugins_root=args.plugins, hosted=args.hosted,
                            require_auth=require), args.port, args.host)
     print("fireside v2 host on http://%s:%d" % (args.host, httpd.server_address[1]))
