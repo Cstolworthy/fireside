@@ -176,5 +176,37 @@ class TestUiDomRefs(unittest.TestCase):
                          "index.html references ids that do not exist")
 
 
+class TestBootSafetyNet(unittest.TestCase):
+    """A load-time throw must surface, and every selector form must resolve.
+
+    The blank page had two causes stacked: a dead $('#user') reference that
+    threw at load, and a signed-out branch that hid the app but never revealed
+    the door. These guards cover both classes plus the generic error net.
+    """
+
+    def _html(self):
+        with open(os.path.join(UI_DIR, "index.html"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_page_never_blanks_on_error(self):
+        html = self._html()
+        self.assertIn("window.addEventListener('error'", html)
+        # both auth branches set the door's visibility explicitly
+        self.assertIn("$('#lock').hidden = true", html)    # signed in
+        self.assertIn("$('#lock').hidden = false", html)   # signed out
+
+    def test_id_refs_cover_all_selector_forms(self):
+        html = self._html()
+        defined = set(re.findall(r'id="([A-Za-z0-9_\-]+)"', html))
+        pats = [r"\$\('#([A-Za-z0-9_\-]+)'\)",
+                r"getElementById\('([A-Za-z0-9_\-]+)'\)",
+                r"querySelector(?:All)?\('#([A-Za-z0-9_\-]+)'\)"]
+        refs = set()
+        for pat in pats:
+            refs |= set(re.findall(pat, html))
+        self.assertEqual(sorted(refs - defined), [],
+                         "index.html reaches for ids that do not exist")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -726,6 +726,19 @@ $('#offline').onclick = async () => {
   } catch (e) { if (cur >= 0) state[cur] = 'fail'; drawSpine(); fail(e); }
 };
 
+// --- a script error must never leave a silent blank page --------------------
+// If anything throws while the page starts, reveal the door with the reason
+// instead of an empty screen. (Resource 404s carry no .message, so we ignore
+// those and only act on real uncaught errors.)
+window.addEventListener('error', e => {
+  if (!e || !e.message) return;
+  try {
+    document.body.classList.remove('locked');
+    $('#lock').hidden = false;
+    const box = $('#autherr'); if (box) box.textContent = 'the page hit an error while starting: ' + e.message;
+  } catch (_) {}
+});
+
 // --- boot ------------------------------------------------------------------
 window.addEventListener('load', async () => {
   const ok = await requireSession();
