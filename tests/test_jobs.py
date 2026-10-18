@@ -69,6 +69,26 @@ class TestRender(unittest.TestCase):
         jobs.render_book(self.conn, self.storage, self.speech, "u1", self.bid, voice="v2")
         self.assertGreater(self.speech.calls, before, "new voice must synthesize again")
 
+    def test_every_voice_is_kept(self):
+        jobs.render_book(self.conn, self.storage, self.speech, "u1", self.bid, voice="v1")
+        jobs.render_book(self.conn, self.storage, self.speech, "u1", self.bid, voice="v2")
+        rs = library.renditions(self.conn, self.bid)
+        self.assertEqual({r["voice"] for r in rs}, {"v1", "v2"})
+        per = {}
+        for r in rs:
+            per.setdefault(r["idx"], set()).add(r["voice"])
+        self.assertTrue(all(v == {"v1", "v2"} for v in per.values()),
+                        "a chapter re-voiced keeps both renditions")
+        rows = {r["idx"]: r for r in library.chapters(self.conn, self.bid)}
+        self.assertEqual(rows[0]["voice"], "v2", "the chapter row points at the newest")
+        self.assertEqual(library.rendition(self.conn, self.bid, 0, voice="v1")["voice"], "v1")
+
+    def test_backfill_seeds_renditions_from_chapters(self):
+        jobs.render_book(self.conn, self.storage, self.speech, "u1", self.bid, voice="v1")
+        self.conn.execute("DELETE FROM renditions")
+        library.backfill_renditions(self.conn)
+        self.assertEqual({r["voice"] for r in library.renditions(self.conn, self.bid)}, {"v1"})
+
     def test_cache_shared_across_books(self):
         b2 = library.add_book(self.conn, self.storage, "u1", _book())
         jobs.render_book(self.conn, self.storage, self.speech, "u1", self.bid, voice="v1")

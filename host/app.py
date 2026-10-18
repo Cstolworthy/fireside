@@ -44,6 +44,7 @@ class App:
         self.host = Host(plugins_root)
         self.db_path = db_path
         self.conn = db.connect(db_path)
+        library.backfill_renditions(self.conn)   # a book voiced before renditions still lists its voice
         self.storage_id = storage_id
         self.sale_connection = sale_connection
         self.rate_limiter = rate_limiter
@@ -197,6 +198,7 @@ class App:
                 return 403, {"error": "connection is switched off"}
             provider = c["provider"]
         voice = body.get("voice", "")
+        voice_label = body.get("voice_label", "")
         model = body.get("model", "")
         speed = float(body.get("speed", 1.0) or 1.0)
         only = body.get("chapters")
@@ -237,7 +239,7 @@ class App:
             try:
                 jobs.render_book(c, self.storage, speech, user, book_id, voice,
                                  model, speed, cred=cred, opts=opts, only=only,
-                                 job_id=jid)
+                                 job_id=jid, voice_label=voice_label)
                 if sale and res_id:
                     rep = speech.report({"chars_actual": est, "cred": cred, "job_id": jid})
                     accounting.settle(c, res_id, rep)
@@ -252,12 +254,20 @@ class App:
         return (200, j) if j else (404, {"error": "no job"})
 
     def progress(self, q, body):
-        ch = library.chapters(self.conn, q.get("book", ""))
+        book_id = q.get("book", "")
+        ch = library.chapters(self.conn, book_id)
+        rends = {}
+        for r in library.renditions(self.conn, book_id):
+            rends.setdefault(r["idx"], []).append({
+                "provider": r["provider"], "voice": r["voice"],
+                "voice_label": r["voice_label"], "model": r["model"],
+                "audio_ref": r["audio_ref"], "audio_bytes": r["audio_bytes"]})
         return 200, {"chapters": [
             {"idx": c["idx"], "title": c["title"], "chars": c["chars"],
              "rendered": bool(c["audio_ref"]),
              "audio_ref": c["audio_ref"], "audio_bytes": c["audio_bytes"],
-             "provider": c["provider"], "voice": c["voice"], "model": c["model"]}
+             "provider": c["provider"], "voice": c["voice"], "model": c["model"],
+             "renditions": rends.get(c["idx"], [])}
             for c in ch]}
 
     def text(self, q, body):
@@ -272,7 +282,19 @@ class App:
 
     def chapter(self, q, body):
         idx = int(q["idx"])
-        rows = [r for r in library.chapters(self.conn, q["book"]) if r["idx"] == idx]
+        book_id = q["book"]
+        voice = q.get("voice") or ""
+        provider = q.get("provider") or ""
+        model = q.get("model") or ""
+        if voice or provider:
+            # a named voice: serve that rendition, and say so if it is not there
+            r = library.rendition(self.conn, book_id, idx, provider, voice, model)
+            if not r:
+                return 409, {"error": "not rendered in that voice"}
+            data = self.storage.get(r["audio_ref"])
+            return 200, {"_raw": data, "_mime": "audio/mpeg", "bytes": len(data),
+                         "checksum": r["audio_ref"]}
+        rows = [r for r in library.chapters(self.conn, book_id) if r["idx"] == idx]
         if not rows:
             return 404, {"error": "no chapter"}
         r = rows[0]

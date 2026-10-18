@@ -40,7 +40,7 @@ class Plugin:
     def list_voices(self, cred):
         return [{\"id\": \"vv\", \"label\": \"Voice V\"}]
     def synth(self, text, voice, opts, cred):
-        return Audio(data=(\"A:\" + text).encode())
+        return Audio(data=(\"A:\" + voice + \":\" + text).encode())
     def cost_per_1m_chars(self, cred):
         return 12.0
     def quote(self, ctx):
@@ -138,7 +138,32 @@ class TestApp(unittest.TestCase):
         self.assertTrue(all(c["rendered"] for c in prog["chapters"]))
 
         s, audio = self._get("/chapter?book=%s&idx=0" % bid)
-        self.assertEqual(audio, b"A:hello world")
+        self.assertEqual(audio, b"A:v:hello world")
+
+    def test_multi_voice_renditions(self):
+        # the same chapter voiced twice: both are kept, and the player can ask
+        # for either by name. No voice named = the newest.
+        s, imp = self._post("/import", {"user": "u1", "kind": "upload"})
+        bid = imp["book_id"]
+        for v in ("male", "female"):
+            _, r = self._post("/render", {"user": "u1", "book": bid, "provider": "fake",
+                                           "voice": v, "voice_label": v.title()})
+            self._wait_job(r["job_id"])
+        s, prog = self._jget("/progress?user=u1&book=%s" % bid)
+        voices = {r["voice"] for c in prog["chapters"] for r in c["renditions"]}
+        self.assertEqual(voices, {"male", "female"})
+        labels = {r["voice_label"] for c in prog["chapters"] for r in c["renditions"]}
+        self.assertEqual(labels, {"Male", "Female"})
+        s, a = self._get("/chapter?book=%s&idx=0&provider=fake&voice=male" % bid)
+        self.assertEqual(a, b"A:male:hello world")
+        s, b = self._get("/chapter?book=%s&idx=0&provider=fake&voice=female" % bid)
+        self.assertEqual(b, b"A:female:hello world")
+        s, d = self._get("/chapter?book=%s&idx=0" % bid)
+        self.assertEqual(d, b"A:female:hello world")
+        import urllib.error
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._get("/chapter?book=%s&idx=0&voice=nobody" % bid)
+        self.assertEqual(cm.exception.code, 409)
 
     def test_playback_handoff_over_http(self):
         s, imp = self._post("/import", {"user": "u1", "kind": "upload"})
