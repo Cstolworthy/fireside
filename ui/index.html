@@ -5,129 +5,209 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>fireside</title>
 <style>
-  :root { --bg:#14161a; --panel:#1d2026; --line:#2c313a; --ink:#e7eaf0; --dim:#98a0ae; --acc:#79b8ff; --warn:#e6b450; --ok:#2c6; }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif; }
-  header { padding:16px 22px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:16px; flex-wrap:wrap; }
-  h1 { margin:0; font-size:18px; letter-spacing:.3px; }
-  header p { margin:0; color:var(--dim); font-size:13px; }
-  #ver { color:#5a6270; font-variant-numeric:tabular-nums; font-size:12px; }
-  #who { margin-left:auto; display:flex; align-items:center; gap:6px; font-size:12px; color:var(--dim); }
-  #who input { width:130px; }
-  main { display:grid; grid-template-columns: 340px 1fr; gap:18px; padding:18px 22px; max-width:1240px; }
-  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
-  .panel + .panel { margin-top:14px; }
-  label { display:block; font-size:12px; color:var(--dim); margin:10px 0 4px; text-transform:uppercase; letter-spacing:.6px; }
-  input,select,button,textarea { width:100%; background:#111318; color:var(--ink); border:1px solid var(--line); border-radius:7px; padding:8px 9px; font:inherit; }
-  button { cursor:pointer; background:#232833; }
-  button:hover { background:#2b323f; }
-  button.primary { background:#245; border-color:var(--ok); }
-  button:disabled { opacity:.45; cursor:default; }
-  .drop { border:1.5px dashed var(--line); border-radius:10px; padding:20px; text-align:center; color:var(--dim); }
-  .drop.hot { border-color:var(--acc); color:var(--ink); background:#1a2029; }
-  .row { display:flex; gap:8px; }
-  .row > * { flex:1; }
-  #books { display:flex; flex-direction:column; gap:6px; }
-  .bk { display:flex; align-items:center; gap:8px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#191c22; cursor:pointer; }
-  .bk.on { border-color:var(--acc); background:#1b2430; }
-  .bk .t { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .bk .n { color:var(--dim); font-size:12px; font-variant-numeric:tabular-nums; }
-  #chapters { display:flex; flex-direction:column; gap:8px; }
-  .ch { display:flex; align-items:center; gap:10px; padding:9px 11px; border:1px solid var(--line); border-radius:8px; background:#191c22; }
-  .ch .t { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .ch .n { color:var(--dim); font-variant-numeric:tabular-nums; font-size:12px; }
-  .ch button { width:auto; padding:6px 10px; font-size:13px; }
-  .ch .rdy { color:var(--ok); font-size:12px; }
-  .ch .no { color:var(--dim); font-size:12px; }
-  .ch.playing { border-color:var(--acc); background:#1b2430; }
-  #player { position:sticky; bottom:0; margin-top:14px; }
-  #player .now { font-size:13px; color:var(--dim); margin-bottom:8px; }
-  audio { width:100%; }
-  .hint { color:var(--dim); font-size:12px; margin-top:8px; }
-  .err { color:#ff9b9b; font-size:13px; margin-top:8px; white-space:pre-wrap; }
-  .status { display:flex; align-items:center; gap:9px; padding:8px 11px; margin-top:9px; border:1px solid var(--line); border-radius:8px; background:#191c22; font-size:13px; }
-  .status .grow { flex:1; }
-  .spin { width:13px; height:13px; border:2px solid var(--line); border-top-color:var(--acc); border-radius:50%; display:inline-block; animation:sp .8s linear infinite; }
-  @keyframes sp { to { transform:rotate(360deg); } }
-  .bar { height:4px; background:#111318; border-radius:3px; overflow:hidden; margin-top:9px; display:none; }
-  .bar i { display:block; height:100%; width:0; background:var(--acc); transition:width .3s; }
-  .tag { font-size:11px; color:var(--warn); margin-left:6px; }
-  @media (max-width:820px){ main { grid-template-columns:1fr; } }
+  :root{
+    --bg:#14110f; --surface:#1d1915; --raise:#272119; --line:#3a3128;
+    --text:#ece3d3; --soft:#b3a794; --faint:#7d7364;
+    --flame:#e3a857; --on-flame:#241808; --ready:#9bb58f; --warn:#e2917f;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    --ui:system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 var(--ui)}
+  header{padding:16px 22px 0;border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  h1{margin:0;font:600 20px/1 var(--serif);letter-spacing:.3px}
+  header p{margin:0;color:var(--faint);font-size:13px}
+  #ver{color:var(--faint);font-variant-numeric:tabular-nums;font-size:12px}
+  #who{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--faint)}
+  nav.tabs{display:flex;gap:2px;margin-top:12px;overflow-x:auto}
+  nav.tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:9px 12px;color:var(--soft);font-size:14px;cursor:pointer;white-space:nowrap}
+  nav.tabs button.on{color:var(--text);border-color:var(--flame)}
+  main{padding:30px 40px 80px;max-width:960px;margin:0 auto}
+  .view{display:none}.view.on{display:block}
+  h2{margin:0;font:600 26px/1.25 var(--serif)}
+  h3{font:600 17px var(--ui);margin:0}
+  p{margin:0}
+  .sub{color:var(--soft);font-size:15px}
+  .small{font-size:13px;color:var(--soft)}
+  .faint{color:var(--faint)}
+  button,input,select,textarea{font:inherit;color:inherit}
+  :focus-visible{outline:2px solid var(--flame);outline-offset:2px}
+  input,select{width:100%;background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:9px 11px}
+  label{display:block;font-size:12px;color:var(--faint);margin:12px 0 4px;text-transform:uppercase;letter-spacing:.6px}
+  .btn{background:var(--flame);color:var(--on-flame);border:0;border-radius:999px;padding:10px 22px;font-weight:600;font-size:15px;cursor:pointer}
+  .btn.quiet{background:none;color:var(--soft);border:1px solid var(--line);font-weight:500}
+  .btn:disabled{opacity:.45;cursor:default}
+  .link{background:none;border:0;color:var(--soft);text-decoration:underline;text-underline-offset:3px;cursor:pointer;font-size:13px;padding:0}
+  .hint{color:var(--faint);font-size:12px;margin-top:8px}
+  .drop{border:1.5px dashed var(--line);border-radius:14px;padding:26px;text-align:center;color:var(--soft);cursor:pointer}
+  .drop.hot{border-color:var(--flame);color:var(--text);background:var(--surface)}
+  /* spine: solid only after a download is verified, on this device */
+  .spine{display:flex;gap:2px;height:16px}
+  .spine i{flex:1;min-width:3px;border-radius:2px;border:1.5px solid var(--faint)}
+  .spine i.ready{background:var(--ready);border-color:var(--ready)}
+  .spine i.avail{border-color:var(--flame)}
+  .spine i.down{border-color:var(--ready);background:linear-gradient(0deg,var(--ready) 50%,transparent 50%)}
+  .spine i.voice{border-color:var(--flame);animation:p 1.4s ease-in-out infinite}
+  .spine i.fail{border-color:var(--warn);background:repeating-linear-gradient(45deg,var(--warn) 0 2px,transparent 2px 4px)}
+  .spine i.miss{border:1.5px dashed var(--warn)}
+  .spine i.cur{box-shadow:0 0 0 2px var(--bg),0 0 0 3.5px var(--flame)}
+  @keyframes p{50%{opacity:.35}}
+  @media(prefers-reduced-motion:reduce){.spine i.voice{animation:none}}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:14px}
+  .legend span{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--faint)}
+  .legend .spine{width:8px;height:12px}.legend .spine i{min-width:8px}
+  /* library */
+  .cover{border-radius:6px;padding:12px;display:flex;align-items:flex-end;font:600 15px/1.2 var(--serif);color:#f3e7cf;background:linear-gradient(160deg,#5a3b2a,#2a1c14)}
+  .resume{display:flex;gap:24px;align-items:center}
+  .resume .cover{width:130px;flex:none;aspect-ratio:2/3}
+  .shelf{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:12px}
+  .bk{cursor:pointer}
+  .bk .cover{aspect-ratio:2/3;font-size:14px;margin-bottom:8px}
+  .bk .spine{margin:8px 0 6px}
+  /* playing */
+  .np{display:grid;grid-template-columns:1fr 260px;gap:40px}
+  .story p{font:19px/1.75 var(--serif);color:var(--soft);margin-top:18px;max-width:62ch}
+  .story p:first-child{margin-top:0}
+  .story .lead{color:var(--text)}
+  .prog{height:4px;background:var(--raise);border-radius:2px;position:relative;margin:16px 0 4px;cursor:pointer}
+  .prog i{position:absolute;inset:0 auto 0 0;background:var(--flame);border-radius:2px;width:0}
+  .times{display:flex;justify-content:space-between;font-size:13px;color:var(--faint);font-variant-numeric:tabular-nums}
+  .ctl{display:flex;justify-content:center;align-items:center;gap:22px;margin:16px 0}
+  .ctl button{background:none;border:0;color:var(--soft);cursor:pointer;font-size:14px}
+  .ctl .play{width:60px;height:60px;border-radius:50%;background:var(--flame);color:var(--on-flame);font-size:18px}
+  .ctl .spd{min-width:44px}
+  .row{display:flex;gap:12px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line);font-size:15px}
+  .row .r{margin-left:auto;text-align:right;color:var(--text)}
+  .note{border-left:2px solid var(--line);padding:4px 0 4px 13px;font-size:13px;color:var(--soft)}
+  .note.bad{border-color:var(--warn)}
+  .status{display:flex;align-items:center;gap:9px;padding:9px 11px;margin-top:10px;border:1px solid var(--line);border-radius:9px;background:var(--surface);font-size:13px}
+  .status .grow{flex:1}
+  .spin{width:13px;height:13px;border:2px solid var(--line);border-top-color:var(--flame);border-radius:50%;display:inline-block;animation:sp .8s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .bar{height:4px;background:var(--raise);border-radius:3px;overflow:hidden;margin-top:9px;display:none}
+  .bar i{display:block;height:100%;width:0;background:var(--flame);transition:width .3s}
+  .err{color:#ff9b9b;font-size:13px;margin-top:10px;white-space:pre-wrap}
+  .tag{font-size:11px;color:var(--flame);margin-left:6px}
+  @media(max-width:760px){
+    main{padding:22px 18px 70px}
+    .np{grid-template-columns:1fr;gap:22px}
+    .np aside{order:2}
+    .shelf{grid-template-columns:1fr 1fr}
+    .resume{flex-direction:column;align-items:flex-start}
+    .resume .cover{width:104px}
+  }
 </style>
 </head>
 <body>
 <header>
-  <h1>fireside</h1>
-  <p>Drop an EPUB or paste a story link, pick a voice, get audio you can pause, resume, and keep. <span id="ver">v__HOST_VERSION__</span></p>
-  <div id="who"><span id="auth"></span><span id="namebox"><span>listening as</span><input id="user" placeholder="your name" autocomplete="off"><button id="saveuser" style="width:auto">set</button></span></div>
+  <div class="brand">
+    <h1>fireside</h1>
+    <p>Books and web stories, voiced. <span id="ver">v__HOST_VERSION__</span></p>
+    <div id="who"><span id="auth"></span><span id="namebox"><span>listening as</span><input id="user" placeholder="your name" autocomplete="off" style="width:130px"><button id="saveuser" class="link" style="width:auto">set</button></span></div>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button data-v="lib" class="on">Library</button>
+    <button data-v="play">Now playing</button>
+    <button data-v="add">Add</button>
+    <button data-v="set">Settings</button>
+  </nav>
 </header>
 <main>
-  <section>
-    <div class="panel">
-      <div class="drop" id="drop">Drop an <b>.epub</b> here<br><span style="font-size:12px">or click to choose</span>
-        <input type="file" id="file" accept=".epub,application/epub+zip" hidden></div>
-      <div class="row" style="margin-top:10px">
-        <input id="url" placeholder="or paste a story link (https://…)" autocomplete="off">
-        <button id="loadurl" style="flex:0 0 88px">Load</button></div>
-      <div class="hint">A locked AO3 work needs your cookie under <b>Text sources</b>, or drop the work's EPUB.</div>
+  <!-- library -->
+  <section class="view on" id="v-lib">
+    <div id="resume"></div>
+    <p class="small" id="shelflabel" style="margin:34px 0 0;display:none">On your shelf</p>
+    <div class="shelf" id="shelf"></div>
+    <p class="small" id="libempty" style="color:var(--faint)">Nothing here yet. Add a book to start.</p>
+    <div class="legend">
+      <span><span class="spine"><i class="ready"></i></span>on this device</span>
+      <span><span class="spine"><i class="avail"></i></span>voiced, not here</span>
+      <span><span class="spine"><i class="voice"></i></span>being voiced</span>
+      <span><span class="spine"><i class="fail"></i></span>check failed</span>
+      <span><span class="spine"><i></i></span>not voiced yet</span>
     </div>
+  </section>
 
-    <div class="panel" id="libpanel" style="display:none">
-      <label>Library</label>
-      <div id="books"></div>
-    </div>
-
-    <div class="panel">
-      <label>Voice engine</label>
-      <select id="provider"></select>
-      <div id="cred"></div>
-      <label>Voice</label>
-      <input id="vfilter" placeholder="filter, e.g. en-US or Jenny" autocomplete="off">
-      <select id="voice"><option value="">load voices…</option></select>
-      <div class="row" style="margin-top:8px">
-        <button id="loadvoices">Load voices</button>
-        <button id="save" class="primary">Remember<span class="tag" id="dirty" style="display:none">unsaved</span></button>
+  <!-- now playing -->
+  <section class="view" id="v-play">
+    <div id="npempty" class="hint">Pick a book from the Library first.</div>
+    <div id="np" style="display:none">
+      <div class="np">
+        <div class="story">
+          <p class="small" id="npkicker"></p>
+          <h2 id="nptitle"></h2>
+          <div id="nptext" style="margin-top:16px"></div>
+        </div>
+        <aside>
+          <div class="prog" id="prog"><i id="progfill"></i></div>
+          <div class="times"><span id="tcur">0:00</span><span id="tleft">−0:00</span></div>
+          <div class="ctl">
+            <button id="back30" title="Back 30 seconds">−30s</button>
+            <button class="play" id="tog" aria-label="Play">▶</button>
+            <button class="spd" id="speed">1.0×</button>
+          </div>
+          <div class="spine" id="npspine"></div>
+          <p class="small" id="npnote" style="margin-top:8px"></p>
+          <div class="row" style="margin-top:14px">Characters in this book<span class="r" id="npchars">0</span></div>
+          <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn quiet" id="renderall">Voice the whole book</button>
+            <button class="btn quiet" id="offline">Download for offline</button>
+          </div>
+        </aside>
       </div>
-      <div class="hint">Keys stay in this browser and reach only this local server.</div>
     </div>
+  </section>
 
-    <div class="panel" id="srcpanel" style="display:none">
+  <!-- add -->
+  <section class="view" id="v-add">
+    <h2>Add a book</h2>
+    <p class="sub">Drop an EPUB or paste a story link. Fireside reads it, breaks it into chapters, and voices each one.</p>
+    <div class="drop" id="drop" style="margin-top:18px">Drop an <b>.epub</b> here<br><span class="small">or click to choose</span>
+      <input type="file" id="file" accept=".epub,application/epub+zip" hidden></div>
+    <label>Or paste a story link</label>
+    <div style="display:flex;gap:8px"><input id="url" placeholder="https://…" autocomplete="off"><button id="loadurl" class="btn" style="flex:0 0 96px">Load</button></div>
+    <p class="hint">A locked AO3 work needs your cookie under Settings, or drop the work's EPUB.</p>
+  </section>
+
+  <!-- settings -->
+  <section class="view" id="v-set">
+    <h2>Settings</h2>
+    <p class="sub">What the server uses to voice your books. Keys stay in this browser and reach only this server.</p>
+    <label>Voice engine</label>
+    <select id="provider"></select>
+    <div id="cred"></div>
+    <label>Voice</label>
+    <input id="vfilter" placeholder="filter, e.g. en-US or Jenny" autocomplete="off">
+    <select id="voice"><option value="">load voices…</option></select>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn quiet" id="loadvoices">Load voices</button>
+      <button class="btn" id="save">Remember<span class="tag" id="dirty" style="display:none">unsaved</span></button>
+    </div>
+    <div id="srcpanel" style="display:none">
       <label>Text sources</label>
-      <div class="hint" style="margin-top:0">Each source asks for what it needs (AO3 asks for a cookie). Settings stay in this browser.</div>
+      <p class="hint" style="margin-top:0">Each source asks for what it needs (AO3 asks for a cookie). Settings stay in this browser.</p>
       <div id="sources"></div>
     </div>
   </section>
 
-  <section>
-    <div class="panel" style="min-height:120px">
-      <div id="empty" class="hint">No book loaded yet.</div>
-      <div id="bookhead" style="display:none;margin-bottom:9px;font-size:13px"></div>
-      <div id="booktools" class="row" style="display:none;margin-bottom:9px">
-        <button id="renderall" style="flex:1.4">Render all chapters</button>
-        <button id="offline">Download for offline</button>
-      </div>
-      <div id="chapters"></div>
-    </div>
-    <div class="status" id="status" style="display:none">
-      <span class="spin" id="spin" style="display:none"></span>
-      <span id="statustext"></span><span class="grow"></span><span id="statustime" style="color:var(--dim);font-size:12px"></span>
-    </div>
-    <div class="bar" id="bar"><i id="barfill"></i></div>
-    <div id="err" class="err"></div>
-    <div class="panel" id="player">
-      <div class="now" id="now">—</div>
-      <audio id="audio" controls preload="metadata"></audio>
-    </div>
-  </section>
+  <div class="status" id="status" style="display:none">
+    <span class="spin" id="spin" style="display:none"></span>
+    <span id="statustext"></span><span class="grow"></span><span id="statustime" style="color:var(--faint);font-size:12px"></span>
+  </div>
+  <div class="bar" id="bar"><i id="barfill"></i></div>
+  <div class="err" id="err"></div>
+  <audio id="audio" preload="metadata"></audio>
 </main>
 
 <script>
 const $ = s => document.querySelector(s);
-const UKEY = 'fireside.user', SKEY = 'fireside.settings', DEVICE = 'web-' + Math.random().toString(36).slice(2, 8);
+const UKEY = 'fireside.user', SKEY = 'fireside.settings', LKEY = 'fireside.lastbook', DEVICE = 'web-' + Math.random().toString(36).slice(2, 8);
 let USER = localStorage.getItem(UKEY) || '';
-let plugins = null, sources = [], voices = [], book = null, cur = -1;
-let last = null, timer = null, stopTimer = null;
-const cache = new Map();          // sha -> {url, bytes}  verified chapters, this session
+let plugins = null, sources = [], voices = [], books = [], book = null, cur = -1;
+let state = {};                 // idx -> ready | avail | down | voice | fail | miss | todo
+let lastName = localStorage.getItem(LKEY) || '';
+const cache = new Map();        // audio_ref -> {url, bytes}   verified this session
 const $who = $('#user'); if (USER) $who.value = USER;
 
 // --- tiny SHA-256 (crypto.subtle is unavailable on plain-HTTP LAN origins) ----
@@ -198,7 +278,16 @@ function idle(t) { clearInterval(_tick); $('#spin').style.display = 'none'; $('#
 function fail(e) { clearInterval(_tick); $('#spin').style.display = 'none'; $('#bar').style.display = 'none';
   $('#status').style.display = 'none'; $('#err').textContent = String(e && e.message ? e.message : e); }
 const fmt = n => n > 1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1, Math.round(n/1024))+' KB';
+const nf = n => (n || 0).toLocaleString('en-US');
+const mmss = s => { s = Math.max(0, Math.round(s||0)); return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0'); };
 function needUser() { if (!USER) { fail('set your name first (top right)'); throw new Error('no user'); } }
+
+// --- views -----------------------------------------------------------------
+function show(v) {
+  document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+}
+document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.dataset.v));
 
 // --- settings (localStorage) ----------------------------------------------
 let saved = {}; try { saved = JSON.parse(localStorage.getItem(SKEY) || '{}'); } catch (_) {}
@@ -228,14 +317,13 @@ async function loadPlugins() {
   (plugins.speech || []).forEach(p => { const o = document.createElement('option'); o.value = p.id; o.textContent = p.label || p.id; sel.append(o); });
   if (saved.provider && (plugins.speech||[]).some(p => p.id === saved.provider)) sel.value = saved.provider;
   renderCredFields(providerFields(sel.value));
-  // reader settings (text sources)
   const readers = (plugins.readers || []).filter(r => (r.settings || []).length);
   if (readers.length) {
     $('#srcpanel').style.display = 'block';
     const box = $('#sources'); box.innerHTML = '';
     readers.forEach(r => {
       const wrap = document.createElement('div'); wrap.style.margin = '8px 0';
-      const h = document.createElement('div'); h.style.cssText = 'font-size:12px;color:var(--dim);margin-bottom:3px'; h.textContent = r.label || r.id; wrap.append(h);
+      const h = document.createElement('div'); h.className = 'small'; h.style.marginBottom = '3px'; h.textContent = r.label || r.id; wrap.append(h);
       (r.settings || []).forEach(f => {
         const lab = document.createElement('label'); lab.textContent = f.label || f.name; wrap.append(lab);
         const inp = document.createElement('input'); inp.type = f.kind === 'password' ? 'password' : 'text';
@@ -259,8 +347,6 @@ $('#user').oninput = () => { $('#user').dataset.dirty = '1'; };
 $('#saveuser').onclick = async () => { USER = $('#user').value.trim(); localStorage.setItem(UKEY, USER); loadLibrary(); idle('Listening as ' + (USER || '(unset)')); };
 
 // --- sign-in (social providers; the session lives on the server) -----------
-// A provider only appears if the deployment has credentials for it, so an
-// unconfigured self-host shows nothing and keeps the plain name box.
 async function initAuth() {
   let providers = [], me = { authenticated: false, user: '' };
   try { providers = (await api('/auth/providers')).providers || []; } catch (_) {}
@@ -270,26 +356,25 @@ async function initAuth() {
     const label = me.user.includes(':') ? me.user.split(':')[1] : me.user;
     USER = me.user; localStorage.setItem(UKEY, USER); $('#user').value = USER;
     const s = document.createElement('span'); s.textContent = 'signed in · ' + label;
-    const out = document.createElement('button'); out.textContent = 'Sign out'; out.style.width = 'auto';
+    const out = document.createElement('button'); out.textContent = 'Sign out'; out.style.width = 'auto'; out.className = 'link';
     out.onclick = async () => { try { await api('/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }); } catch (_) {}
       localStorage.removeItem(UKEY); USER = ''; location.reload(); };
     box.append(s, out);
     $('#namebox').style.display = 'none';
   } else {
     providers.filter(p => p.kind !== 'local' && p.start).forEach(p => {
-      const b = document.createElement('button'); b.textContent = 'Sign in with ' + p.label; b.style.width = 'auto';
+      const b = document.createElement('button'); b.textContent = 'Sign in with ' + p.label; b.className = 'link'; b.style.width = 'auto';
       b.onclick = () => { location.href = p.start; };
       box.append(b);
     });
     if (providers.some(p => p.kind === 'local')) localForm(box);
   }
 }
-
 function localForm(box) {
   const u = document.createElement('input'); u.placeholder = 'username'; u.autocomplete = 'username'; u.style.width = '112px';
   const p = document.createElement('input'); p.placeholder = 'password'; p.type = 'password'; p.autocomplete = 'current-password'; p.style.width = '112px';
-  const si = document.createElement('button'); si.textContent = 'Sign in'; si.style.width = 'auto';
-  const cr = document.createElement('button'); cr.textContent = 'Create account'; cr.style.width = 'auto';
+  const si = document.createElement('button'); si.textContent = 'Sign in'; si.className = 'link'; si.style.width = 'auto';
+  const cr = document.createElement('button'); cr.textContent = 'Create account'; cr.className = 'link'; cr.style.width = 'auto';
   async function go(route) {
     const username = u.value.trim();
     if (!username) return fail('enter a username');
@@ -306,7 +391,6 @@ function localForm(box) {
   box.append(u, p, si, cr);
 }
 
-// --- voices
 // --- voices ----------------------------------------------------------------
 async function loadVoices() {
   const pid = $('#provider').value; if (!pid) return;
@@ -327,21 +411,19 @@ function applyFilter() { const q = $('#vfilter').value.trim().toLowerCase(); con
   const c = sel.selectedOptions[0]; if (!c || c.disabled) { const f = [...sel.options].find(o => !o.disabled); if (f) sel.value = f.value; } }
 $('#vfilter').oninput = applyFilter;
 
-// --- import + library ------------------------------------------------------
+// --- import ----------------------------------------------------------------
 $('#drop').onclick = () => $('#file').click();
 $('#file').onchange = e => e.target.files[0] && ingestFile(e.target.files[0]);
 ['dragenter','dragover'].forEach(ev => $('#drop').addEventListener(ev, e => { e.preventDefault(); $('#drop').classList.add('hot'); }));
 ['dragleave','drop'].forEach(ev => $('#drop').addEventListener(ev, e => { e.preventDefault(); $('#drop').classList.remove('hot'); }));
 $('#drop').addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) ingestFile(f); });
-
 function fileB64(f) { return new Promise((res, rej) => { const r = new FileReader();
   r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(f); }); }
-
 async function ingestFile(f) {
   needUser(); $('#err').textContent = ''; busy('Reading ' + f.name + '…');
   try { const b64 = await fileB64(f);
     const d = await jpost('/import', { user: USER, kind: 'upload', filename: f.name, data_b64: b64, cred: readerCred() });
-    openBook(d.book_id); loadLibrary();
+    show('lib'); await loadLibrary(); await openBook(d.book_id);
   } catch (e) { fail(e); }
 }
 $('#loadurl').onclick = loadUrl;
@@ -350,61 +432,115 @@ async function loadUrl() {
   const url = $('#url').value.trim(); if (!url) return; needUser(); $('#err').textContent = '';
   busy('Fetching the page and pulling the story out…');
   try { const d = await jpost('/import', { user: USER, kind: 'url', url, cred: readerCred() });
-    openBook(d.book_id); loadLibrary();
+    show('lib'); await loadLibrary(); await openBook(d.book_id);
   } catch (e) { fail(e); }
+}
+
+// --- library ---------------------------------------------------------------
+function spineEl(states, curIdx) {
+  const d = document.createElement('div'); d.className = 'spine';
+  d.setAttribute('role', 'img');
+  d.setAttribute('aria-label', (states.filter(s => s === 'ready').length) + ' of ' + states.length + ' chapters on this device');
+  states.forEach((s, i) => { const it = document.createElement('i'); it.className = s + (i === curIdx ? ' cur' : ''); d.append(it); });
+  return d;
 }
 async function loadLibrary() {
   if (!USER) return;
-  try { const d = await api('/library?user=' + encodeURIComponent(USER));
-    $('#libpanel').style.display = 'block';
-    const box = $('#books'); box.innerHTML = '';
-    d.forEach(b => { const row = document.createElement('div'); row.className = 'bk' + (book && book.id === b.id ? ' on' : ''); row.dataset.id = b.id;
-      const t = document.createElement('span'); t.className = 't'; t.textContent = b.title;
-      const n = document.createElement('span'); n.className = 'n'; n.textContent = b.rendered + '/' + b.chapters;
-      row.append(t, n, (() => { const x = document.createElement('span'); x.textContent = '›'; x.style.color = 'var(--dim)'; return x; })());
-      row.onclick = () => openBook(b.id); box.append(row); });
-    if (!d.length) box.innerHTML = '<div class="hint">Nothing here yet.</div>';
+  try {
+    books = await api('/library?user=' + encodeURIComponent(USER));
+    const shelf = $('#shelf'); shelf.innerHTML = '';
+    $('#shelflabel').style.display = books.length ? 'block' : 'none';
+    $('#libempty').style.display = books.length ? 'none' : 'block';
+    books.forEach(b => {
+      const cell = document.createElement('div'); cell.className = 'bk'; cell.onclick = () => { openBook(b.id); show('play'); };
+      const cover = document.createElement('div'); cover.className = 'cover'; cover.textContent = b.title;
+      const t = document.createElement('div'); t.style.cssText = 'font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; t.textContent = b.title;
+      const states = Array.from({ length: b.chapters }, (_, i) => i < b.rendered ? 'avail' : 'todo');
+      const sp = spineEl(states, -1);
+      const s = document.createElement('div'); s.className = 'small'; s.textContent = b.rendered + ' of ' + b.chapters + ' voiced';
+      cell.append(cover, t, sp, s); shelf.append(cell);
+    });
+    renderResume();
   } catch (e) { /* library is optional until a name is set */ }
+}
+function bookById(id) { return books.find(b => b.id === id); }
+function renderResume() {
+  const box = $('#resume'); box.innerHTML = '';
+  const b = bookById(lastName) || books[0];
+  if (!b) return;
+  const cover = document.createElement('div'); cover.className = 'cover'; cover.textContent = b.title;
+  const col = document.createElement('div'); col.style.flex = '1'; col.style.minWidth = '0';
+  const kick = document.createElement('p'); kick.className = 'small'; kick.textContent = 'Pick up where you left off';
+  const h = document.createElement('h2'); h.textContent = b.title;
+  const meta = document.createElement('p'); meta.className = 'sub'; meta.textContent = b.rendered + ' of ' + b.chapters + ' chapters voiced';
+  const states = Array.from({ length: b.chapters }, (_, i) => i < b.rendered ? 'avail' : 'todo');
+  const sp = spineEl(states, -1); sp.style.margin = '12px 0';
+  const go = document.createElement('button'); go.className = 'btn'; go.textContent = 'Continue listening';
+  go.onclick = () => { openBook(b.id, true); };
+  col.append(kick, h, meta, sp, go);
+  box.append(cover, col);
 }
 
 // --- book + chapters -------------------------------------------------------
-async function openBook(id) {
+async function openBook(id, jumpPlay) {
   if (!id) return; $('#err').textContent = '';
   try {
     const prog = await api('/progress?user=' + encodeURIComponent(USER) + '&book=' + encodeURIComponent(id));
-    const lib = await api('/library?user=' + encodeURIComponent(USER));
-    const meta = lib.find(b => b.id === id) || { title: '(book)', chapters: prog.chapters.length };
-    book = { id, title: meta.title, chapters: prog.chapters };
-    $('#empty').style.display = 'none';
-    $('#bookhead').style.display = 'block';
-    $('#booktools').style.display = 'flex';
-    $('#bookhead').textContent = meta.title + ' — ' + prog.chapters.length + ' chapters';
-    renderChapters();
-    document.querySelectorAll('.bk').forEach(r => r.classList.toggle('on', r.dataset.id === id));
+    const meta = bookById(id) || { title: '(book)' };
+    book = { id, title: meta.title, chapters: prog.chapters || [] };
+    lastName = id; localStorage.setItem(LKEY, id);
+    state = {}; book.chapters.forEach(c => { state[c.idx] = cache.has(c.audio_ref) ? 'ready' : (c.rendered ? 'avail' : 'todo'); });
+    cur = -1;
+    const last = cache.size ? -1 : -1;  // resume position handled by loadedmetadata
+    renderPlay();
+    if (jumpPlay) show('play');
     try { const pos = await api('/position?user=' + encodeURIComponent(USER) + '&book=' + encodeURIComponent(id));
       if (pos && pos.chapter_index != null) idle('Resume at chapter ' + (pos.chapter_index + 1) + ', ' + Math.round(pos.offset_seconds) + 's.'); }
     catch (_) {}
-    pollStop();
-    idle('Loaded ' + meta.title + '.');
+    idle('Loaded ' + book.title + '.');
   } catch (e) { fail(e); }
 }
-function renderChapters() {
-  const box = $('#chapters'); box.innerHTML = '';
-  (book ? book.chapters : []).forEach(c => {
-    const row = document.createElement('div'); row.className = 'ch'; row.dataset.i = c.idx;
-    const n = document.createElement('span'); n.className = 'n'; n.textContent = String(c.idx + 1).padStart(2, '0');
-    const t = document.createElement('span'); t.className = 't'; t.textContent = c.title || ('Chapter ' + (c.idx + 1));
-    const st = document.createElement('span'); st.className = c.rendered ? 'rdy' : 'no'; st.textContent = c.rendered ? 'ready' : 'not rendered';
-    const b = document.createElement('button'); b.textContent = c.rendered ? 'Play' : 'Render'; b.disabled = !c.rendered;
-    b.onclick = () => play(c.idx, b);
-    row.append(n, t, st, b); box.append(row);
-  });
+
+function renderPlay() {
+  if (!book) { $('#npempty').style.display = 'block'; $('#np').style.display = 'none'; return; }
+  $('#npempty').style.display = 'none'; $('#np').style.display = 'block';
+  $('#npchars').textContent = nf(book.chapters.reduce((a, c) => a + (c.chars || 0), 0));
+  drawSpine();
+  if (cur < 0) { $('#npkicker').textContent = book.title; $('#nptitle').textContent = 'Choose a chapter'; $('#nptext').innerHTML = ''; return; }
+  const c = book.chapters.find(x => x.idx === cur);
+  $('#npkicker').textContent = book.title + ' · Chapter ' + (cur + 1) + ' of ' + book.chapters.length;
+  $('#nptitle').textContent = c.title || ('Chapter ' + (cur + 1));
+  drawNote();
+}
+function drawSpine() {
+  const box = $('#npspine'); box.className = 'spine';
+  const states = book.chapters.map(c => state[c.idx] || 'todo');
+  box.innerHTML = '';
+  states.forEach((s, i) => { const it = document.createElement('i'); it.className = s + (i === cur ? ' cur' : ''); box.append(it); });
+}
+function drawNote() {
+  const c = book.chapters.find(x => x.idx === cur); const n = $('#npnote'); n.className = 'small';
+  if (!c) return;
+  if (state[cur] === 'ready') n.textContent = 'This chapter is on your device, checked and ready.';
+  else if (state[cur] === 'fail') { n.textContent = 'This download failed its check. Use Download for offline to try again.'; n.className = 'note bad'; }
+  else if (state[cur] === 'avail') n.textContent = 'Still on the server. Fireside downloads and checks it before playing.';
+  else if (state[cur] === 'todo') n.textContent = 'Not voiced yet. Voice the whole book, then play.';
+}
+async function loadText(idx) {
+  try { const d = await api('/text?book=' + encodeURIComponent(book.id) + '&idx=' + idx);
+    const box = $('#nptext'); box.innerHTML = '';
+    (d.text || '').split(/\n\s*\n/).forEach((para, i) => {
+      const p = document.createElement('p'); if (i === 0) p.className = 'lead';
+      p.textContent = para.replace(/\s+/g, ' ').trim(); if (p.textContent) box.append(p);
+    });
+  } catch (e) { $('#nptext').innerHTML = '<p class="small">No text for this chapter.</p>'; }
 }
 
+// --- render all (book-level) ------------------------------------------------
 $('#renderall').onclick = async () => {
   needUser(); if (!book) return; $('#err').textContent = ''; $('#renderall').disabled = true;
   const vl = $('#voice').selectedOptions[0] ? $('#voice').selectedOptions[0].textContent : $('#voice').value;
-  busy('Rendering all chapters in ' + vl + '…');
+  busy('Voicing the whole book in ' + vl + '…');
   try {
     const r = await jpost('/render', { user: USER, book: book.id, provider: $('#provider').value,
       voice: $('#voice').value, speed: 1.0, cred: credValues() });
@@ -412,11 +548,11 @@ $('#renderall').onclick = async () => {
       await new Promise(res => setTimeout(res, 1200));
       const j = await api('/job?id=' + encodeURIComponent(r.job_id));
       if (j.status === 'error') throw new Error(j.error || 'render failed');
-      progress('Rendering  ·  ' + j.current + ' of ' + j.total + ' chapters');
+      progress('Voicing  ·  ' + j.current + ' of ' + j.total + ' chapters');
       bar(j.current, j.total);
       if (j.status === 'done') break;
     }
-    idle('All ' + r.total + ' chapters rendered.');
+    idle('All ' + r.total + ' chapters voiced.');
   } catch (e) { fail(e); }
   finally { $('#renderall').disabled = false; await openBook(book.id); }
 };
@@ -436,53 +572,68 @@ async function fetchChapter(id, idx, ref, nbytes) {
   cache.set(key, entry); return entry;
 }
 
-async function play(idx, btn) {
+async function play(idx) {
   if (!book) return; $('#err').textContent = '';
   const c = book.chapters.find(x => x.idx === idx); if (!c) return;
-  if (btn) btn.disabled = true;
   const vl = $('#voice').selectedOptions[0] ? $('#voice').selectedOptions[0].textContent : $('#voice').value;
+  state[idx] = state[idx] === 'ready' ? 'ready' : 'down'; drawSpine();
   busy('Downloading chapter ' + (idx + 1) + '…');
   try {
     const e = await fetchChapter(book.id, idx, c.audio_ref, c.audio_bytes);
     const a = $('#audio'); a.src = e.url;
     await jpost('/claim', { user: USER, book: book.id, device: DEVICE });
     a.play().catch(() => {});
-    cur = idx;
-    $('#now').textContent = (idx + 1) + '. ' + (c.title || '') + '  ·  ' + vl;
-    document.querySelectorAll('.ch').forEach(el => el.classList.toggle('playing', +el.dataset.i === idx));
+    cur = idx; state[idx] = 'ready';
+    renderPlay(); await loadText(idx);
     markResume(); pollStop();
     idle('Ready · ' + vl + ' · ' + fmt(e.bytes));
-  } catch (e) { fail(e); }
-  finally { if (btn) btn.disabled = false; }
+  } catch (err) { state[idx] = 'fail'; drawSpine(); drawNote(); fail(err); }
 }
 
+// --- transport -------------------------------------------------------------
+const $a = $('#audio');
+function syncTog() { $('#tog').textContent = $a.paused ? '▶' : '❚❚'; $('#tog').setAttribute('aria-label', $a.paused ? 'Play' : 'Pause'); }
+$('#tog').onclick = () => { if (!book || cur < 0) return; $a.paused ? $a.play().catch(()=>{}) : $a.pause(); };
+$('#back30').onclick = () => { $a.currentTime = Math.max(0, ($a.currentTime || 0) - 30); };
+const SPD = [1.0, 1.1, 1.25, 1.5]; let si = 1;
+$('#speed').onclick = () => { si = (si + 1) % SPD.length; $a.playbackRate = SPD[si]; $('#speed').textContent = SPD[si] + '×'; };
+$a.addEventListener('play', syncTog); $a.addEventListener('pause', syncTog);
+$a.addEventListener('timeupdate', () => {
+  const d = $a.duration || 0; $('#progfill').style.width = d ? (100 * $a.currentTime / d) + '%' : '0';
+  $('#tcur').textContent = mmss($a.currentTime);
+  $('#tleft').textContent = '−' + mmss(Math.max(0, d - $a.currentTime));
+});
+$('#prog').onclick = e => { const d = $a.duration || 0; if (!d) return;
+  const r = $('#prog').getBoundingClientRect(); $a.currentTime = d * Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); };
+
 // --- position + handoff ----------------------------------------------------
-async function savePosition(exact) {
+async function savePosition() {
   if (!book || cur < 0) return;
   try { await jpost('/position', { user: USER, book: book.id, chapter_index: cur,
-    offset_seconds: $('#audio').currentTime || 0, device: DEVICE }); } catch (_) {}
+    offset_seconds: $a.currentTime || 0, device: DEVICE }); } catch (_) {}
 }
-function markResume() { clearInterval(timer); timer = setInterval(() => savePosition(false), 15000); }
-$('#audio').addEventListener('pause', () => savePosition(true));
-$('#audio').addEventListener('seeked', () => savePosition(true));
-$('#audio').addEventListener('loadedmetadata', async () => {
+let timer = null;
+function markResume() { clearInterval(timer); timer = setInterval(savePosition, 15000); }
+$a.addEventListener('pause', savePosition);
+$a.addEventListener('seeked', savePosition);
+$a.addEventListener('loadedmetadata', async () => {
   if (!book || cur < 0) return;
   try { const p = await api('/position?user=' + encodeURIComponent(USER) + '&book=' + encodeURIComponent(book.id));
-    if (p && p.chapter_index === cur && p.offset_seconds > 3) $('#audio').currentTime = p.offset_seconds; } catch (_) {}
+    if (p && p.chapter_index === cur && p.offset_seconds > 3) $a.currentTime = p.offset_seconds; } catch (_) {}
 });
-$('#audio').addEventListener('ended', () => {
+$a.addEventListener('ended', () => {
   if (!book || cur < 0) return;
-  const nx = cur + 1;
-  const c = book.chapters.find(x => x.idx === nx);
-  if (c && c.rendered) { const b = document.querySelector('.ch[data-i="' + nx + '"] button'); play(nx, b); }
-  else idle('Paused at the next chapter (not sequential or not rendered).');
+  const nx = cur + 1; const c = book.chapters.find(x => x.idx === nx);
+  if (c && c.rendered) play(nx);
+  else idle('Paused at the next chapter (not voiced yet).');
 });
+let stopTimer = null;
 function pollStop() {
   clearInterval(stopTimer);
   stopTimer = setInterval(async () => {
     if (!book) return;
     try { const d = await api('/stop?user=' + encodeURIComponent(USER) + '&book=' + encodeURIComponent(book.id) + '&device=' + DEVICE);
-      if (d.stop) { $('#audio').pause(); await savePosition(true);
+      if (d.stop) { $a.pause(); await savePosition();
         await jpost('/ack', { user: USER, book: book.id, device: DEVICE }); idle('Stopped — another device took over.'); } }
     catch (_) {}
   }, 5000);
@@ -492,14 +643,18 @@ function pollStop() {
 $('#offline').onclick = async () => {
   if (!book) return; needUser(); $('#err').textContent = '';
   const ready = book.chapters.filter(c => c.rendered), notReady = book.chapters.filter(c => !c.rendered);
-  if (!ready.length) { idle('Nothing converted yet — render first.'); return; }
+  if (!ready.length) { idle('Nothing voiced yet — voice the book first.'); return; }
   busy('Downloading ' + ready.length + ' chapter(s) for offline…');
   let done = 0;
   try {
-    for (const c of ready) { await fetchChapter(book.id, c.idx, c.audio_ref, c.audio_bytes); done++; bar(done, ready.length);
-      progress('Downloading for offline  ·  ' + done + ' of ' + ready.length); }
-    idle(done + ' chapter(s) cached' + (notReady.length ? '  ·  ' + notReady.length + ' not converted yet (render to include them).' : '.'));
-  } catch (e) { fail(e); }
+    for (const c of ready) {
+      state[c.idx] = 'down'; drawSpine();
+      await fetchChapter(book.id, c.idx, c.audio_ref, c.audio_bytes);
+      state[c.idx] = 'ready'; drawSpine(); done++; bar(done, ready.length);
+      progress('Downloading for offline  ·  ' + done + ' of ' + ready.length);
+    }
+    idle(done + ' chapter(s) ready offline' + (notReady.length ? '  ·  ' + notReady.length + ' not voiced yet.' : '.'));
+  } catch (e) { if (cur >= 0) state[cur] = 'fail'; drawSpine(); fail(e); }
 };
 
 // --- boot ------------------------------------------------------------------
@@ -507,7 +662,9 @@ window.addEventListener('load', async () => {
   try { await initAuth(); } catch (_) {}
   try { await loadPlugins(); } catch (e) { fail(e); }
   if (saved.voice) { const o = document.createElement('option'); o.value = saved.voice; o.textContent = (saved.voiceLabel || saved.voice) + ' (saved)'; $('#voice').prepend(o); }
-  loadLibrary();
+  await loadLibrary();
+  if (lastName) { try { await openBook(lastName); } catch (_) {} }
+  syncTog();
 });
 </script>
 </body>

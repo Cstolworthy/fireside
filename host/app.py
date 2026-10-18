@@ -11,7 +11,8 @@ Endpoints (JSON unless noted):
   POST /import   {user, kind, url|data_b64, filename}   reader -> book
   POST /render   {user, book, provider, voice, model, chapters?}   -> {job_id}
   GET  /job?id=                              job status
-  GET  /progress?user=&book=                 per-chapter rendered status
+  GET  /progress?user=&book=                 per-chapter title, chars, rendered status
+  GET  /text?book=&idx=                      the chapter text (story page, no audio)
   GET  /chapter?book=&idx=                   raw audio bytes (verify-before-play)
   GET  /position?user=&book=                 current position
   POST /position {user, book, chapter_index, offset_seconds, device}
@@ -213,10 +214,21 @@ class App:
     def progress(self, q, body):
         ch = library.chapters(self.conn, q.get("book", ""))
         return 200, {"chapters": [
-            {"idx": c["idx"], "rendered": bool(c["audio_ref"]),
+            {"idx": c["idx"], "title": c["title"], "chars": c["chars"],
+             "rendered": bool(c["audio_ref"]),
              "audio_ref": c["audio_ref"], "audio_bytes": c["audio_bytes"],
              "provider": c["provider"], "voice": c["voice"], "model": c["model"]}
             for c in ch]}
+
+    def text(self, q, body):
+        """The chapter's text, for the now-playing page. Not the audio path."""
+        try:
+            idx = int(q["idx"])
+            t = library.chapter_text(self.conn, self.storage, q["book"], idx)
+        except (KeyError, ValueError):
+            return 404, {"error": "no chapter"}
+        rows = [c for c in library.chapters(self.conn, q["book"]) if c["idx"] == idx]
+        return 200, {"text": t, "title": rows[0]["title"] if rows else ""}
 
     def chapter(self, q, body):
         idx = int(q["idx"])
@@ -272,6 +284,7 @@ GET_ROUTES = {
     "/": "ui", "/index.html": "ui",
     "/health": "health", "/plugins": "plugins", "/library": "library_list",
     "/job": "job", "/progress": "progress", "/chapter": "chapter",
+    "/text": "text",
     "/position": "get_position", "/stop": "stop",
     "/auth/providers": "auth_providers", "/me": "me",
 }

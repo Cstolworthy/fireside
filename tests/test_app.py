@@ -159,6 +159,22 @@ class TestApp(unittest.TestCase):
             self._get("/chapter?book=%s&idx=0" % imp["book_id"])
         self.assertEqual(cm.exception.code, 409)
 
+    def test_text_and_progress_fields(self):
+        # the story page reads /text; the player counts chars from /progress
+        s, imp = self._post("/import", {"user": "u1", "kind": "upload"})
+        bid = imp["book_id"]
+        s, tx = self._jget("/text?book=%s&idx=0" % bid)
+        self.assertEqual(s, 200)
+        self.assertEqual(tx["text"], "hello world")
+        self.assertEqual(tx["title"], "c0")
+        import urllib.error
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._get("/text?book=%s&idx=99" % bid)
+        self.assertEqual(cm.exception.code, 404)
+        s, prog = self._jget("/progress?user=u1&book=%s" % bid)
+        self.assertEqual(prog["chapters"][1]["title"], "c1")
+        self.assertEqual(prog["chapters"][0]["chars"], len("hello world"))
+
     def test_voices_endpoint(self):
         s, d = self._post("/voices", {"provider": "fake"})
         self.assertEqual(s, 200)
