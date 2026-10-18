@@ -165,6 +165,29 @@
   .connhead .useme{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--soft);text-transform:none;letter-spacing:0}
   .conncard label{margin-top:10px}
   .connrow{display:flex;gap:8px;margin-top:14px}
+  /* --- the book page: chapters you can pick, and a convert dialog --------- */
+  .chaplistwrap{margin-top:16px}
+  .chaplisthead{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  .chaplisthead h3{font:600 12px var(--ui);text-transform:uppercase;letter-spacing:.6px;color:var(--faint);margin:0}
+  .chaplisthead .small{margin-left:auto}
+  .chaplist{max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+  .chap{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-size:13px}
+  .chap:last-child{border-bottom:0}
+  .chap:hover{background:var(--raise)}
+  .chap.cur{background:var(--raise)}
+  .chap .chk{width:auto;padding:0;border:0;background:none;margin:0;flex:none;accent-color:var(--flame);cursor:pointer}
+  .chap .cnum{color:var(--faint);font-variant-numeric:tabular-nums;min-width:18px;text-align:right}
+  .chap .ctitle{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--soft)}
+  .chap.cur .ctitle{color:var(--text)}
+  .chap .cbadge{font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:var(--faint);border:1px solid var(--line);border-radius:999px;padding:1px 7px;flex:none}
+  .chap .cbadge.ready{color:var(--ready);border-color:var(--ready)}
+  .chap .cbadge.avail{color:var(--flame);border-color:var(--flame)}
+  .chap .cbadge.fail{color:var(--warn);border-color:var(--warn)}
+  .modal{position:fixed;inset:0;z-index:90;display:grid;place-items:center;background:#0009;padding:20px}
+  .modal[hidden]{display:none}
+  .modal .sheet{width:100%;max-width:420px;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:26px;box-shadow:0 20px 60px #000a}
+  .modal .sheet h3{font:600 20px var(--serif);margin-bottom:4px}
+  .modal .connrow{justify-content:flex-end;flex-wrap:wrap}
 </style>
 </head>
 <body>
@@ -256,9 +279,13 @@
           </div>
           <div class="spine" id="npspine"></div>
           <p class="small" id="npnote" style="margin-top:8px"></p>
+          <div class="chaplistwrap">
+            <div class="chaplisthead"><h3>Chapters</h3><span class="small" id="nplistsel"></span></div>
+            <div id="nplist" class="chaplist"></div>
+          </div>
           <div class="row" style="margin-top:14px">Characters in this book<span class="r" id="npchars">0</span></div>
           <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
-            <button class="btn quiet" id="renderall">Voice the whole book</button>
+            <button class="btn quiet" id="convertbtn">Convert to voice</button>
             <button class="btn quiet" id="offline">Download for offline</button>
           </div>
         </aside>
@@ -307,6 +334,21 @@
 </main>
 <div id="ribbon" class=""><span class="spin" id="rspin" style="display:none"></span><span class="rtext" id="rtext"></span><span class="rtime" id="rtime"></span><span class="rprog" id="rprog"><i id="rprogfill"></i></span><button class="rbtn" id="rdismiss" type="button" hidden>Dismiss</button></div>
 <div id="toasts"></div>
+<div class="modal" id="convertdlg" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="Convert to voice">
+    <h3>Convert to voice</h3>
+    <p class="small" id="cvcount" style="margin-top:6px"></p>
+    <label>Voice server</label>
+    <select id="cvconn"></select>
+    <label>Voice</label>
+    <select id="cvvoice"><option value="">load voices…</option></select>
+    <div class="connrow">
+      <button class="btn quiet" id="cvcancel" type="button">Cancel</button>
+      <button class="btn quiet" id="cvsel" type="button">Convert selected</button>
+      <button class="btn" id="cvall" type="button">Convert all</button>
+    </div>
+  </div>
+</div>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -314,6 +356,8 @@ const UKEY = 'fireside.user', SKEY = 'fireside.settings', LKEY = 'fireside.lastb
 let USER = localStorage.getItem(UKEY) || '';
 let plugins = null, sources = [], voices = [], books = [], book = null, cur = -1;
 let state = {};                 // idx -> ready | avail | down | voice | fail | miss | todo
+let SELECT = new Set();         // chapter idx chosen for a conditional convert
+const BADGE = { ready: 'on device', avail: 'voiced', voice: 'voicing', down: '…', fail: 'failed', todo: '', miss: 'missing' };
 let lastName = localStorage.getItem(LKEY) || '';
 const cache = new Map();        // audio_ref -> {url, bytes}   verified this session
 
@@ -733,7 +777,7 @@ async function ingestFile(f) {
   needUser(); $('#err').textContent = ''; busy('Reading ' + f.name + '…');
   try { const b64 = await fileB64(f);
     const d = await jpost('/import', { user: USER, kind: 'upload', filename: f.name, data_b64: b64 });
-    show('lib'); await loadLibrary(); await openBook(d.book_id);
+    await loadLibrary(); await openBook(d.book_id, true);
   } catch (e) { fail(e); }
 }
 $('#loadurl').onclick = loadUrl;
@@ -742,7 +786,7 @@ async function loadUrl() {
   const url = $('#url').value.trim(); if (!url) return; needUser(); $('#err').textContent = '';
   busy('Fetching the page and pulling the story out…');
   try { const d = await jpost('/import', { user: USER, kind: 'url', url });
-    show('lib'); await loadLibrary(); await openBook(d.book_id);
+    await loadLibrary(); await openBook(d.book_id, true);
   } catch (e) { fail(e); }
 }
 
@@ -799,7 +843,7 @@ async function openBook(id, jumpPlay) {
     const meta = bookById(id) || { title: '(book)' };
     book = { id, title: meta.title, chapters: prog.chapters || [] };
     lastName = id; localStorage.setItem(LKEY, id);
-    state = {}; book.chapters.forEach(c => { state[c.idx] = cache.has(c.audio_ref) ? 'ready' : (c.rendered ? 'avail' : 'todo'); });
+    state = {}; SELECT.clear(); book.chapters.forEach(c => { state[c.idx] = cache.has(c.audio_ref) ? 'ready' : (c.rendered ? 'avail' : 'todo'); });
     cur = -1;
     const last = cache.size ? -1 : -1;  // resume position handled by loadedmetadata
     renderPlay();
@@ -811,6 +855,7 @@ async function openBook(id, jumpPlay) {
   } catch (e) { fail(e); }
 }
 
+// --- chapter list: pick a chapter to play, tick one to convert ------------
 function renderPlay() {
   if (!book) { $('#npempty').style.display = 'block'; $('#np').style.display = 'none'; return; }
   $('#npempty').style.display = 'none'; $('#np').style.display = 'block';
@@ -822,11 +867,44 @@ function renderPlay() {
   $('#nptitle').textContent = c.title || ('Chapter ' + (cur + 1));
   drawNote();
 }
+function renderChapterList() {
+  const box = $('#nplist'); if (!box) return;
+  box.innerHTML = '';
+  if (!book) { renderSelCount(); return; }
+  book.chapters.forEach(c => {
+    const row = document.createElement('div');
+    row.className = 'chap' + (c.idx === cur ? ' cur' : '');
+    const chk = document.createElement('input'); chk.type = 'checkbox'; chk.className = 'chk';
+    chk.checked = SELECT.has(c.idx); chk.title = 'Select for conversion';
+    chk.onclick = e => { e.stopPropagation();
+      if (chk.checked) SELECT.add(c.idx); else SELECT.delete(c.idx); renderSelCount(); };
+    const num = document.createElement('span'); num.className = 'cnum'; num.textContent = c.idx + 1;
+    const ttl = document.createElement('span'); ttl.className = 'ctitle'; ttl.textContent = c.title || ('Chapter ' + (c.idx + 1));
+    const bdg = document.createElement('span'); bdg.className = 'cbadge ' + (state[c.idx] || 'todo');
+    bdg.textContent = BADGE[state[c.idx] || 'todo'] || '';
+    row.append(chk, num, ttl, bdg);
+    row.onclick = () => selectChapter(c.idx);
+    box.append(row);
+  });
+  renderSelCount();
+}
+function renderSelCount() { const s = $('#nplistsel'); if (!s) return;
+  s.textContent = (book && SELECT.size) ? SELECT.size + ' selected' : ''; }
+// Clicking a chapter opens it on this page. A voiced chapter starts playing; an
+// unvoiced one just shows its text until you convert it.
+function selectChapter(idx) {
+  const c = book && book.chapters.find(x => x.idx === idx); if (!c) return;
+  if (c.rendered) play(idx, true);
+  else { cur = idx; renderPlay(); loadText(idx); }
+}
 function drawSpine() {
   const box = $('#npspine'); box.className = 'spine';
   const states = book.chapters.map(c => state[c.idx] || 'todo');
   box.innerHTML = '';
-  states.forEach((s, i) => { const it = document.createElement('i'); it.className = s + (i === cur ? ' cur' : ''); box.append(it); });
+  states.forEach((s, i) => { const it = document.createElement('i'); it.className = s + (i === cur ? ' cur' : '');
+    it.style.cursor = 'pointer'; it.title = 'Chapter ' + (i + 1);
+    it.onclick = () => selectChapter(i); box.append(it); });
+  renderChapterList();
 }
 function drawNote() {
   const c = book.chapters.find(x => x.idx === cur); const n = $('#npnote'); n.className = 'small';
@@ -834,7 +912,7 @@ function drawNote() {
   if (state[cur] === 'ready') n.textContent = 'This chapter is on your device, checked and ready.';
   else if (state[cur] === 'fail') { n.textContent = 'This download failed its check. Use Download for offline to try again.'; n.className = 'note bad'; }
   else if (state[cur] === 'avail') n.textContent = 'Still on the server. Fireside downloads and checks it before playing.';
-  else if (state[cur] === 'todo') n.textContent = 'Not voiced yet. Voice the whole book, then play.';
+  else if (state[cur] === 'todo') n.textContent = 'Not voiced yet. Use Convert to voice first.';
 }
 async function loadText(idx) {
   try { const d = await api('/text?book=' + encodeURIComponent(book.id) + '&idx=' + idx);
@@ -846,26 +924,62 @@ async function loadText(idx) {
   } catch (e) { $('#nptext').innerHTML = '<p class="small">No text for this chapter.</p>'; }
 }
 
-// --- render all (book-level) ------------------------------------------------
-$('#renderall').onclick = async () => {
-  needUser(); if (!book) return; $('#err').textContent = ''; $('#renderall').disabled = true;
-  const vl = $('#voice').selectedOptions[0] ? $('#voice').selectedOptions[0].textContent : $('#voice').value;
-  busy('Voicing the whole book in ' + vl + '…');
+// --- convert to voice (book-level; all, or just the ticked chapters) -------
+function openConvert() {
+  needUser(); if (!book || !book.chapters.length) return;
+  $('#err').textContent = '';
+  const total = book.chapters.length, n = SELECT.size;
+  $('#cvcount').textContent = 'Convert all ' + total + ' chapter' + (total === 1 ? '' : 's') +
+    (n ? ', or only the ' + n + ' you ticked.' : '. Tick chapters to convert just those.');
+  const sc = $('#cvconn'); sc.innerHTML = '';
+  CONNS.filter(c => c.enabled !== false).forEach(c => { const o = document.createElement('option');
+    o.value = c.id; o.textContent = (c.label || c.provider) + (c.system ? ' (shared)' : ''); sc.append(o); });
+  if (PREFS.default_connection_id && CONNS.some(c => c.id === PREFS.default_connection_id)) sc.value = PREFS.default_connection_id;
+  else if (CONNS.length) sc.value = CONNS[0].id;
+  $('#cvall').textContent = 'Convert all ' + total;
+  $('#cvsel').disabled = !n;
+  $('#cvsel').textContent = n ? 'Convert ' + n + ' selected' : 'Convert selected';
+  $('#convertdlg').hidden = false;
+  loadCvVoices();
+}
+async function loadCvVoices() {
+  const vs = $('#cvvoice'), cid = $('#cvconn').value;
+  vs.innerHTML = '<option value="">loading…</option>';
+  if (!cid) { vs.innerHTML = '<option value="">—</option>'; return; }
   try {
-    const r = await jpost('/render', { user: USER, book: book.id, connection_id: $('#dconn').value,
-      voice: $('#voice').value, speed: 1.0 });
+    const d = await jpost('/voices', { connection_id: cid });
+    vs.innerHTML = '';
+    (d.voices || []).forEach(v => { const o = document.createElement('option'); o.value = v.id; o.textContent = v.label || v.id; vs.append(o); });
+    if (PREFS.default_voice && (d.voices || []).some(v => v.id === PREFS.default_voice)) vs.value = PREFS.default_voice;
+    if (!vs.options.length) vs.innerHTML = '<option value="">no voices</option>';
+  } catch (e) { vs.innerHTML = '<option value="">could not load voices</option>'; }
+}
+$('#cvconn').onchange = loadCvVoices;
+$('#cvcancel').onclick = () => { $('#convertdlg').hidden = true; };
+$('#cvall').onclick = () => { $('#convertdlg').hidden = true; runConvert(null, 'all ' + book.chapters.length); };
+$('#cvsel').onclick = () => { const list = [...SELECT]; $('#convertdlg').hidden = true;
+  runConvert(list, list.length + ' chapter' + (list.length === 1 ? '' : 's')); };
+async function runConvert(list, label) {
+  $('#err').textContent = '';
+  busy('Converting ' + label + '…');
+  try {
+    const body = { user: USER, book: book.id, connection_id: $('#cvconn').value,
+      voice: $('#cvvoice').value, speed: 1.0 };
+    if (list) body.chapters = list;
+    const r = await jpost('/render', body);
     while (true) {
       await new Promise(res => setTimeout(res, 1200));
       const j = await api('/job?id=' + encodeURIComponent(r.job_id));
       if (j.status === 'error') throw new Error(j.error || 'render failed');
-      progress('Voicing  ·  ' + j.current + ' of ' + j.total + ' chapters');
+      progress('Converting  ·  ' + j.current + ' of ' + j.total + ' chapters');
       bar(j.current, j.total);
       if (j.status === 'done') break;
     }
-    idle('All ' + r.total + ' chapters voiced.');
+    idle('Converted ' + r.total + ' chapter' + (r.total === 1 ? '' : 's') + '.');
   } catch (e) { fail(e); }
-  finally { $('#renderall').disabled = false; await openBook(book.id); }
-};
+  finally { SELECT.clear(); await openBook(book.id); }
+}
+$('#convertbtn').onclick = openConvert;
 
 // --- verify-before-play ----------------------------------------------------
 async function fetchChapter(id, idx, ref, nbytes) {
@@ -882,20 +996,19 @@ async function fetchChapter(id, idx, ref, nbytes) {
   cache.set(key, entry); return entry;
 }
 
-async function play(idx) {
+async function play(idx, autoplay = true) {
   if (!book) return; $('#err').textContent = '';
   const c = book.chapters.find(x => x.idx === idx); if (!c) return;
   const vl = $('#voice').selectedOptions[0] ? $('#voice').selectedOptions[0].textContent : $('#voice').value;
   state[idx] = state[idx] === 'ready' ? 'ready' : 'down'; drawSpine();
-  busy('Downloading chapter ' + (idx + 1) + '…');
+  busy((autoplay ? 'Downloading chapter ' : 'Loading chapter ') + (idx + 1) + '…');
   try {
     const e = await fetchChapter(book.id, idx, c.audio_ref, c.audio_bytes);
     const a = $('#audio'); a.src = e.url;
-    await jpost('/claim', { user: USER, book: book.id, device: DEVICE });
-    a.play().catch(() => {});
+    if (autoplay) { await jpost('/claim', { user: USER, book: book.id, device: DEVICE }); a.play().catch(() => {}); }
     cur = idx; state[idx] = 'ready';
     renderPlay(); await loadText(idx);
-    markResume(); pollStop();
+    if (autoplay) { markResume(); pollStop(); }
     idle('Ready · ' + vl + ' · ' + fmt(e.bytes));
   } catch (err) { state[idx] = 'fail'; drawSpine(); drawNote(); fail(err); }
 }

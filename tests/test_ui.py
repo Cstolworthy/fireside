@@ -253,3 +253,84 @@ class TestAppShell(unittest.TestCase):
         html = self._html()
         for anchor in ('id="conns"', 'id="dconn"', 'id="addconn"', 'id="cprovider"'):
             self.assertIn(anchor, html)
+
+
+class TestBookPageConvert(unittest.TestCase):
+    """The book page: chapters you can pick, and a convert dialog that runs all
+    of them or just the ones the reader ticked."""
+
+    def _html(self):
+        with open(os.path.join(UI_DIR, "index.html"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_book_page_has_a_chapter_list_and_a_convert_dialog(self):
+        html = self._html()
+        self.assertIn('id="nplist"', html)       # the pickable chapter list
+        self.assertIn('id="convertbtn"', html)
+        self.assertIn("Convert to voice", html)
+        self.assertNotIn("Voice the whole book", html)
+        for anchor in ('id="convertdlg"', 'id="cvall"', 'id="cvsel"',
+                       'id="cvconn"', 'id="cvvoice"'):
+            self.assertIn(anchor, html)
+
+    def test_import_lands_on_the_book_page(self):
+        html = self._html()
+        # a successful parse opens the book page (both the file and url paths)
+        self.assertIn("openBook(d.book_id, true)", html)
+        self.assertGreaterEqual(html.count("openBook(d.book_id, true)"), 2)
+
+    def test_convert_sends_only_the_ticked_chapters(self):
+        html = self._html()
+        self.assertIn("body.chapters = list", html)   # subset travels to /render
+
+
+class TestConditionalRender(unittest.TestCase):
+    """A convert of a subset renders that subset and leaves the rest alone. The
+    host accepts {chapters:[...]} so a reader can voice a few chapters now."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        root = os.path.join(self.tmp, "plugins")
+        write_plugin(root, "reader", "fake", order=10, body=READER_BODY)
+        write_plugin(root, "speech", "fake", body=SPEECH_BODY)
+        write_plugin(root, "storage", "mem", body=STORAGE_BODY)
+        self.app = App(root, db_path=os.path.join(self.tmp, "db.sqlite"),
+                       storage_id="mem")
+        from http.server import ThreadingHTTPServer
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.app))
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+
+    def _post(self, path, obj):
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d%s" % (self.port, path),
+            data=json.dumps(obj).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as r:
+            return json.loads(r.read())
+
+    def _jget(self, path):
+        with urllib.request.urlopen("http://127.0.0.1:%d%s" % (self.port, path)) as r:
+            return json.loads(r.read())
+
+    def test_render_subset_leaves_the_others_unvoiced(self):
+        imp = self._post("/import", {"user": "u1", "kind": "upload",
+                                     "filename": "x.epub"})
+        bid = imp["book_id"]
+        r = self._post("/render", {"user": "u1", "book": bid, "provider": "fake",
+                                   "voice": "vv", "chapters": [1]})
+        import time
+        for _ in range(100):
+            job = self._jget("/job?id=%s" % r["job_id"])
+            if job["status"] in ("done", "error"):
+                break
+            time.sleep(0.05)
+        self.assertEqual(job["status"], "done")
+        self.assertEqual(job["total"], 1)
+        prog = self._jget("/progress?user=u1&book=%s" % bid)["chapters"]
+        by_idx = {c["idx"]: c for c in prog}
+        self.assertFalse(by_idx[0]["rendered"])
+        self.assertTrue(by_idx[1]["rendered"])
