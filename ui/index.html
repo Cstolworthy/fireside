@@ -269,7 +269,7 @@
   <!-- settings -->
   <section class="view" id="v-set">
     <h2>Settings</h2>
-    <p class="sub">Voice servers live on this server. Keys never reach your browser.</p>
+    <p class="sub">Voice servers and source logins live on this server. Keys never reach your browser.</p>
     <div id="conns"></div>
     <div style="margin-top:14px"><button class="btn quiet" id="addconn" type="button">＋ Add a voice server</button></div>
     <div class="addpanel" id="connform" hidden>
@@ -296,7 +296,7 @@
     </div>
     <div id="srcpanel" style="display:none">
       <label>Text sources</label>
-      <p class="hint" style="margin-top:0">Each source asks for what it needs (AO3 asks for a cookie). These stay in this browser.</p>
+      <p class="hint" style="margin-top:0">Each source asks for what it needs (AO3 asks for a cookie). These live on the server, never in this browser.</p>
       <div id="sources"></div>
     </div>
   </section>
@@ -438,8 +438,41 @@ document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.
 // switch a shared server off for themselves, and may add their own.
 let saved = {}; try { saved = JSON.parse(localStorage.getItem(SKEY) || '{}'); } catch (_) {}
 let CONNS = [], PREFS = { default_connection_id: '', default_voice: '' };
-function srcValues() { const o = {}; document.querySelectorAll('#sources [data-src]').forEach(el => { if (el.value) { (o[el.dataset.src] = o[el.dataset.src] || {})[el.dataset.field] = el.value; } }); return o; }
-function readerCred() { const all = srcValues(); const o = {}; Object.values(all).forEach(v => Object.assign(o, v)); return o; }
+let SOURCES = [];
+function _srcInputs(sid) { const o = {}; document.querySelectorAll(`#sources [data-src="${sid}"][data-field]`).forEach(el => { if (el.value) o[el.dataset.field] = el.value; }); return o; }
+async function loadSources() {
+  try { const d = await api('/source-creds'); SOURCES = d.sources || []; } catch (_) { SOURCES = []; }
+  renderSources();
+}
+function renderSources() {
+  const panel = $('#srcpanel'), box = $('#sources');
+  if (!panel || !box) return;
+  if (!SOURCES.length) { panel.style.display = 'none'; return; }
+  panel.style.display = 'block'; box.innerHTML = '';
+  SOURCES.forEach(s => {
+    const wrap = document.createElement('div'); wrap.className = 'conncard';
+    const h = document.createElement('div'); h.className = 'conntitle'; h.textContent = s.label || s.id; wrap.append(h);
+    (s.fields || []).forEach(f => {
+      const lab = document.createElement('label'); lab.textContent = f.label || f.name; wrap.append(lab);
+      const inp = document.createElement('input');
+      inp.type = f.sensitive ? 'password' : 'text';
+      inp.dataset.src = s.id; inp.dataset.field = f.name;
+      inp.placeholder = f.placeholder || (f.sensitive ? (f.set ? '•••••• saved' : 'not set') : '');
+      wrap.append(inp);
+      if (f.help) { const hh = document.createElement('div'); hh.className = 'hint'; hh.textContent = f.help; wrap.append(hh); }
+    });
+    const row = document.createElement('div'); row.className = 'connrow';
+    const sv = document.createElement('button'); sv.className = 'btn'; sv.type = 'button'; sv.textContent = 'Save';
+    sv.onclick = async () => { busy('Saving ' + (s.label || s.id) + '\u2026');
+      try { await jpost('/source-creds', { id: s.id, data: _srcInputs(s.id) }); await loadSources(); idle('Saved.'); } catch (e) { fail(e); } };
+    row.append(sv);
+    const cl = document.createElement('button'); cl.className = 'btn quiet'; cl.type = 'button'; cl.textContent = 'Clear';
+    cl.onclick = async () => { if (!confirm('Clear the stored ' + (s.label || s.id) + ' values?')) return;
+      try { await jpost('/source-creds/delete', { id: s.id }); await loadSources(); idle('Cleared.'); } catch (e) { fail(e); } };
+    row.append(cl);
+    wrap.append(row); box.append(wrap);
+  });
+}
 function providerFields(pid) { const p = (plugins.speech || []).find(x => x.id === pid); return p ? (p.settings || []) : []; }
 function connById(id) { return CONNS.find(c => c.id === id); }
 
@@ -524,25 +557,8 @@ function renderDefaultPicker() {
 
 async function loadPlugins() {
   plugins = await api('/plugins');
-  const readers = (plugins.readers || []).filter(r => (r.settings || []).length);
-  if (readers.length) {
-    $('#srcpanel').style.display = 'block';
-    const box = $('#sources'); box.innerHTML = '';
-    readers.forEach(r => {
-      const wrap = document.createElement('div'); wrap.style.margin = '8px 0';
-      const h = document.createElement('div'); h.className = 'small'; h.style.marginBottom = '3px'; h.textContent = r.label || r.id; wrap.append(h);
-      (r.settings || []).forEach(f => {
-        const lab = document.createElement('label'); lab.textContent = f.label || f.name; wrap.append(lab);
-        const inp = document.createElement('input'); inp.type = f.kind === 'password' ? 'password' : 'text';
-        inp.dataset.src = r.id; inp.dataset.field = f.name; inp.placeholder = f.placeholder || '';
-        const v = ((saved.sources || {})[r.id] || {})[f.name]; if (v) inp.value = v;
-        wrap.append(inp);
-        if (f.help) { const hh = document.createElement('div'); hh.className = 'hint'; hh.textContent = f.help; wrap.append(hh); }
-      });
-      box.append(wrap);
-    });
-  }
   await loadConnections();
+  await loadSources();
 }
 
 // --- add a voice server (yours; the admin can share one) -------------------
@@ -572,7 +588,7 @@ $('#save').onclick = async () => {
   try {
     await jpost('/prefs', { default_connection_id: $('#dconn').value, default_voice: $('#voice').value });
     PREFS.default_connection_id = $('#dconn').value; PREFS.default_voice = $('#voice').value;
-    saved = Object.assign({}, saved, { voice: $('#voice').value, sources: srcValues() });
+    saved = Object.assign({}, saved, { voice: $('#voice').value });
     localStorage.setItem(SKEY, JSON.stringify(saved));
     idle('Saved.');
   } catch (e) { fail(e); }
@@ -704,7 +720,7 @@ function fileB64(f) { return new Promise((res, rej) => { const r = new FileReade
 async function ingestFile(f) {
   needUser(); $('#err').textContent = ''; busy('Reading ' + f.name + '…');
   try { const b64 = await fileB64(f);
-    const d = await jpost('/import', { user: USER, kind: 'upload', filename: f.name, data_b64: b64, cred: readerCred() });
+    const d = await jpost('/import', { user: USER, kind: 'upload', filename: f.name, data_b64: b64 });
     show('lib'); await loadLibrary(); await openBook(d.book_id);
   } catch (e) { fail(e); }
 }
@@ -713,7 +729,7 @@ $('#url').addEventListener('keydown', e => { if (e.key === 'Enter') loadUrl(); }
 async function loadUrl() {
   const url = $('#url').value.trim(); if (!url) return; needUser(); $('#err').textContent = '';
   busy('Fetching the page and pulling the story out…');
-  try { const d = await jpost('/import', { user: USER, kind: 'url', url, cred: readerCred() });
+  try { const d = await jpost('/import', { user: USER, kind: 'url', url });
     show('lib'); await loadLibrary(); await openBook(d.book_id);
   } catch (e) { fail(e); }
 }

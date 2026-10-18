@@ -141,10 +141,10 @@ class App:
         req = {"kind": body.get("kind", "url"), "url": body.get("url"),
                "filename": body.get("filename"),
                "data": base64.b64decode(body["data_b64"]) if body.get("data_b64") else None}
-        cred = body.get("cred") or {}
         plugin = self._pick_reader(req)
         if plugin is None:
             return 400, {"error": "no reader matched"}
+        cred = self._source_cred(user, plugin.id, body.get("cred"))
         book = plugin.obj.read(req, self._make_fetch(plugin.obj, cred), cred)
         bid = library.add_book(self.conn, self.storage, user, book)
         return 200, {"book_id": bid, "title": getattr(book, "title", ""),
@@ -167,6 +167,18 @@ class App:
         def f(url, **kw):
             return _fetch(url, cred=cred, credential_hosts=hosts, transport=tr)
         return f
+
+    def _source_cred(self, user, source_id, client_cred=None):
+        """The credential a source reads with. The server holds it; a value the
+        client sent for this source wins over a stored one (a fresh paste), and
+        otherwise the stored value fills in. A reader's login never has to live
+        in a browser."""
+        cred = dict(client_cred or {})
+        stored = credentials.get_credential(self.conn, user, "source:" + source_id)
+        for k, v in (stored or {}).items():
+            if v not in (None, ""):
+                cred.setdefault(k, v)
+        return cred
 
     # ---- render ---------------------------------------------------------------
 
@@ -297,6 +309,60 @@ class App:
         credentials.set_credential(self.conn, self._uid(q, body), body["provider"],
                                    body.get("data") or {})
         return 200, {"ok": True, "providers": credentials.providers(self.conn, self._uid(q, body))}
+
+    # ---- source credentials (server-side, never returned) ---------------------
+
+    def _source_field_defs(self, sid):
+        for p in self.host.readers:
+            if p.id == sid:
+                return self._fields(p.obj)
+        return []
+
+    def source_creds(self, q, body):
+        """Every reader that declares settings, with its fields and whether the
+        signed-in user has a stored value. A value is never returned."""
+        uid = self._uid(q, body)
+        out = []
+        for p in self.host.readers:
+            fields = self._fields(p.obj)
+            if not fields:
+                continue
+            stored = credentials.get_credential(self.conn, uid, "source:" + p.id)
+            fs = []
+            for f in fields:
+                name = f.get("name") or f.get("key") or ""
+                kind = f.get("kind") or f.get("type") or "text"
+                sensitive = self._sensitive(name, kind)
+                fs.append({"name": name, "label": f.get("label") or name,
+                           "kind": kind, "help": f.get("help") or "",
+                           "placeholder": f.get("placeholder") or "",
+                           "sensitive": sensitive,
+                           "set": bool(stored.get(name)) if stored else False,
+                           "value": ""})
+            out.append({"id": p.id, "label": p.label, "fields": fs})
+        return 200, {"sources": out}
+
+    def source_cred_save(self, q, body):
+        """Store a source's credential server-side for the signed-in user. An
+        empty field leaves the stored value alone, so re-saving a form that does
+        not re-type a secret never blanks it."""
+        uid = self._uid(q, body)
+        sid = body.get("id") or ""
+        defs = {f.get("name") or f.get("key"): (f.get("kind") or f.get("type") or "text")
+                for f in self._source_field_defs(sid)}
+        if not defs:
+            return 400, {"error": "unknown source"}
+        cur = credentials.get_credential(self.conn, uid, "source:" + sid)
+        for k, v in (body.get("data") or {}).items():
+            if k in defs and v not in (None, ""):
+                cur[k] = v
+        credentials.set_credential(self.conn, uid, "source:" + sid, cur)
+        return 200, {"ok": True}
+
+    def source_cred_delete(self, q, body):
+        uid = self._uid(q, body)
+        credentials.delete_credential(self.conn, uid, "source:" + (body.get("id") or ""))
+        return 200, {"ok": True}
 
     # ---- connections (voice servers, kept on the server) ---------------------
 
@@ -436,7 +502,7 @@ GET_ROUTES = {
     "/health": "health", "/plugins": "plugins", "/library": "library_list",
     "/job": "job", "/progress": "progress", "/chapter": "chapter",
     "/position": "get_position", "/stop": "stop", "/text": "text",
-    "/connections": "connections_list",
+    "/connections": "connections_list", "/source-creds": "source_creds",
     "/auth/providers": "auth_providers", "/me": "me", "/auth/policy": "auth_policy",
     "/auth/users": "auth_users",
 }
@@ -445,6 +511,7 @@ POST_ROUTES = {
     "/position": "put_position", "/claim": "claim", "/ack": "ack",
     "/credential": "put_credential", "/auth/registration": "set_registration",
     "/connections": "connection_save", "/connections/delete": "connection_delete",
+    "/source-creds": "source_cred_save", "/source-creds/delete": "source_cred_delete",
     "/connections/override": "connection_override", "/prefs": "prefs_set",
 }
 
