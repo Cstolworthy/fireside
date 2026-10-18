@@ -417,6 +417,9 @@ class App:
             if not connections.may_edit(cur, uid, is_admin):
                 return 403, {"error": "not yours to edit"}
             provider, scope = provider or cur["provider"], cur["scope"]
+            # an admin may share a server with the household, or stop sharing it
+            if is_admin and body.get("scope") in (connections.SYSTEM, connections.PERSONAL):
+                scope = body["scope"]
         elif scope == connections.SYSTEM and not is_admin:
             return 403, {"error": "only an admin adds a shared server"}
         if provider not in self.host.speech:
@@ -424,7 +427,7 @@ class App:
         defs = self._writable_fields(provider, uid, is_admin)
         data = {k: v for k, v in (body.get("data") or {}).items()
                 if k in defs and (is_admin or not self._sensitive(k, defs[k]))}
-        cid = connections.upsert(self.conn, uid, provider, body.get("label", ""),
+        cid = connections.upsert(self.conn, uid, provider, body.get("label"),
                                  data, scope=scope, conn_id=cid)
         return 200, {"ok": True, "id": cid}
 

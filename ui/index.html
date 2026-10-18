@@ -277,6 +277,7 @@
       <select id="cprovider"></select>
       <label>Label</label>
       <input id="clabel" placeholder="e.g. Tower Kokoro" autocomplete="off">
+      <label id="csharerow" style="display:flex;align-items:center;gap:8px;margin-top:10px"><input type="checkbox" id="cshare" style="width:auto"> Share with everyone (household)</label>
       <div id="cfields"></div>
       <div style="display:flex;gap:8px;margin-top:16px">
         <button class="btn" id="csave" type="button">Save server</button>
@@ -513,6 +514,14 @@ function renderConns() {
     if (c.editable) {
       const sv = document.createElement('button'); sv.className = 'btn'; sv.type = 'button'; sv.textContent = 'Save';
       sv.onclick = () => saveConn(c, card); row.append(sv);
+      if (AUTH.admin) {
+        const sh = document.createElement('button'); sh.className = 'btn quiet'; sh.type = 'button';
+        sh.textContent = c.system ? 'Stop sharing' : 'Share';
+        sh.onclick = async () => { busy(sh.textContent + '\u2026');
+          try { await jpost('/connections', { id: c.id, scope: c.system ? 'personal' : 'system' });
+            await loadConnections(); idle(c.system ? 'No longer shared.' : 'Shared with everyone.'); } catch (e) { fail(e); } };
+        row.append(sh);
+      }
       const rm = document.createElement('button'); rm.className = 'btn quiet'; rm.type = 'button'; rm.textContent = 'Remove';
       rm.onclick = async () => { if (!confirm('Remove ' + (c.label || c.provider) + '?')) return;
         try { await jpost('/connections/delete', { id: c.id }); await loadConnections(); idle('Removed.'); } catch (e) { fail(e); } };
@@ -563,7 +572,8 @@ async function loadPlugins() {
 
 // --- add a voice server (yours; the admin can share one) -------------------
 $('#addconn').onclick = () => { const p = $('#connform'); p.hidden = !p.hidden;
-  if (!p.hidden) { fillProviderSelect(); renderAddFields(); } };
+  if (!p.hidden) { fillProviderSelect(); renderAddFields();
+    $('#csharerow').style.display = AUTH.admin ? 'flex' : 'none'; } };
 $('#ccancel').onclick = () => { $('#connform').hidden = true; };
 function fillProviderSelect() { const sel = $('#cprovider');
   if (sel.options.length) return;
@@ -579,8 +589,10 @@ function renderAddFields() { const box = $('#cfields'); box.innerHTML = '';
 $('#csave').onclick = async () => {
   const data = {}; document.querySelectorAll('#cfields [data-field]').forEach(el => { if (el.value) data[el.dataset.field] = el.value; });
   busy('Adding the server…');
-  try { await jpost('/connections', { provider: $('#cprovider').value, label: $('#clabel').value, data });
-    $('#connform').hidden = true; $('#clabel').value = ''; await loadConnections(); idle('Server added.'); }
+  const scope = (AUTH.admin && $('#cshare').checked) ? 'system' : 'personal';
+  try { await jpost('/connections', { provider: $('#cprovider').value, label: $('#clabel').value, data, scope });
+    $('#connform').hidden = true; $('#clabel').value = ''; $('#cshare').checked = false;
+    await loadConnections(); idle(scope === 'system' ? 'Shared with everyone.' : 'Server added.'); }
   catch (e) { fail(e); }
 };
 $('#save').onclick = async () => {

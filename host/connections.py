@@ -88,11 +88,11 @@ def upsert(conn, owner_id, provider, label, data, scope=PERSONAL, conn_id=None):
         for k, v in (data or {}).items():
             if v not in (None, ""):
                 merged[k] = v
-        conn.execute("UPDATE connections SET provider=?,label=?,data=?,updated_at=? "
+        conn.execute("UPDATE connections SET provider=?,label=?,data=?,scope=?,updated_at=? "
                      "WHERE id=?",
                      (provider or cur["provider"],
                       cur["label"] if label is None else label,
-                      json.dumps(merged), now(), conn_id))
+                      json.dumps(merged), scope or cur["scope"], now(), conn_id))
         conn.commit()
         return conn_id
     cid = uuid.uuid4().hex
