@@ -78,6 +78,10 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS local_accounts (
     username VARCHAR(191) PRIMARY KEY, user_id VARCHAR(128), digest TEXT, salt TEXT,
     created_at VARCHAR(32));
+CREATE TABLE IF NOT EXISTS admins (
+    user_id VARCHAR(128) PRIMARY KEY, created_at VARCHAR(32));
+CREATE TABLE IF NOT EXISTS settings (
+    `key` VARCHAR(191) PRIMARY KEY, value TEXT);
 """
 
 
@@ -271,3 +275,4 @@ class MySQLConnection:
     def close(self):
         with self._lock:
             self._raw.close()
+

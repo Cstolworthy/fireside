@@ -75,8 +75,55 @@ def normalize_username(username):
     return (username or "").strip().lower()
 
 
+def account_count(conn):
+    """How many local accounts exist. The first one to arrive becomes admin."""
+    return conn.execute("SELECT COUNT(*) c FROM local_accounts").fetchone()["c"]
+
+
+def is_admin(conn, user_id):
+    if not user_id:
+        return False
+    return conn.execute("SELECT 1 FROM admins WHERE user_id=?",
+                        (user_id,)).fetchone() is not None
+
+
+def registration_open(conn):
+    """Can a stranger still make an account by themselves?
+
+    No setting row means yes: the default is that a fresh server is claimable,
+    and an admin closes the door once the household is set up. A closed door
+    never applies to the very first account.
+    """
+    row = conn.execute("SELECT value FROM settings WHERE `key`='registration'").fetchone()
+    if row is None:
+        return True
+    return str(row["value"]).strip().lower() in ("open", "1", "true", "yes", "on")
+
+
+def set_registration(conn, open_):
+    v = "open" if open_ else "closed"
+    conn.execute("DELETE FROM settings WHERE `key`='registration'")
+    conn.execute("INSERT INTO settings(`key`,value) VALUES('registration',?)", (v,))
+    conn.commit()
+    return v
+
+
+def local_accounts(conn):
+    rows = conn.execute("SELECT username,user_id,created_at FROM local_accounts"
+                        " ORDER BY created_at").fetchall()
+    admins = {r["user_id"] for r in
+              conn.execute("SELECT user_id FROM admins").fetchall()}
+    return [{"username": r["username"], "user_id": r["user_id"],
+             "created_at": r["created_at"], "admin": r["user_id"] in admins}
+            for r in rows]
+
+
 def local_register(conn, username, password):
-    """Create a local account. Raises AuthError if the name is taken or weak."""
+    """Create a local account. Raises AuthError if the name is taken or weak.
+
+    The first account on a fresh server is always allowed and becomes admin;
+    every later account needs registration to be open.
+    """
     name = normalize_username(username)
     if len(name) < 3 or len(name) > 64:
         raise AuthError("username must be 3-64 characters")
@@ -84,6 +131,9 @@ def local_register(conn, username, password):
         raise AuthError("username may use letters, digits, dot, dash, underscore")
     if len(password or "") < 8:
         raise AuthError("password must be at least 8 characters")
+    first = account_count(conn) == 0
+    if not first and not registration_open(conn):
+        raise AuthError("registration is closed on this server")
     if conn.execute("SELECT 1 FROM local_accounts WHERE username=?", (name,)).fetchone():
         raise AuthError("username already taken")
     uid = "local:%s" % name
@@ -93,6 +143,9 @@ def local_register(conn, username, password):
     conn.execute("INSERT INTO local_accounts(username,user_id,digest,salt,created_at)"
                  " VALUES(?,?,?,?,?)",
                  (name, uid, _digest(password, salt), salt, _now()))
+    if first:
+        conn.execute("INSERT OR IGNORE INTO admins(user_id,created_at) VALUES(?,?)",
+                     (uid, _now()))
     conn.commit()
     return uid
 
@@ -256,3 +309,4 @@ class Auth:
             raise AuthError("provider %s returned no subject" % pid)
         uid = upsert_user(self.conn, pid, ident)
         return uid, create_session(self.conn, uid, pid)
+
