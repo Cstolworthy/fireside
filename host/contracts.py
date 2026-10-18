@@ -36,6 +36,8 @@ class Book:
     chapters: List[Chapter] = field(default_factory=list)
     meta: Dict[str, Any] = field(default_factory=dict)
     id: Optional[str] = None           # plugin-owned stable id, if it has one
+    cover: Optional[bytes] = None      # the book's own cover image, if it has one
+    cover_mime: str = ""
 
 
 @dataclass
@@ -183,7 +185,8 @@ def to_book(r):
             else:
                 chs.append(c)
         return Book(title=r.get("title") or "Untitled", chapters=chs,
-                    meta=r.get("meta") or {}, id=r.get("id"))
+                    meta=r.get("meta") or {}, id=r.get("id"),
+                    cover=r.get("cover"), cover_mime=r.get("cover_mime") or "")
     return r
 
 def to_audio(a):

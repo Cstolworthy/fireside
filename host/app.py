@@ -26,7 +26,9 @@ Endpoints (JSON unless noted):
 import base64
 import json
 import os
+import re
 import threading
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
@@ -150,8 +152,89 @@ class App:
         cred = self._source_cred(user, plugin.id, body.get("cred"))
         book = plugin.obj.read(req, self._make_fetch(plugin.obj, cred), cred)
         bid = library.add_book(self.conn, self.storage, user, book)
+        self._maybe_cover(bid, book)
         return 200, {"book_id": bid, "title": getattr(book, "title", ""),
                      "chapters": len(getattr(book, "chapters", []))}
+
+    # ---- cover art -----------------------------------------------------------
+    # A book's cover is its own image when the reader handed one over (an epub
+    # almost always carries it), otherwise it is fetched by ISBN. Both paths are
+    # generic: the host has no branch on which reader produced the book.
+
+    COVER_MAX_BYTES = 8 * 1024 * 1024
+    _COVER_URLS = ("https://covers.openlibrary.org/b/isbn/{isbn}-L.jpg?default=false",)
+
+    def _maybe_cover(self, book_id, book):
+        data = getattr(book, "cover", None)
+        mime = getattr(book, "cover_mime", "") or "image/jpeg"
+        if not data:
+            meta = getattr(book, "meta", None) or {}
+            isbn = (meta.get("isbn") if isinstance(meta, dict) else "") or ""
+            got = self._cover_by_isbn(isbn)
+            if got:
+                data, mime = got
+        if not data:
+            return
+        try:
+            library.set_cover(self.conn, self.storage, book_id, data, mime)
+        except Exception:               # a cover is a nicety; never fail an import for it
+            pass
+
+    def _cover_by_isbn(self, isbn):
+        """Fetch a cover for an ISBN from a keyless public source, or None."""
+        isbn = re.sub(r"[^0-9Xx]", "", isbn or "")
+        if not re.fullmatch(r"\d{9}[\dXx]|\d{13}", isbn or ""):
+            return None
+        for tpl in self._COVER_URLS:
+            url = tpl.format(isbn=isbn)
+            try:
+                req = urllib.request.Request(
+                    url, headers={"User-Agent": "fireside/2 (cover lookup)"})
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    ctype = (r.headers.get("Content-Type") or "").split(";")[0]
+                    data = r.read(self.COVER_MAX_BYTES)
+                if data and len(data) > 100:
+                    return data, (ctype if ctype.startswith("image/") else "image/jpeg")
+            except Exception:
+                continue
+        return None
+
+    def cover_get(self, q, body):
+        got = library.cover(self.conn, self.storage, q.get("book", ""))
+        if not got:
+            return 404, {"error": "no cover"}
+        data, mime = got
+        return 200, {"_raw": data, "_mime": mime, "checksum": ""}
+
+    def put_cover(self, q, body):
+        book_id = body.get("book", "")
+        if not library.get_book(self.conn, book_id):
+            return 404, {"error": "no such book"}
+        raw = body.get("data_b64") or ""
+        try:
+            data = base64.b64decode(raw) if raw else b""
+        except Exception:
+            return 400, {"error": "bad image data"}
+        if not data:
+            return 400, {"error": "no image"}
+        if len(data) > self.COVER_MAX_BYTES:
+            return 413, {"error": "image is too large"}
+        library.set_cover(self.conn, self.storage, book_id, data,
+                          body.get("mime") or "image/jpeg")
+        return 200, {"ok": True, "cover": library.get_book(self.conn, book_id)["cover"]}
+
+    def cover_auto(self, q, body):
+        book_id = body.get("book", "")
+        b = library.get_book(self.conn, book_id)
+        if not b:
+            return 404, {"error": "no such book"}
+        isbn = (b.get("meta") or {}).get("isbn") or body.get("isbn") or ""
+        got = self._cover_by_isbn(isbn)
+        if not got:
+            return 404, {"error": "no cover found" + (" for that ISBN" if isbn else "")}
+        data, mime = got
+        library.set_cover(self.conn, self.storage, book_id, data, mime)
+        return 200, {"ok": True, "cover": library.get_book(self.conn, book_id)["cover"]}
 
     def _pick_reader(self, req):
         for p in self.host.readers:
@@ -257,6 +340,7 @@ class App:
 
     def progress(self, q, body):
         book_id = q.get("book", "")
+        b = library.get_book(self.conn, book_id) or {}
         ch = library.chapters(self.conn, book_id)
         rends = {}
         for r in library.renditions(self.conn, book_id):
@@ -264,7 +348,9 @@ class App:
                 "provider": r["provider"], "voice": r["voice"],
                 "voice_label": r["voice_label"], "model": r["model"],
                 "audio_ref": r["audio_ref"], "audio_bytes": r["audio_bytes"]})
-        return 200, {"chapters": [
+        return 200, {"book": {"id": book_id, "title": b.get("title", ""),
+                              "cover": b.get("cover", ""), "isbn": b.get("isbn", "")},
+                     "chapters": [
             {"idx": c["idx"], "title": c["title"], "chars": c["chars"],
              "rendered": bool(c["audio_ref"]),
              "audio_ref": c["audio_ref"], "audio_bytes": c["audio_bytes"],
@@ -573,12 +659,14 @@ GET_ROUTES = {
     "/job": "job", "/progress": "progress", "/chapter": "chapter",
     "/position": "get_position", "/stop": "stop", "/text": "text",
     "/connections": "connections_list", "/source-creds": "source_creds",
+    "/cover": "cover_get",
     "/auth/providers": "auth_providers", "/me": "me", "/auth/policy": "auth_policy",
     "/auth/users": "auth_users",
 }
 POST_ROUTES = {
     "/import": "import_book", "/render": "render", "/voices": "voices",
     "/speak": "speak",
+    "/cover": "put_cover", "/cover/auto": "cover_auto",
     "/position": "put_position", "/claim": "claim", "/ack": "ack",
     "/credential": "put_credential", "/auth/registration": "set_registration",
     "/connections": "connection_save", "/connections/delete": "connection_delete",

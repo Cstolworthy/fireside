@@ -283,6 +283,30 @@ class TestBookPageConvert(unittest.TestCase):
         html = self._html()
         self.assertIn("body.chapters = list", html)   # subset travels to /render
 
+    def test_chapter_list_is_cards_not_checkboxes(self):
+        # the main list shows whether a chapter is voiced (and in how many
+        # voices) and a button that plays it; picking for conversion lives only
+        # inside the dialog now.
+        html = self._html()
+        self.assertIn('id="nplist"', html)
+        self.assertIn("chapplay", html)               # a play button per chapter
+        self.assertIn("chapterVoiceLabel", html)      # "one voice" or "N voices"
+        self.assertNotIn("Select for conversion", html)   # no per-row checkbox
+
+    def test_convert_dialog_counts_characters(self):
+        html = self._html()
+        self.assertIn("Whole book: ", html)
+        self.assertIn("nf(bookChars)", html)
+        self.assertIn("nf(selChars)", html)
+
+    def test_book_page_has_cover_controls(self):
+        html = self._html()
+        for anchor in ('id="npcover"', 'id="npcoverimg"', 'id="coverbtn"',
+                       'id="coverauto"', 'id="coverfile"'):
+            self.assertIn(anchor, html)
+        self.assertIn("/cover", html)                 # the shelf/book cover route
+        self.assertIn("coverURL", html)
+
 
 class TestConditionalRender(unittest.TestCase):
     """A convert of a subset renders that subset and leaves the rest alone. The

@@ -183,6 +183,26 @@
   .chap .cbadge.ready{color:var(--ready);border-color:var(--ready)}
   .chap .cbadge.avail{color:var(--flame);border-color:var(--flame)}
   .chap .cbadge.fail{color:var(--warn);border-color:var(--warn)}
+  /* cover art: the shelf thumbnail and the big one on the book page */
+  .cover img.coverimg{width:100%;height:100%;object-fit:cover;border-radius:6px;display:block}
+  .resume .cover{overflow:hidden}
+  .npcover{margin-bottom:18px}
+  .npcover img{display:block;width:100%;max-width:220px;border-radius:8px;border:1px solid var(--line)}
+  /* a chapter card: play it, see whether it is voiced and in how many voices */
+  .chapcard{display:flex;align-items:center;gap:10px;padding:9px 10px;border-bottom:1px solid var(--line);cursor:pointer}
+  .chapcard:last-child{border-bottom:0}
+  .chapcard:hover{background:var(--raise)}
+  .chapcard.cur{background:var(--raise)}
+  .chapcard .chapplay{flex:none;width:30px;height:30px;border-radius:50%;border:1px solid var(--line);background:var(--bg);color:var(--flame);font-size:12px;line-height:1;cursor:pointer}
+  .chapcard .chapplay:disabled{color:var(--faint);cursor:default}
+  .chapcard .chapmeta{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+  .chapcard .ctitle{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--soft);font-size:13px}
+  .chapcard.cur .ctitle{color:var(--text)}
+  .chapcard .cvoice{color:var(--faint);font-size:11px}
+  .chapcard .cbadge{font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:var(--faint);border:1px solid var(--line);border-radius:999px;padding:1px 7px;flex:none}
+  .chapcard .cbadge.ready{color:var(--ready);border-color:var(--ready)}
+  .chapcard .cbadge.avail{color:var(--flame);border-color:var(--flame)}
+  .chapcard .cbadge.fail{color:var(--warn);border-color:var(--warn)}
   .modal{position:fixed;inset:0;z-index:90;display:grid;place-items:center;background:#0009;padding:20px}
   .modal[hidden]{display:none}
   .modal .sheet{width:100%;max-width:420px;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:26px;box-shadow:0 20px 60px #000a}
@@ -266,6 +286,7 @@
     <div id="np" style="display:none">
       <div class="np">
         <div class="story">
+          <div class="npcover" id="npcover" hidden><img id="npcoverimg" alt="Cover art"></div>
           <p class="small" id="npkicker"></p>
           <h2 id="nptitle"></h2>
           <div id="nptext" style="margin-top:16px"></div>
@@ -282,13 +303,16 @@
           <div class="spine" id="npspine"></div>
           <p class="small" id="npnote" style="margin-top:8px"></p>
           <div class="chaplistwrap">
-            <div class="chaplisthead"><h3>Chapters</h3><span class="small" id="nplistsel"></span></div>
+            <div class="chaplisthead"><h3>Chapters</h3></div>
             <div id="nplist" class="chaplist"></div>
           </div>
           <div class="row" style="margin-top:14px">Characters in this book<span class="r" id="npchars">0</span></div>
           <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn quiet" id="convertbtn">Convert to voice</button>
             <button class="btn quiet" id="offline">Download for offline</button>
+            <button class="btn quiet" id="coverbtn" type="button">Set cover</button>
+            <button class="btn quiet" id="coverauto" type="button" hidden>Find cover</button>
+            <input type="file" id="coverfile" accept="image/*" hidden>
           </div>
         </aside>
       </div>
@@ -836,7 +860,7 @@ async function loadLibrary() {
     $('#libempty').style.display = books.length ? 'none' : 'block';
     books.forEach(b => {
       const cell = document.createElement('div'); cell.className = 'bk'; cell.onclick = () => { openBook(b.id); show('play'); };
-      const cover = document.createElement('div'); cover.className = 'cover'; cover.textContent = b.title;
+      const cover = document.createElement('div'); cover.className = 'cover'; fillCover(cover, b.id, b.title, b.cover);
       const t = document.createElement('div'); t.style.cssText = 'font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; t.textContent = b.title;
       const states = Array.from({ length: b.chapters }, (_, i) => i < b.rendered ? 'avail' : 'todo');
       const sp = spineEl(states, -1);
@@ -847,11 +871,26 @@ async function loadLibrary() {
   } catch (e) { /* library is optional until a name is set */ }
 }
 function bookById(id) { return books.find(b => b.id === id); }
+function coverURL(id, ref) { return '/cover?book=' + encodeURIComponent(id) + (ref ? '&v=' + encodeURIComponent(ref) : ''); }
+function fillCover(el, id, title, ref) {
+  el.innerHTML = '';
+  if (ref) { const img = document.createElement('img'); img.className = 'coverimg'; img.alt = '';
+    img.loading = 'lazy'; img.src = coverURL(id, ref); el.append(img); }
+  else el.textContent = title;
+}
+// The book page's own cover: the art when there is one, and the ISBN button
+// only when the book actually carried an ISBN to look up.
+function renderCover() {
+  const box = $('#npcover'); if (!box) return;
+  if (book && book.cover) { $('#npcoverimg').src = coverURL(book.id, book.cover); box.hidden = false; }
+  else { $('#npcoverimg').removeAttribute('src'); box.hidden = true; }
+  const auto = $('#coverauto'); if (auto) auto.hidden = !(book && book.isbn);
+}
 function renderResume() {
   const box = $('#resume'); box.innerHTML = '';
   const b = bookById(lastName) || books[0];
   if (!b) return;
-  const cover = document.createElement('div'); cover.className = 'cover'; cover.textContent = b.title;
+  const cover = document.createElement('div'); cover.className = 'cover'; fillCover(cover, b.id, b.title, b.cover);
   const col = document.createElement('div'); col.style.flex = '1'; col.style.minWidth = '0';
   const kick = document.createElement('p'); kick.className = 'small'; kick.textContent = 'Pick up where you left off';
   const h = document.createElement('h2'); h.textContent = b.title;
@@ -870,7 +909,9 @@ async function openBook(id, jumpPlay) {
   try {
     const prog = await api('/progress?user=' + encodeURIComponent(USER) + '&book=' + encodeURIComponent(id));
     const meta = bookById(id) || { title: '(book)' };
-    book = { id, title: meta.title, chapters: prog.chapters || [] };
+    const bk = prog.book || {};
+    book = { id, title: bk.title || meta.title, cover: bk.cover || '',
+             isbn: bk.isbn || '', chapters: prog.chapters || [] };
     lastName = id; localStorage.setItem(LKEY, id);
     SELECT.clear();
     selVoice = defaultVoiceKey();       // the newest voice, until the reader picks another
@@ -934,6 +975,7 @@ function renderPlay() {
   $('#npchars').textContent = nf(book.chapters.reduce((a, c) => a + (c.chars || 0), 0));
   renderVoicePicker();
   drawSpine();
+  renderCover();
   if (cur < 0) { $('#npkicker').textContent = book.title; $('#nptitle').textContent = 'Choose a chapter'; $('#nptext').innerHTML = ''; return; }
   const c = book.chapters.find(x => x.idx === cur);
   $('#npkicker').textContent = book.title + ' · Chapter ' + (cur + 1) + ' of ' + book.chapters.length;
@@ -943,26 +985,43 @@ function renderPlay() {
 function renderChapterList() {
   const box = $('#nplist'); if (!box) return;
   box.innerHTML = '';
-  if (!book) { renderSelCount(); return; }
+  if (!book) return;
   book.chapters.forEach(c => {
-    const row = document.createElement('div');
-    row.className = 'chap' + (c.idx === cur ? ' cur' : '');
-    const chk = document.createElement('input'); chk.type = 'checkbox'; chk.className = 'chk';
-    chk.checked = SELECT.has(c.idx); chk.title = 'Select for conversion';
-    chk.onclick = e => { e.stopPropagation();
-      if (chk.checked) SELECT.add(c.idx); else SELECT.delete(c.idx); renderSelCount(); };
-    const num = document.createElement('span'); num.className = 'cnum'; num.textContent = c.idx + 1;
-    const ttl = document.createElement('span'); ttl.className = 'ctitle'; ttl.textContent = c.title || ('Chapter ' + (c.idx + 1));
-    const bdg = document.createElement('span'); bdg.className = 'cbadge ' + (state[c.idx] || 'todo');
-    bdg.textContent = BADGE[state[c.idx] || 'todo'] || '';
-    row.append(chk, num, ttl, bdg);
-    row.onclick = () => selectChapter(c.idx);
-    box.append(row);
+    const card = document.createElement('div');
+    card.className = 'chapcard' + (c.idx === cur ? ' cur' : '');
+    const st = state[c.idx] || 'todo';
+    const r = renditionFor(c);
+    const canPlay = !!(r && r.audio_ref);
+    const pbtn = document.createElement('button');
+    pbtn.type = 'button'; pbtn.className = 'chapplay'; pbtn.textContent = '▶';
+    pbtn.title = canPlay ? 'Play this chapter' : 'Not converted in this voice';
+    pbtn.disabled = !canPlay;
+    pbtn.onclick = e => { e.stopPropagation(); if (canPlay) play(c.idx, true); };
+    const meta = document.createElement('div'); meta.className = 'chapmeta';
+    const ttl = document.createElement('span'); ttl.className = 'ctitle';
+    ttl.textContent = (c.idx + 1) + '. ' + (c.title || ('Chapter ' + (c.idx + 1)));
+    const vline = document.createElement('span'); vline.className = 'cvoice';
+    vline.textContent = chapterVoiceLabel(c);
+    meta.append(ttl, vline);
+    const bdg = document.createElement('span'); bdg.className = 'cbadge ' + st;
+    bdg.textContent = BADGE[st] || '';
+    card.append(pbtn, meta, bdg);
+    card.onclick = () => selectChapter(c.idx);
+    box.append(card);
   });
-  renderSelCount();
 }
-function renderSelCount() { const s = $('#nplistsel'); if (!s) return;
-  s.textContent = (book && SELECT.size) ? SELECT.size + ' selected' : ''; }
+// How many voices a chapter has, and which one when there is only one.
+function chapterVoices(c) {
+  const seen = new Map();
+  (c.renditions || []).forEach(r => { const k = rkey(r); if (!seen.has(k)) seen.set(k, r); });
+  return [...seen.values()];
+}
+function chapterVoiceLabel(c) {
+  const vs = chapterVoices(c);
+  if (!vs.length) return 'not voiced yet';
+  if (vs.length === 1) return rlabel(vs[0]);
+  return vs.length + ' voices';
+}
 // Clicking a chapter opens it on this page. A voiced chapter starts playing; an
 // unvoiced one just shows its text until you convert it.
 function selectChapter(idx) {
@@ -1005,11 +1064,16 @@ async function loadText(idx) {
 // --- convert to voice (book-level; all, or just the ticked chapters) -------
 function cvTicked() { return [...document.querySelectorAll('#cvlist input[type=checkbox]')].filter(x => x.checked).map(x => +x.dataset.idx); }
 function cvSync() {
-  const n = cvTicked().length, total = book ? book.chapters.length : 0;
+  const ticked = cvTicked();
+  const n = ticked.length, total = book ? book.chapters.length : 0;
+  const bookChars = book ? book.chapters.reduce((a, c) => a + (c.chars || 0), 0) : 0;
+  const selChars = book ? book.chapters.filter(c => ticked.includes(c.idx))
+                              .reduce((a, c) => a + (c.chars || 0), 0) : 0;
   $('#cvsel').disabled = !n;
   $('#cvsel').textContent = n ? 'Convert ' + n + ' selected' : 'Convert selected';
-  $('#cvcount').textContent = 'Convert all ' + total + ' chapter' + (total === 1 ? '' : 's') +
-    (n ? ', or just the ' + n + ' ticked below.' : '. Tick chapters below to convert only those.');
+  $('#cvcount').textContent = 'Whole book: ' + nf(bookChars) + ' characters.'
+    + (n ? ' Selected: ' + nf(selChars) + ' characters, ' + n + ' of ' + total + ' chapters.'
+         : ' Convert all ' + total + ', or tick chapters below to convert only those.');
 }
 function openConvert() {
   needUser(); if (!book || !book.chapters.length) return;
@@ -1072,6 +1136,25 @@ async function runConvert(list, label) {
   finally { SELECT.clear(); await openBook(book.id); }
 }
 $('#convertbtn').onclick = openConvert;
+
+// --- cover art: set one from a file, or find one by the book's ISBN -------
+$('#coverbtn').onclick = () => { if (book) $('#coverfile').click(); };
+$('#coverfile').onchange = async e => {
+  const f = e.target.files && e.target.files[0]; e.target.value = '';
+  if (!f || !book) return; $('#err').textContent = ''; busy('Setting the cover…');
+  try {
+    const data_b64 = await fileB64(f);
+    await jpost('/cover', { book: book.id, data_b64, mime: f.type || 'image/jpeg' });
+    idle('Cover set.'); await loadLibrary(); await openBook(book.id);
+  } catch (err) { fail(err); }
+};
+$('#coverauto').onclick = async () => {
+  if (!book) return; $('#err').textContent = ''; busy('Looking for a cover…');
+  try {
+    await jpost('/cover/auto', { book: book.id });
+    idle('Cover found.'); await loadLibrary(); await openBook(book.id);
+  } catch (err) { fail(err); }
+};
 
 // --- verify-before-play ----------------------------------------------------
 async function fetchChapter(id, idx, ref, nbytes, r) {
