@@ -149,8 +149,22 @@ class TestBrowserUi(unittest.TestCase):
         s, pos = self._jget("/position?user=u1&book=%s" % bid)
         self.assertEqual(pos["offset_seconds"], 4.0)
         self.assertEqual(pos["owner_device_id"], "web-abcd")
+class TestUiDomRefs(unittest.TestCase):
+    """A dead $("#id") throws at load and blanks the whole page silently.
+
+    The element the script reaches for must exist in the shipped HTML; #user
+    was removed when the free-text "listening as" field became a session label,
+    and the leftover reference killed the script for every returning browser.
+    """
+
+    def test_index_html_references_only_existing_ids(self):
+        with open(os.path.join(UI_DIR, "index.html"), encoding="utf-8") as f:
+            html = f.read()
+        defined = set(re.findall(r'id="([A-Za-z0-9_\-]+)"', html))
+        refs = set(re.findall(r"\$\('#([A-Za-z0-9_\-]+)'\)", html))
+        self.assertEqual(sorted(refs - defined), [],
+                         "index.html references ids that do not exist")
 
 
 if __name__ == "__main__":
     unittest.main()
-
