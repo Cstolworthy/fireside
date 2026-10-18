@@ -314,6 +314,33 @@ class TestBookPageConvert(unittest.TestCase):
         self.assertIn("/book/details", html)          # ISBN -> metadata lookup
 
 
+class TestVoiceOrdering(unittest.TestCase):
+    """English voices sort to the top of every voice list (US, then UK) and the
+    convert dialog can filter. The client cannot run here, so these are anchor
+    guards: the helpers and the filter field have to ship."""
+
+    def _html(self):
+        with open(os.path.join(UI_DIR, "index.html"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_english_first_helpers_ship(self):
+        html = self._html()
+        for anchor in ("function isEnVoice", "function voiceRank",
+                       "function enFirst", "function fillVoices",
+                       "function filterSel"):
+            self.assertIn(anchor, html)
+
+    def test_convert_dialog_can_filter_voices(self):
+        html = self._html()
+        self.assertIn('id="cvfilter"', html)
+        self.assertIn("filterSel($('#cvvoice')", html)
+
+    def test_convert_preselects_a_voice(self):
+        html = self._html()
+        self.assertIn("fs_lastvoice", html)                       # remembers the last pick
+        self.assertIn("chapters.find(c => c.rendered && c.voice)", html)  # the book's voice
+
+
 class TestConditionalRender(unittest.TestCase):
     """A convert of a subset renders that subset and leaves the rest alone. The
     host accepts {chapters:[...]} so a reader can voice a few chapters now."""
