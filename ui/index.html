@@ -317,7 +317,7 @@
           <div class="prog" id="prog"><i id="progfill"></i></div>
           <div class="times"><span id="tcur">0:00</span><span id="tleft">−0:00</span></div>
           <div class="ctl">
-            <button id="back30" title="Back 30 seconds">−30s</button>
+            <button id="back30" title="Back 15 seconds">−15s</button>
             <button class="play" id="tog" aria-label="Play">▶</button>
             <button class="spd" id="speed">1.0×</button>
           </div>
@@ -405,9 +405,11 @@
 <div id="ribbon" class=""><span class="spin" id="rspin" style="display:none"></span><span class="rtext" id="rtext"></span><span class="rtime" id="rtime"></span><span class="rprog" id="rprog"><i id="rprogfill"></i></span><button class="rbtn" id="rdismiss" type="button" hidden>Dismiss</button></div>
 <div id="toasts"></div>
 <div id="transport">
+  <button class="tnav" id="tprev" type="button" title="Previous chapter" aria-label="Previous chapter">⏮</button>
+  <button class="tnav" id="tback" type="button" title="Back 15 seconds">−15s</button>
   <button class="tplay" id="tplay" type="button" aria-label="Play">▶</button>
-  <button class="tnav" id="tback" type="button" title="Back 30 seconds">−30s</button>
-  <button class="tnav" id="tfwd" type="button" title="Forward 30 seconds">+30s</button>
+  <button class="tnav" id="tfwd" type="button" title="Forward 15 seconds">+15s</button>
+  <button class="tnav" id="tnext" type="button" title="Next chapter" aria-label="Next chapter">⏭</button>
   <span class="tnow" id="tnowbook"></span>
   <span class="ttime" id="ttimes"></span>
   <label class="vol" title="Volume">Vol<input id="tvol" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume"></label>
@@ -1380,13 +1382,27 @@ function updateTransport() {
   const lbl = $('#tnowbook');
   if (lbl) lbl.textContent = on ? (book.title + (cur >= 0 ? ' · ch ' + (cur + 1) : '')) : '';
 }
+// step to the nearest chapter (in `dir`) that has audio in the current voice
+function chapterStep(dir) {
+  if (!book || cur < 0) return;
+  const chs = book.chapters.slice().sort((a, b) => a.idx - b.idx);
+  let at = chs.findIndex(c => c.idx === cur);
+  if (at < 0) at = dir < 0 ? chs.length : -1;
+  for (let i = at + dir; i >= 0 && i < chs.length; i += dir) {
+    const r = renditionFor(chs[i]);
+    if (r && r.audio_ref) { play(chs[i].idx); return; }
+  }
+  idle('No ' + (dir < 0 ? 'previous' : 'next') + ' chapter is voiced in this voice yet.');
+}
 $('#tplay').onclick = () => { if (!book || cur < 0) return; $a.paused ? $a.play().catch(()=>{}) : $a.pause(); };
-$('#tback').onclick = () => { $a.currentTime = Math.max(0, ($a.currentTime || 0) - 30); };
-$('#tfwd').onclick = () => { const d = $a.duration || 0; const t = ($a.currentTime || 0) + 30;
+$('#tprev').onclick = () => chapterStep(-1);
+$('#tnext').onclick = () => chapterStep(1);
+$('#tback').onclick = () => { $a.currentTime = Math.max(0, ($a.currentTime || 0) - 15); };
+$('#tfwd').onclick = () => { const d = $a.duration || 0; const t = ($a.currentTime || 0) + 15;
   $a.currentTime = d ? Math.min(d, t) : t; };
 $('#tvol').oninput = () => { $a.volume = parseFloat($('#tvol').value); };
 $('#tog').onclick = () => { if (!book || cur < 0) return; $a.paused ? $a.play().catch(()=>{}) : $a.pause(); };
-$('#back30').onclick = () => { $a.currentTime = Math.max(0, ($a.currentTime || 0) - 30); };
+$('#back30').onclick = () => { $a.currentTime = Math.max(0, ($a.currentTime || 0) - 15); };
 const SPD = [1.0, 1.1, 1.25, 1.5]; let si = 1;
 $('#speed').onclick = () => { si = (si + 1) % SPD.length; $a.playbackRate = SPD[si]; $('#speed').textContent = SPD[si] + '×'; };
 $a.addEventListener('play', syncTog); $a.addEventListener('pause', syncTog);

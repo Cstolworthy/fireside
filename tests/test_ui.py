@@ -417,3 +417,32 @@ class TestShelfSize(unittest.TestCase):
             ".bk .cover{aspect-ratio:2/3;font-size:14px;margin-bottom:8px;max-width:170px}",
             html,
         )
+
+
+class TestTransportNav(unittest.TestCase):
+    """A book is heard chapter by chapter, so the transport steps chapters and
+    the seek unit is 15 seconds, on both the transport and the Now Playing bar.
+
+    A 30-second skip is the wrong unit between chapters; the transport now
+    carries prev/next (to the nearest chapter voiced in the current voice), and
+    both seek buttons moved from 30s to 15s.
+    """
+
+    def _html(self):
+        with open(os.path.join(UI_DIR, "index.html"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_transport_steps_chapters(self):
+        html = self._html()
+        self.assertIn('id="tprev"', html)
+        self.assertIn('id="tnext"', html)
+        self.assertIn("chapterStep(-1)", html)
+        self.assertIn("chapterStep(1)", html)
+
+    def test_seek_unit_is_fifteen_seconds(self):
+        html = self._html()
+        self.assertIn('title="Back 15 seconds"', html)
+        self.assertIn('title="Forward 15 seconds"', html)
+        self.assertNotIn("30 seconds", html)
+        self.assertNotIn("\u221230s", html)
+        self.assertNotIn("+30s", html)
