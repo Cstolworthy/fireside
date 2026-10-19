@@ -21,6 +21,8 @@ Endpoints (JSON unless noted):
   POST /claim    {user, book, device}        take ownership; stops the other
   GET  /stop?user=&book=&device=             has this device been told to stop
   POST /ack      {user, book, device}        confirm the stop
+  GET  /stats?user=                          chars voiced, books listened, time heard
+  POST /listen   {user, book, seconds}       append one listen-time heartbeat
 """
 
 import base64
@@ -35,7 +37,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
-from host import accounting, auth, connections, credentials, db, jobs, library, playback
+from host import accounting, auth, connections, credentials, db, jobs, library, playback, stats
 from sources._fetch import fetch as _fetch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -652,6 +654,14 @@ class App:
         playback.ack_stop(self.conn, self._uid(q, body), body["book"], body["device"])
         return 200, {"ok": True}
 
+    def stats_get(self, q, body):
+        return 200, stats.user_stats(self.conn, self._uid(q, None))
+
+    def listen(self, q, body):
+        stats.add_listen(self.conn, self._uid(q, body), body.get("book", ""),
+                         body.get("seconds", 0))
+        return 200, {"ok": True}
+
     # ---- credentials (hosted; values never leave) -----------------------------
 
     def put_credential(self, q, body):
@@ -854,6 +864,7 @@ GET_ROUTES = {
     "/health": "health", "/plugins": "plugins", "/library": "library_list",
     "/job": "job", "/progress": "progress", "/chapter": "chapter",
     "/position": "get_position", "/last": "last_position", "/stop": "stop", "/text": "text",
+    "/stats": "stats_get",
     "/connections": "connections_list", "/source-creds": "source_creds",
     "/cover": "cover_get",
     "/auth/providers": "auth_providers", "/me": "me", "/auth/policy": "auth_policy",
@@ -865,6 +876,7 @@ POST_ROUTES = {
     "/cover": "put_cover", "/cover/auto": "cover_auto", "/cover/clear": "clear_cover",
     "/book/details": "fetch_details",
     "/position": "put_position", "/claim": "claim", "/ack": "ack",
+    "/listen": "listen",
     "/credential": "put_credential", "/auth/registration": "set_registration",
     "/connections": "connection_save", "/connections/delete": "connection_delete",
     "/source-creds": "source_cred_save", "/source-creds/delete": "source_cred_delete",
