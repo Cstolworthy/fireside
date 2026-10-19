@@ -152,6 +152,18 @@
   #ribbon .rprog i{display:block;height:100%;width:0;background:var(--flame);transition:width .3s}
   #ribbon .rbtn{background:none;border:1px solid var(--line);border-radius:999px;color:inherit;padding:4px 12px;cursor:pointer;font-size:12px}
   #toasts{position:fixed;right:16px;bottom:56px;z-index:80;display:flex;flex-direction:column;gap:8px;max-width:330px}
+  /* --- a global transport: play, seek and volume from any tab ------------ */
+  #transport{position:fixed;left:0;right:0;bottom:0;z-index:65;display:none;align-items:center;gap:10px;padding:8px 16px;background:var(--surface);border-top:1px solid var(--line)}
+  #transport.on{display:flex}
+  #transport .tplay{width:38px;height:38px;flex:none;border-radius:50%;border:0;background:var(--flame);color:var(--on-flame);font-size:15px;cursor:pointer}
+  #transport .tnav{background:none;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:7px 12px;cursor:pointer;font-size:13px;line-height:1}
+  #transport .tnow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--soft);font-size:13px}
+  #transport .ttime{color:var(--faint);font-variant-numeric:tabular-nums;font-size:12px}
+  #transport .vol{display:flex;align-items:center;gap:6px;flex:0 0 auto;color:var(--soft);font-size:12px}
+  #transport .vol input{width:90px;padding:0;border:0;background:none}
+  body.hastransport #ribbon{bottom:55px}
+  body.hastransport #toasts{bottom:112px}
+  @media(max-width:600px){ #transport .tnow{display:none} #transport .vol input{width:64px} }
   .toast{background:var(--raise);border:1px solid var(--line);border-left:3px solid var(--flame);border-radius:9px;padding:10px 12px;font-size:13px;box-shadow:0 10px 30px #0007}
   .toast.bad{border-left-color:var(--warn)}.toast.ok{border-left-color:var(--ready)}
   /* add belongs on the library screen */
@@ -266,7 +278,7 @@
 <main>
   <!-- library -->
   <section class="view on" id="v-lib">
-    <div id="resume"></div>
+    <div id="resume" class="resume"></div>
     <div style="margin-top:28px"><button class="btn" id="addbtn" type="button">＋ Add a book</button></div>
     <div class="addpanel" id="addpanel" hidden>
       <p class="sub">Drop an EPUB or paste a story link. Fireside reads it, breaks it into chapters, and voices each one.</p>
@@ -392,6 +404,14 @@
 </main>
 <div id="ribbon" class=""><span class="spin" id="rspin" style="display:none"></span><span class="rtext" id="rtext"></span><span class="rtime" id="rtime"></span><span class="rprog" id="rprog"><i id="rprogfill"></i></span><button class="rbtn" id="rdismiss" type="button" hidden>Dismiss</button></div>
 <div id="toasts"></div>
+<div id="transport">
+  <button class="tplay" id="tplay" type="button" aria-label="Play">▶</button>
+  <button class="tnav" id="tback" type="button" title="Back 30 seconds">−30s</button>
+  <button class="tnav" id="tfwd" type="button" title="Forward 30 seconds">+30s</button>
+  <span class="tnow" id="tnowbook"></span>
+  <span class="ttime" id="ttimes"></span>
+  <label class="vol" title="Volume">Vol<input id="tvol" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume"></label>
+</div>
 <div class="modal" id="convertdlg" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-label="Convert to voice">
     <h3>Convert to voice</h3>
@@ -556,6 +576,8 @@ document.addEventListener('click', e => { const w = $('#who'); if (w && !w.conta
 const fmt = n => n > 1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1, Math.round(n/1024))+' KB';
 const nf = n => (n || 0).toLocaleString('en-US');
 const mmss = s => { s = Math.max(0, Math.round(s||0)); return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0'); };
+const hms = s => { s = Math.max(1, Math.round(s||0)); const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
+  if (h) return h + 'h ' + m + 'm'; if (m) return m + 'm ' + (s%60) + 's'; return (s%60) + 's'; };
 function needUser() { if (!USER) { fail('set your name first (top right)'); throw new Error('no user'); } }
 
 // --- views -----------------------------------------------------------------
@@ -1038,11 +1060,12 @@ function renderPlay() {
   const au = $('#npauthor'), de = $('#npdesc');
   if (au) { au.textContent = book.author || ''; au.hidden = !book.author; }
   if (de) { de.textContent = book.description || ''; de.hidden = !book.description; }
-  if (cur < 0) { $('#npkicker').textContent = book.title; $('#nptitle').textContent = 'Choose a chapter'; $('#nptext').innerHTML = ''; return; }
+  if (cur < 0) { $('#npkicker').textContent = book.title; $('#nptitle').textContent = 'Choose a chapter'; $('#nptext').innerHTML = ''; updateTransport(); return; }
   const c = book.chapters.find(x => x.idx === cur);
   $('#npkicker').textContent = book.title + ' · Chapter ' + (cur + 1) + ' of ' + book.chapters.length;
   $('#nptitle').textContent = c.title || ('Chapter ' + (cur + 1));
   drawNote();
+  updateTransport();
 }
 function renderChapterList() {
   const box = $('#nplist'); if (!box) return;
@@ -1190,11 +1213,24 @@ async function runConvert(list, label) {
       voice: vs.value, voice_label: vopt ? vopt.textContent : '', speed: 1.0 };
     if (list) body.chapters = list;
     const r = await jpost('/render', body);
+    // Chapters differ in length, so weight the ETA by characters, not just by
+    // how many chapters are done, and project the finish from the rate so far.
+    const order = book.chapters.map(c => c.idx).filter(i => !list || list.includes(i)).sort((a, b) => a - b);
+    const charsOf = i => (book.chapters.find(c => c.idx === i) || {}).chars || 0;
+    const totalChars = order.reduce((a, i) => a + charsOf(i), 0);
+    const t0 = Date.now();
     while (true) {
       await new Promise(res => setTimeout(res, 1200));
       const j = await api('/job?id=' + encodeURIComponent(r.job_id));
       if (j.status === 'error') throw new Error(j.error || 'render failed');
-      progress('Converting  ·  ' + j.current + ' of ' + j.total + ' chapters');
+      const doneChars = order.slice(0, j.current).reduce((a, i) => a + charsOf(i), 0);
+      const el = (Date.now() - t0) / 1000;
+      let tail = '';
+      if (j.status !== 'done' && j.current > 0 && totalChars > doneChars && el > 2) {
+        const eta = el * (totalChars - doneChars) / Math.max(1, doneChars);
+        tail = '  ·  ~' + hms(eta) + ' left';
+      }
+      progress('Converting  ·  ' + j.current + ' of ' + j.total + ' chapters' + tail);
       bar(j.current, j.total);
       if (j.status === 'done') break;
     }
@@ -1330,7 +1366,25 @@ async function play(idx, autoplay = true) {
 
 // --- transport -------------------------------------------------------------
 const $a = $('#audio');
-function syncTog() { $('#tog').textContent = $a.paused ? '▶' : '❚❚'; $('#tog').setAttribute('aria-label', $a.paused ? 'Play' : 'Pause'); }
+function syncTog() {
+  const paused = $a.paused;
+  $('#tog').textContent = paused ? '▶' : '❚❚'; $('#tog').setAttribute('aria-label', paused ? 'Play' : 'Pause');
+  const tp = $('#tplay'); if (tp) { tp.textContent = paused ? '▶' : '❚❚'; tp.setAttribute('aria-label', paused ? 'Play' : 'Pause'); }
+}
+// --- the global transport: the same audio element, reachable from any tab ---
+function updateTransport() {
+  const box = $('#transport'); if (!box) return;
+  const on = !!book;
+  box.classList.toggle('on', on);
+  document.body.classList.toggle('hastransport', on);
+  const lbl = $('#tnowbook');
+  if (lbl) lbl.textContent = on ? (book.title + (cur >= 0 ? ' · ch ' + (cur + 1) : '')) : '';
+}
+$('#tplay').onclick = () => { if (!book || cur < 0) return; $a.paused ? $a.play().catch(()=>{}) : $a.pause(); };
+$('#tback').onclick = () => { $a.currentTime = Math.max(0, ($a.currentTime || 0) - 30); };
+$('#tfwd').onclick = () => { const d = $a.duration || 0; const t = ($a.currentTime || 0) + 30;
+  $a.currentTime = d ? Math.min(d, t) : t; };
+$('#tvol').oninput = () => { $a.volume = parseFloat($('#tvol').value); };
 $('#tog').onclick = () => { if (!book || cur < 0) return; $a.paused ? $a.play().catch(()=>{}) : $a.pause(); };
 $('#back30').onclick = () => { $a.currentTime = Math.max(0, ($a.currentTime || 0) - 30); };
 const SPD = [1.0, 1.1, 1.25, 1.5]; let si = 1;
@@ -1340,6 +1394,7 @@ $a.addEventListener('timeupdate', () => {
   const d = $a.duration || 0; $('#progfill').style.width = d ? (100 * $a.currentTime / d) + '%' : '0';
   $('#tcur').textContent = mmss($a.currentTime);
   $('#tleft').textContent = '−' + mmss(Math.max(0, d - $a.currentTime));
+  const tt = $('#ttimes'); if (tt) tt.textContent = mmss($a.currentTime) + (d ? ' / ' + mmss(d) : '');
 });
 $('#prog').onclick = e => { const d = $a.duration || 0; if (!d) return;
   const r = $('#prog').getBoundingClientRect(); $a.currentTime = d * Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); };
@@ -1552,5 +1607,6 @@ window.addEventListener('load', async () => {
 </script>
 </body>
 </html>
+
 
 
