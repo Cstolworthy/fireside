@@ -470,6 +470,8 @@ let SELECT = new Set();         // chapter idx chosen for a conditional convert
 let selVoice = '';              // the voice being played: provider\u0000voice\u0000model
 const BADGE = { ready: 'on device', avail: 'voiced', voice: 'voicing', down: '…', fail: 'failed', todo: '', miss: 'missing' };
 let lastName = localStorage.getItem(LKEY) || '';
+let RESUME = null;             // the last book the server saw this user in, with chapter + offset
+const VOLKEY = 'fireside.volume';   // volume is per device; the position is not
 const cache = new Map();        // audio_ref -> {url, bytes}   verified this session
 
 // --- tiny SHA-256 (crypto.subtle is unavailable on plain-HTTP LAN origins) ----
@@ -578,6 +580,12 @@ document.addEventListener('click', e => { const w = $('#who'); if (w && !w.conta
 const fmt = n => n > 1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1, Math.round(n/1024))+' KB';
 const nf = n => (n || 0).toLocaleString('en-US');
 const mmss = s => { s = Math.max(0, Math.round(s||0)); return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0'); };
+function ago(iso) { if (!iso) return '';
+  const t = Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z');
+  if (isNaN(t)) return '';
+  const s = Math.round((Date.now() - t) / 1000);
+  if (s < 60) return 'just now'; if (s < 3600) return Math.round(s/60) + 'm ago';
+  if (s < 86400) return Math.round(s/3600) + 'h ago'; return Math.round(s/86400) + 'd ago'; }
 const hms = s => { s = Math.max(1, Math.round(s||0)); const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
   if (h) return h + 'h ' + m + 'm'; if (m) return m + 'm ' + (s%60) + 's'; return (s%60) + 's'; };
 function needUser() { if (!USER) { fail('set your name first (top right)'); throw new Error('no user'); } }
@@ -969,13 +977,17 @@ function renderCover() {
 }
 function renderResume() {
   const box = $('#resume'); box.innerHTML = '';
-  const b = bookById(lastName) || books[0];
+  const b = bookById(lastName) || (RESUME && bookById(RESUME.book_id)) || books[0];
   if (!b) return;
   const cover = document.createElement('div'); cover.className = 'cover'; fillCover(cover, b.id, b.title, b.cover);
   const col = document.createElement('div'); col.style.flex = '1'; col.style.minWidth = '0';
   const kick = document.createElement('p'); kick.className = 'small'; kick.textContent = 'Pick up where you left off';
   const h = document.createElement('h2'); h.textContent = b.title;
-  const meta = document.createElement('p'); meta.className = 'sub'; meta.textContent = b.rendered + ' of ' + b.chapters + ' chapters voiced';
+  const meta = document.createElement('p'); meta.className = 'sub';
+  let mt = b.rendered + ' of ' + b.chapters + ' chapters voiced';
+  if (RESUME && RESUME.book_id === b.id && RESUME.updated_at)
+    mt += ' · ch ' + ((RESUME.chapter_index || 0) + 1) + ' at ' + mmss(RESUME.offset_seconds || 0) + ' · ' + ago(RESUME.updated_at);
+  meta.textContent = mt;
   const states = Array.from({ length: b.chapters }, (_, i) => i < b.rendered ? 'avail' : 'todo');
   const sp = spineEl(states, -1); sp.style.margin = '12px 0';
   const go = document.createElement('button'); go.className = 'btn'; go.textContent = 'Continue listening';
@@ -1003,7 +1015,14 @@ async function openBook(id, jumpPlay) {
     renderPlay();
     if (jumpPlay) show('play');
     try { const pos = await api('/position?user=' + encodeURIComponent(USER) + '&book=' + encodeURIComponent(id));
-      if (pos && pos.chapter_index != null) idle('Resume at chapter ' + (pos.chapter_index + 1) + ', ' + Math.round(pos.offset_seconds) + 's.'); }
+      if (pos && pos.chapter_index != null) {
+        idle('Resume at chapter ' + (pos.chapter_index + 1) + ', ' + Math.round(pos.offset_seconds) + 's.');
+        if (jumpPlay) {
+          const rc = book.chapters.find(x => x.idx === pos.chapter_index);
+          const rr = rc && renditionFor(rc);
+          if (rr && rr.audio_ref) { play(pos.chapter_index, true); return; }
+        }
+      } }
     catch (_) {}
     idle('Loaded ' + book.title + '.');
   } catch (e) { fail(e); }
@@ -1225,15 +1244,17 @@ async function runConvert(list, label) {
       await new Promise(res => setTimeout(res, 1200));
       const j = await api('/job?id=' + encodeURIComponent(r.job_id));
       if (j.status === 'error') throw new Error(j.error || 'render failed');
-      const doneChars = order.slice(0, j.current).reduce((a, i) => a + charsOf(i), 0);
+      const doneChars = (j.done_chars != null) ? j.done_chars
+        : order.slice(0, j.current).reduce((a, i) => a + charsOf(i), 0);
       const el = (Date.now() - t0) / 1000;
       let tail = '';
-      if (j.status !== 'done' && j.current > 0 && totalChars > doneChars && el > 2) {
+      if (j.status !== 'done' && doneChars > 0 && totalChars > doneChars && el > 2) {
         const eta = el * (totalChars - doneChars) / Math.max(1, doneChars);
         tail = '  ·  ~' + hms(eta) + ' left';
       }
-      progress('Converting  ·  ' + j.current + ' of ' + j.total + ' chapters' + tail);
-      bar(j.current, j.total);
+      progress('Converting  ·  ch ' + j.current + '/' + j.total
+        + '  ·  ' + nf(doneChars) + ' / ' + nf(totalChars) + ' chars' + tail);
+      bar(doneChars, totalChars);
       if (j.status === 'done') break;
     }
     idle('Converted ' + r.total + ' chapter' + (r.total === 1 ? '' : 's') + '.');
@@ -1400,7 +1421,10 @@ $('#tnext').onclick = () => chapterStep(1);
 $('#tback').onclick = () => { $a.currentTime = Math.max(0, ($a.currentTime || 0) - 15); };
 $('#tfwd').onclick = () => { const d = $a.duration || 0; const t = ($a.currentTime || 0) + 15;
   $a.currentTime = d ? Math.min(d, t) : t; };
-$('#tvol').oninput = () => { $a.volume = parseFloat($('#tvol').value); };
+$('#tvol').oninput = () => { const v = parseFloat($('#tvol').value); $a.volume = v;
+  try { localStorage.setItem(VOLKEY, String(v)); } catch (e) {} };
+function applyVolume() { let v = parseFloat(localStorage.getItem(VOLKEY) || '1'); if (isNaN(v)) v = 1;
+  v = Math.min(1, Math.max(0, v)); $a.volume = v; const s = $('#tvol'); if (s) s.value = String(v); }
 $('#tog').onclick = () => { if (!book || cur < 0) return; $a.paused ? $a.play().catch(()=>{}) : $a.pause(); };
 $('#back30').onclick = () => { $a.currentTime = Math.max(0, ($a.currentTime || 0) - 15); };
 const SPD = [1.0, 1.1, 1.25, 1.5]; let si = 1;
@@ -1617,7 +1641,12 @@ window.addEventListener('load', async () => {
   if (!ok) return;
   try { await loadPlugins(); } catch (e) { fail(e); }
   await loadLibrary();
+  try { const lp = await api('/last?user=' + encodeURIComponent(USER));
+    if (lp && lp.book_id) { RESUME = lp; lastName = lp.book_id;
+      try { localStorage.setItem(LKEY, lastName); } catch (e) {}
+      renderResume(); } } catch (_) {}
   if (lastName) { try { await openBook(lastName); } catch (_) {} }
+  applyVolume();
   syncTog();
 });
 </script>

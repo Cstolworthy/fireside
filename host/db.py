@@ -187,6 +187,7 @@ def _columns(conn, table):
 # them, and CREATE TABLE IF NOT EXISTS will not touch a table that is already
 # there, so each one is added in place. Idempotent and safe on both engines.
 _ADDED_COLUMNS = [
+    ("jobs", "done_chars", "INT DEFAULT 0"),
     ("books", "cover_ref", "VARCHAR(255) DEFAULT ''"),
     ("books", "cover_mime", "VARCHAR(64) DEFAULT ''"),
     ("books", "author", "VARCHAR(255) DEFAULT ''"),

@@ -44,6 +44,25 @@ class TestPlayback(unittest.TestCase):
         pb.release(self.conn, "u1", "b1", "pc")
         self.assertIsNone(pb.owner(self.conn, "u1", "b1"))
 
+    def test_last_position_is_the_newest_book(self):
+        self.assertEqual(pb.last_position(self.conn, "u1"), {})
+        pb.put_position(self.conn, "u1", "b1", 2, 5.0, "pc")
+        pb.put_position(self.conn, "u1", "b2", 7, 1.0, "pc")
+        # updated_at is second-resolution; pin them so the order is unambiguous
+        self.conn.execute("UPDATE positions SET updated_at='2026-01-01T00:00:01Z' WHERE book_id='b1'")
+        self.conn.execute("UPDATE positions SET updated_at='2026-01-01T00:00:02Z' WHERE book_id='b2'")
+        self.conn.commit()
+        last = pb.last_position(self.conn, "u1")
+        self.assertEqual(last["book_id"], "b2")
+        self.assertEqual(last["chapter_index"], 7)
+        self.assertEqual(last["offset_seconds"], 1.0)
+
+    def test_last_position_carries_the_title(self):
+        self.conn.execute("INSERT INTO books(id,user_id,title) VALUES('b1','u1','Fire')")
+        self.conn.commit()
+        pb.put_position(self.conn, "u1", "b1", 0, 0.0, "pc")
+        self.assertEqual(pb.last_position(self.conn, "u1")["title"], "Fire")
+
 
 if __name__ == "__main__":
     unittest.main()
