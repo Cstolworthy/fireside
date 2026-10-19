@@ -18,27 +18,30 @@ _BLOCK = re.compile(r"(?i)</?(p|div|h[1-6]|li|tr|blockquote|section|article|main
 _ANYTAG = re.compile(r"<[^>]+>")
 
 
-def text_of(xhtml: str) -> str:
-    """EPUB xhtml -> readable text. Tags out, block tags become newlines."""
-    s = re.sub(r"(?is)<(script|style|head)[^>]*>.*?</\1>", " ", xhtml)
-    s = re.sub(r"(?i)<br\s*/?>", "\n", s)
-    s = re.sub(r"(?i)</?(p|div|h[1-6]|li|tr|blockquote|section)[^>]*>", "\n", s)
-    s = TAG.sub("", s)
+def _readable_text(s: str) -> str:
+    """Normalize whitespace without discarding paragraph separators."""
     s = html.unescape(s)
     s = WS.sub(" ", s)
-    lines = [ln.strip() for ln in s.split("\n")]
-    s = "\n".join(ln for ln in lines if ln and not _CHROME.match(ln))
-    return BLANK.sub("\n\n", s).strip()
+    lines = [line.strip() for line in s.split("\n")]
+    # The empty lines distinguish separate paragraphs from soft line breaks.
+    # Dropping them collapses EPUB paragraph boundaries before TTS receives text.
+    return BLANK.sub("\n\n", "\n".join(
+        line for line in lines if not _CHROME.match(line)
+    )).strip()
+
+
+def text_of(xhtml: str) -> str:
+    """EPUB XHTML -> readable text, retaining paragraph and line breaks."""
+    s = re.sub(r"(?is)<(script|style|head)[^>]*>.*?</\1>", " ", xhtml)
+    s = re.sub(r"(?i)<br\s*/?>", "\n", s)
+    # Block tags separate paragraphs, unlike <br> which is a single line break.
+    s = re.sub(r"(?i)</?(p|div|h[1-6]|li|tr|blockquote|section)[^>]*>", "\n\n", s)
+    return _readable_text(TAG.sub("", s))
 
 
 def clean_fragment(frag: str) -> str:
-    """Page HTML -> just the words, with paragraph breaks kept."""
+    """Page HTML -> readable text, retaining paragraph and line breaks."""
     s = _KILL.sub(" ", frag)
     s = re.sub(r"(?i)<br\s*/?>", "\n", s)
-    s = _BLOCK.sub("\n", s)
-    s = _ANYTAG.sub("", s)
-    s = html.unescape(s)
-    s = WS.sub(" ", s)
-    lines = [ln.strip() for ln in s.split("\n")]
-    s = "\n".join(ln for ln in lines if ln and not _CHROME.match(ln))
-    return BLANK.sub("\n\n", s).strip()
+    s = _BLOCK.sub("\n\n", s)
+    return _readable_text(_ANYTAG.sub("", s))
