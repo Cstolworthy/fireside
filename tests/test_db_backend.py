@@ -25,6 +25,35 @@ class Translate(unittest.TestCase):
         self.assertEqual(db.translate("SELECT * FROM t WHERE a=? AND b=?"),
                          "SELECT * FROM t WHERE a=%s AND b=%s")
 
+    def test_on_conflict_becomes_on_duplicate_key(self):
+        sql = ("INSERT INTO positions(a,b,c) VALUES(?,?,?) "
+               "ON CONFLICT(a,b) DO UPDATE SET c=excluded.c")
+        self.assertEqual(
+            db.translate(sql),
+            "INSERT INTO positions(a,b,c) VALUES(%s,%s,%s) "
+            "ON DUPLICATE KEY UPDATE c=VALUES(c)")
+
+    def test_on_conflict_rewrites_every_excluded_column(self):
+        sql = ("INSERT INTO positions(user_id,book_id,chapter_index,offset_seconds,"
+               "updated_at,owner_device_id) VALUES(?,?,?,?,?,?) "
+               "ON CONFLICT(user_id,book_id) DO UPDATE SET "
+               "chapter_index=excluded.chapter_index,"
+               "offset_seconds=excluded.offset_seconds,updated_at=excluded.updated_at")
+        self.assertEqual(
+            db.translate(sql),
+            "INSERT INTO positions(user_id,book_id,chapter_index,offset_seconds,"
+            "updated_at,owner_device_id) VALUES(%s,%s,%s,%s,%s,%s) "
+            "ON DUPLICATE KEY UPDATE chapter_index=VALUES(chapter_index),"
+            "offset_seconds=VALUES(offset_seconds),updated_at=VALUES(updated_at)")
+
+    def test_on_conflict_leaves_non_excluded_rhs_alone(self):
+        sql = ("INSERT INTO t(a,b) VALUES(?,?) "
+               "ON CONFLICT(a) DO UPDATE SET b=b+1, c=excluded.c")
+        self.assertEqual(
+            db.translate(sql),
+            "INSERT INTO t(a,b) VALUES(%s,%s) "
+            "ON DUPLICATE KEY UPDATE b=b+1,c=VALUES(c)")
+
 
 class Backend(unittest.TestCase):
     def test_sqlite_is_default(self):
