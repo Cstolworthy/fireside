@@ -20,6 +20,25 @@ def get_position(conn, user_id, book_id):
             "updated_at": r["updated_at"], "owner_device_id": r["owner_device_id"]}
 
 
+def last_position(conn, user_id):
+    """The book this user touched most recently, with where they were in it.
+
+    One row per (user, book); the newest updated_at is the one a fresh page
+    should open. The title rides along so the caller need not have loaded the
+    library first.
+    """
+    r = conn.execute(
+        "SELECT p.book_id, p.chapter_index, p.offset_seconds, p.updated_at, b.title "
+        "FROM positions p LEFT JOIN books b ON b.id=p.book_id "
+        "WHERE p.user_id=? ORDER BY p.updated_at DESC LIMIT 1",
+        (user_id,)).fetchone()
+    if not r:
+        return {}
+    return {"book_id": r["book_id"], "title": r["title"] or "",
+            "chapter_index": r["chapter_index"], "offset_seconds": r["offset_seconds"],
+            "updated_at": r["updated_at"]}
+
+
 def put_position(conn, user_id, book_id, chapter_index, offset_seconds, device_id):
     """Write the exact position. On pause/stop/seek this is immediate."""
     conn.execute(

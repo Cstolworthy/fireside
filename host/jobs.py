@@ -98,13 +98,17 @@ def render_book(conn, storage, speech, user_id, book_id, voice="", model="",
     if job_id is None:
         job_id = start_job(conn, user_id, book_id, speech.id, voice, model, len(idxs))
     done = 0
+    done_chars = 0
     try:
         for i in idxs:
             render_chapter(conn, storage, speech, book_id, i, voice, model, speed,
                            cred=cred, opts=opts, voice_label=voice_label)
             done += 1
-            conn.execute("UPDATE jobs SET current=?,updated_at=? WHERE id=?",
-                         (done, now(), job_id))
+            cr = conn.execute("SELECT chars FROM chapters WHERE book_id=? AND idx=?",
+                              (book_id, i)).fetchone()
+            done_chars += (cr["chars"] if cr and cr["chars"] else 0)
+            conn.execute("UPDATE jobs SET current=?,done_chars=?,updated_at=? WHERE id=?",
+                         (done, done_chars, now(), job_id))
             conn.commit()
         conn.execute("UPDATE jobs SET status='done',current=?,updated_at=? WHERE id=?",
                      (done, now(), job_id))

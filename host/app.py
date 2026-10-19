@@ -633,6 +633,9 @@ class App:
     def get_position(self, q, body):
         return 200, playback.get_position(self.conn, self._uid(q, None), q["book"]) or {}
 
+    def last_position(self, q, body):
+        return 200, playback.last_position(self.conn, self._uid(q, None))
+
     def put_position(self, q, body):
         return 200, playback.put_position(self.conn, self._uid(q, body), body["book"],
                                           body["chapter_index"], body["offset_seconds"],
@@ -850,7 +853,7 @@ GET_ROUTES = {
     "/": "ui", "/index.html": "ui", "/favicon.ico": "favicon",
     "/health": "health", "/plugins": "plugins", "/library": "library_list",
     "/job": "job", "/progress": "progress", "/chapter": "chapter",
-    "/position": "get_position", "/stop": "stop", "/text": "text",
+    "/position": "get_position", "/last": "last_position", "/stop": "stop", "/text": "text",
     "/connections": "connections_list", "/source-creds": "source_creds",
     "/cover": "cover_get",
     "/auth/providers": "auth_providers", "/me": "me", "/auth/policy": "auth_policy",

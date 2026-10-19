@@ -446,3 +446,38 @@ class TestTransportNav(unittest.TestCase):
         self.assertNotIn("30 seconds", html)
         self.assertNotIn("\u221230s", html)
         self.assertNotIn("+30s", html)
+
+
+class TestGlobalConversionProgress(unittest.TestCase):
+    """Conversion progress lives in the global bar and is character-weighted: a
+    filling bar, a rising character count, and chapter x/y, so a few long
+    chapters do not read as almost done."""
+
+    def _html(self):
+        with open(os.path.join(UI_DIR, "index.html"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_progress_uses_done_chars_from_the_job(self):
+        html = self._html()
+        self.assertIn("j.done_chars", html)
+        self.assertIn("bar(doneChars, totalChars)", html)
+
+    def test_progress_shows_chapter_and_chars(self):
+        html = self._html()
+        self.assertIn("ch ' + j.current + '/' + j.total", html)
+        self.assertIn("nf(doneChars) + ' / ' + nf(totalChars)", html)
+
+
+class TestVolumePerDevice(unittest.TestCase):
+    """Volume is remembered per device; the position is not (it is global)."""
+
+    def _html(self):
+        with open(os.path.join(UI_DIR, "index.html"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_volume_is_stored_and_reapplied(self):
+        html = self._html()
+        self.assertIn("VOLKEY", html)
+        self.assertIn("localStorage.setItem(VOLKEY", html)
+        self.assertIn("function applyVolume", html)
+        self.assertIn("applyVolume();", html)
