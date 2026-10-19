@@ -117,6 +117,18 @@ class TestApp(unittest.TestCase):
         self.assertTrue(body["ok"])
         self.assertEqual(body["storage"], ["mem"])
 
+    def test_estimate_route(self):
+        s, imp = self._post("/import", {"user": "u1", "kind": "upload",
+                                        "filename": "x.epub"})
+        bid = imp["book_id"]
+        s, e = self._jget("/estimate?book=%s&provider=fake" % bid)
+        self.assertEqual(s, 200)
+        self.assertGreater(e["chars"], 0)
+        self.assertGreater(e["synth_seconds"], 0)
+        self.assertGreater(e["audio_bytes"], 0)
+        s, one = self._jget("/estimate?book=%s&provider=fake&chapters=0" % bid)
+        self.assertLess(one["chars"], e["chars"])
+
     def test_full_flow(self):
         s, imp = self._post("/import", {"user": "u1", "kind": "upload",
                                         "filename": "x.epub"})
