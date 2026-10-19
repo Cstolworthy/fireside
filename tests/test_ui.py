@@ -552,3 +552,28 @@ class TestUserStats(unittest.TestCase):
         self.assertIn("Characters voiced", html)
         self.assertIn("Books listened", html)
         self.assertIn("Listen time", html)
+
+
+class TestSelectToPlay(unittest.TestCase):
+    """Select text in the reader, press one button, and the audio jumps to
+    roughly that spot. The mapping is a character fraction, so the guard pins
+    the seam: the button exists, it derives a fraction from the selection, and
+    it seeks the one shared audio element."""
+
+    def _html(self):
+        with open(os.path.join(UI_DIR, "index.html"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_button_and_helpers_exist(self):
+        html = self._html()
+        self.assertIn('id="selplay"', html)
+        self.assertIn("function playFromSelection", html)
+        self.assertIn("function selectionCharOffset", html)
+        self.assertIn("function chapterRenderedChars", html)
+
+    def test_fraction_seek_targets_the_shared_audio_element(self):
+        html = self._html()
+        self.assertIn("selFrac", html)
+        self.assertIn("seekFraction", html)
+        self.assertIn("$a.currentTime", html)
+        self.assertIn("$('#selplay').onclick = playFromSelection", html)
