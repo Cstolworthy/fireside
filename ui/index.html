@@ -425,6 +425,7 @@
 </main>
 <div id="ribbon" class=""><span class="spin" id="rspin" style="display:none"></span><span class="rtext" id="rtext"></span><span class="rtime" id="rtime"></span><span class="rprog" id="rprog"><i id="rprogfill"></i></span><button class="rbtn" id="rdismiss" type="button" hidden>Dismiss</button></div>
 <div id="toasts"></div>
+<button id="selplay" type="button" hidden style="position:fixed;z-index:60;padding:8px 14px;border-radius:999px;border:1px solid #3a3f47;background:#191c22;color:#eceff3;font:inherit;font-size:13px;box-shadow:0 8px 22px rgba(0,0,0,.45);cursor:pointer">▶ Play from here</button>
 <div id="transport">
   <button class="tnav" id="tprev" type="button" title="Previous chapter" aria-label="Previous chapter">⏮</button>
   <button class="tnav" id="tback" type="button" title="Back 15 seconds">−15s</button>
@@ -1222,6 +1223,67 @@ async function loadText(idx) {
     });
   } catch (e) { $('#nptext').innerHTML = '<p class="small">No text for this chapter.</p>'; }
 }
+
+// --- play from a text selection ("continue listening from here") -------------
+// Right-here is cheap: the start of the selection is that fraction of the
+// chapter's characters, so seek that fraction of the chapter's audio. It is
+// exact only when audio time tracked characters 1:1; it does not, so this lands
+// within a few seconds. Word-accurate timings (Azure word-boundary events) can
+// replace `selFrac` later without touching the callers.
+let selFrac = null;
+function chapterRenderedChars() {
+  return [...document.querySelectorAll('#nptext p')].reduce((a, p) => a + p.textContent.length, 0);
+}
+function selectionCharOffset() {
+  const sel = window.getSelection(), box = $('#nptext');
+  if (!sel || !sel.rangeCount || !box) return null;
+  const r = sel.getRangeAt(0);
+  if (!box.contains(r.startContainer)) return null;
+  const pre = document.createRange();
+  pre.selectNodeContents(box);
+  pre.setEnd(r.startContainer, r.startOffset);
+  return pre.toString().length;
+}
+function hideSelPlay() { const b = $('#selplay'); if (b) b.hidden = true; }
+function placeSelPlay() {
+  const btn = $('#selplay'); if (!btn) return;
+  const off = selectionCharOffset();
+  const total = chapterRenderedChars();
+  if (off == null || !total) { selFrac = null; hideSelPlay(); return; }
+  selFrac = Math.min(1, Math.max(0, off / total));
+  const sel = window.getSelection(); const r = sel.rangeCount ? sel.getRangeAt(0).getBoundingClientRect() : null;
+  if (!r || (!r.width && !r.height)) { hideSelPlay(); return; }
+  btn.hidden = false;
+  const w = btn.offsetWidth || 150;
+  btn.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left)) + 'px';
+  btn.style.top = Math.max(8, r.top - 44) + 'px';
+}
+document.addEventListener('selectionchange', () => {
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')) { hideSelPlay(); return; }
+  placeSelPlay();
+});
+window.addEventListener('scroll', hideSelPlay, { passive: true });
+document.addEventListener('mousedown', e => { if (e.target.id !== 'selplay') hideSelPlay(); });
+// Seek once the element knows its duration; a freshly-set src has none yet.
+function seekFraction(frac, tries = 0) {
+  const d = $a.duration || 0;
+  if (d && isFinite(d)) { $a.currentTime = Math.min(d, Math.max(0, frac * d)); return; }
+  if (tries < 60) setTimeout(() => seekFraction(frac, tries + 1), 100);
+}
+async function playFromSelection() {
+  const frac = selFrac;
+  hideSelPlay();
+  if (frac == null || cur < 0 || !book) return;
+  const c = book.chapters.find(x => x.idx === cur); if (!c) return;
+  const rd = renditionFor(c);
+  if (!rd || !rd.audio_ref) { idle('This chapter is not converted in this voice yet.'); return; }
+  if (pcur !== cur || !$a.src) await playSelection(book, cur, true);
+  else $a.play().catch(() => {});
+  seekFraction(frac);
+  try { window.getSelection().removeAllRanges(); } catch (_) {}
+}
+$('#selplay').onclick = playFromSelection;
 
 // --- convert to voice (book-level; all, or just the ticked chapters) -------
 function cvTicked() { return [...document.querySelectorAll('#cvlist input[type=checkbox]')].filter(x => x.checked).map(x => +x.dataset.idx); }
