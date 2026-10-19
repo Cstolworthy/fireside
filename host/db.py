@@ -243,6 +243,29 @@ def now():
 
 _INSERT_OR_IGNORE = re.compile(r"\bINSERT\s+OR\s+IGNORE\b", re.I)
 _INSERT_OR_REPLACE = re.compile(r"\bINSERT\s+OR\s+REPLACE\b", re.I)
+# SQLite's upsert clause: ON CONFLICT(cols) DO UPDATE SET a=excluded.a, ...
+# MySQL has no ON CONFLICT; the equivalent is ON DUPLICATE KEY UPDATE a=VALUES(a).
+_ON_CONFLICT = re.compile(
+    r"\bON\s+CONFLICT\s*\(([^)]*)\)\s+DO\s+UPDATE\s+SET\s+(.+)$",
+    re.I | re.S)
+
+
+def _on_duplicate_key(m):
+    """Rewrite one ON CONFLICT body to MySQL's ON DUPLICATE KEY UPDATE.
+
+    Each `col=excluded.col` becomes `col=VALUES(col)`. A right-hand side that
+    is not `excluded.<col>` is left untouched, so an expression the two engines
+    share still passes through.
+    """
+    parts = []
+    for clause in m.group(2).split(","):
+        col, sep, val = clause.partition("=")
+        val = val.strip()
+        if sep and val.lower().startswith("excluded."):
+            parts.append("%s=VALUES(%s)" % (col.strip(), val[len("excluded."):]))
+        else:
+            parts.append(clause.strip())
+    return "ON DUPLICATE KEY UPDATE " + ",".join(parts)
 
 
 def translate(sql):
@@ -251,6 +274,7 @@ def translate(sql):
     sql = _INSERT_OR_REPLACE.sub("REPLACE", sql)
     if sql.strip().upper().startswith("BEGIN IMMEDIATE"):
         sql = "START TRANSACTION"
+    sql = _ON_CONFLICT.sub(_on_duplicate_key, sql)
     return sql.replace("?", "%s")
 
 
