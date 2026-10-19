@@ -7,10 +7,70 @@ job row carries progress; the client knows nothing about the pipeline.
 """
 
 import hashlib
+import os
+import threading
+import time
 import uuid
 
 from host import library
 from host.db import now
+
+
+# ---- what a render costs, before committing to it --------------------------
+# Rough factors, corrected against measured renders (1.86M chars ~= 31h of
+# audio, ~1.7GB, ~10h to synthesize on the CPU engine). The point is the right
+# order of magnitude before a job measured in hours, not a promise. Correct
+# these when a real render disagrees.
+CHARS_PER_AUDIO_SEC = 16.0      # ~1000 chars/min of speech audio
+AUDIO_BYTES_PER_SEC = 16000.0   # ~128 kbps mp3
+DEFAULT_CHARS_PER_SEC = 60.0    # synth wall-clock when the provider is unknown
+PROVIDER_CHARS_PER_SEC = {
+    "azure": 200.0, "minimax": 120.0, "openai": 200.0, "local": 48.0,
+}
+
+# One render at a time: the CPU engine pegs the box, and two at once makes the
+# whole tower unresponsive. A second job waits its turn instead of fighting.
+_RENDER_LOCK = threading.Lock()
+
+
+def synth_rate(provider):
+    return PROVIDER_CHARS_PER_SEC.get(provider or "", DEFAULT_CHARS_PER_SEC)
+
+
+def estimate(chars, provider=""):
+    """Estimated time and disk for rendering `chars`, before the user commits."""
+    chars = int(chars or 0)
+    audio_s = chars / CHARS_PER_AUDIO_SEC
+    return {
+        "chars": chars,
+        "audio_seconds": audio_s,
+        "audio_bytes": int(audio_s * AUDIO_BYTES_PER_SEC),
+        "synth_seconds": chars / synth_rate(provider),
+        "chars_per_sec": synth_rate(provider),
+    }
+
+
+def sweep_stale(conn, stale_seconds=0):
+    """Close out jobs whose worker is gone.
+
+    At startup no render thread can be alive, so `stale_seconds=0` marks every
+    running job interrupted. A positive window only touches jobs untouched for
+    that long. Converted chapters are kept either way, so a resume is cheap.
+    """
+    ts = now()
+    msg = "interrupted; converted chapters are kept, run the convert again to resume"
+    if stale_seconds and stale_seconds > 0:
+        cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                               time.gmtime(time.time() - stale_seconds))
+        cur = conn.execute(
+            "UPDATE jobs SET status='stalled', error=?, updated_at=?"
+            " WHERE status='running' AND updated_at < ?", (msg, ts, cutoff))
+    else:
+        cur = conn.execute(
+            "UPDATE jobs SET status='stalled', error=?, updated_at=?"
+            " WHERE status='running'", (msg, ts))
+    conn.commit()
+    return getattr(cur, "rowcount", 0) or 0
 
 
 def render_key(text_ref, provider, voice, model, speed):
@@ -82,40 +142,77 @@ def start_job(conn, user_id, book_id, provider, voice="", model="", total=0, kin
     return job_id
 
 
+def _resume_state(conn, book_id, idxs, provider, voice, model, speed):
+    """Which of `idxs` are already converted in this exact voice.
+
+    A restart must not throw away an hour of work: chapters that already have
+    a rendition for (provider, voice, model, speed) are done, and the render
+    resumes at the first one that is not.
+    """
+    want = set(idxs)
+    have = set()
+    for r in library.renditions(conn, book_id):
+        if (r["idx"] in want and r["provider"] == provider and r["voice"] == voice
+                and (r["model"] or "") == (model or "")
+                and abs(float(r["speed"] or 1.0) - float(speed or 1.0)) < 1e-6):
+            have.add(r["idx"])
+    chars = 0
+    for r in conn.execute("SELECT idx,chars FROM chapters WHERE book_id=?",
+                          (book_id,)):
+        if r["idx"] in have:
+            chars += (r["chars"] or 0)
+    return have, chars
+
+
 def render_book(conn, storage, speech, user_id, book_id, voice="", model="",
                 speed=1.0, cred=None, opts=None, only=None, job_id=None,
                 voice_label=""):
-    """Render all (or `only`) chapters of a book. Synchronous; returns the job id.
+    """Render all (or `only`) chapters of a book. Returns the job id.
 
-    Progress and per-chapter outcome are written to the job row so a client can
-    poll; the loop stops on the first real error and records it.
+    Resumable: chapters already converted in this voice are counted, not
+    redone, so a run restarted after a crash picks up where it stopped. The
+    loop runs under a server-wide lock so only one render ever pegs the box.
     """
     rows = conn.execute("SELECT idx FROM chapters WHERE book_id=? ORDER BY idx",
                         (book_id,)).fetchall()
     idxs = [r["idx"] for r in rows]
     if only is not None:
         idxs = [i for i in idxs if i in set(only)]
+    already, done_chars = _resume_state(conn, book_id, idxs, speech.id, voice,
+                                        model, speed)
+    todo = [i for i in idxs if i not in already]
     if job_id is None:
         job_id = start_job(conn, user_id, book_id, speech.id, voice, model, len(idxs))
-    done = 0
-    done_chars = 0
-    try:
-        for i in idxs:
-            render_chapter(conn, storage, speech, book_id, i, voice, model, speed,
-                           cred=cred, opts=opts, voice_label=voice_label)
-            done += 1
-            cr = conn.execute("SELECT chars FROM chapters WHERE book_id=? AND idx=?",
-                              (book_id, i)).fetchone()
-            done_chars += (cr["chars"] if cr and cr["chars"] else 0)
-            conn.execute("UPDATE jobs SET current=?,done_chars=?,updated_at=? WHERE id=?",
-                         (done, done_chars, now(), job_id))
-            conn.commit()
-        conn.execute("UPDATE jobs SET status='done',current=?,updated_at=? WHERE id=?",
-                     (done, now(), job_id))
-    except Exception as e:                      # a failed run must say so, not lie
-        conn.execute("UPDATE jobs SET status='error',error=?,updated_at=? WHERE id=?",
-                     ("%s: %s" % (type(e).__name__, e), now(), job_id))
+    done = len(already)
+    conn.execute("UPDATE jobs SET current=?,done_chars=?,updated_at=? WHERE id=?",
+                 (done, done_chars, now(), job_id))
     conn.commit()
+    with _RENDER_LOCK:
+        try:
+            if os.nice(0) < 10:            # stay a guest on the box, but never
+                os.nice(10 - os.nice(0))    # drift past nice 10 across renders
+        except Exception:
+            pass
+        try:
+            conn.execute("UPDATE jobs SET status='running',updated_at=? WHERE id=?",
+                         (now(), job_id))
+            conn.commit()
+            for i in todo:
+                render_chapter(conn, storage, speech, book_id, i, voice, model, speed,
+                               cred=cred, opts=opts, voice_label=voice_label)
+                done += 1
+                cr = conn.execute("SELECT chars FROM chapters WHERE book_id=? AND idx=?",
+                                  (book_id, i)).fetchone()
+                done_chars += (cr["chars"] if cr and cr["chars"] else 0)
+                conn.execute("UPDATE jobs SET current=?,done_chars=?,updated_at=? WHERE id=?",
+                             (done, done_chars, now(), job_id))
+                conn.commit()
+            conn.execute("UPDATE jobs SET status='done',current=?,updated_at=? WHERE id=?",
+                         (done, now(), job_id))
+        except Exception as e:                      # a failed run must say so, not lie
+            conn.execute("UPDATE jobs SET status='error',error=?,updated_at=? WHERE id=?",
+                         ("%s: %s" % (type(e).__name__, e), now(), job_id))
+        conn.commit()
     return job_id
 
 

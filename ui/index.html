@@ -449,6 +449,7 @@
   <div class="sheet" role="dialog" aria-modal="true" aria-label="Convert to voice">
     <h3>Convert to voice</h3>
     <p class="small" id="cvcount" style="margin-top:6px"></p>
+    <p class="small" id="cvest" style="margin-top:2px;color:#9aa"></p>
     <label>Voice server</label>
     <select id="cvconn"></select>
     <label>Voice</label>
@@ -1235,6 +1236,27 @@ function cvSync() {
   $('#cvcount').textContent = 'Whole book: ' + nf(bookChars) + ' characters.'
     + (n ? ' Selected: ' + nf(selChars) + ' characters, ' + n + ' of ' + total + ' chapters.'
          : ' Convert all ' + total + ', or tick chapters below to convert only those.');
+  updateEstimate();
+}
+// Ask the server what a convert will cost in time and disk before we start it.
+let estSeq = 0;
+const fsize = b => b > 1073741824 ? (b/1073741824).toFixed(1)+' GB'
+  : b > 1048576 ? (b/1048576).toFixed(1)+' MB' : Math.max(1, Math.round((b||0)/1024))+' KB';
+async function updateEstimate() {
+  const el = $('#cvest'); if (!el || !book) return;
+  const cid = $('#cvconn').value;
+  const provider = ((CONNS.find(c => c.id === cid)) || {}).provider || '';
+  const ticked = cvTicked();
+  const q = '/estimate?book=' + encodeURIComponent(book.id)
+    + '&provider=' + encodeURIComponent(provider)
+    + (ticked.length ? '&chapters=' + ticked.join(',') : '');
+  const my = ++estSeq;
+  try {
+    const d = await api(q);
+    if (my !== estSeq) return;
+    el.textContent = 'Estimate: ~' + hms(d.synth_seconds) + ' to convert'
+      + '  ·  ~' + fsize(d.audio_bytes) + ' of audio (' + hms(d.audio_seconds) + ')';
+  } catch (e) { el.textContent = ''; }
 }
 function openConvert() {
   needUser(); if (!book || !book.chapters.length) return;
@@ -1272,6 +1294,7 @@ async function loadCvVoices() {
     if (!vs.options.length) vs.innerHTML = '<option value="">no voices</option>';
     const f = $('#cvfilter'); if (f) { f.value = ''; filterSel(vs, ''); }
   } catch (e) { vs.innerHTML = '<option value="">could not load voices</option>'; }
+  updateEstimate();
 }
 $('#cvconn').onchange = loadCvVoices;
 $('#cvfilter').oninput = () => filterSel($('#cvvoice'), $('#cvfilter').value);
@@ -1299,6 +1322,10 @@ async function runConvert(list, label) {
       await new Promise(res => setTimeout(res, 1200));
       const j = await api('/job?id=' + encodeURIComponent(r.job_id));
       if (j.status === 'error') throw new Error(j.error || 'render failed');
+      if (j.status === 'stalled') {
+        idle('Interrupted mid-book. ' + (j.error || '') + ' Convert again to resume; finished chapters are kept.');
+        return;
+      }
       const doneChars = (j.done_chars != null) ? j.done_chars
         : order.slice(0, j.current).reduce((a, i) => a + charsOf(i), 0);
       const el = (Date.now() - t0) / 1000;

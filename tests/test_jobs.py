@@ -149,3 +149,61 @@ class ReservedWordColumns(unittest.TestCase):
             self.assertNotIn(" key=", low)
             self.assertNotIn("(key", low)
             self.assertIn("`key`", low)
+
+
+class TestEstimateAndResume(unittest.TestCase):
+    """Pre-convert estimate, crash recovery, and resume-without-redo."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="fireside-est-")
+        self.storage = LocalBackend(self.tmp + "/blobs")
+        self.conn = connect(":memory:")
+        library.create_user(self.conn, "u1")
+        self.bid = library.add_book(self.conn, self.storage, "u1",
+                                    _book(("aa", "bb", "cc")))
+        self.speech = FakeSpeech()
+
+    def test_estimate_scales_with_chars_and_provider(self):
+        e = jobs.estimate(16000, "azure")
+        self.assertEqual(e["chars"], 16000)
+        self.assertAlmostEqual(e["audio_seconds"], 1000.0)
+        self.assertAlmostEqual(e["audio_bytes"], 16000000.0)
+        self.assertAlmostEqual(e["synth_seconds"], 80.0)     # 16000 / 200
+        slow = jobs.estimate(16000, "local")
+        self.assertGreater(slow["synth_seconds"], e["synth_seconds"])
+        self.assertEqual(jobs.estimate(0, "azure")["audio_bytes"], 0)
+
+    def test_sweep_marks_running_stalled(self):
+        jid = jobs.start_job(self.conn, "u1", self.bid, "fake", "v1", "", total=3)
+        self.assertEqual(jobs.job(self.conn, jid)["status"], "running")
+        n = jobs.sweep_stale(self.conn)
+        self.assertEqual(n, 1)
+        j = jobs.job(self.conn, jid)
+        self.assertEqual(j["status"], "stalled")
+        self.assertIn("interrupted", j["error"])
+
+    def test_resume_state_counts_done_chapters(self):
+        jobs.render_book(self.conn, self.storage, self.speech, "u1", self.bid,
+                         voice="v1", only=[0, 1])
+        have, chars = jobs._resume_state(self.conn, self.bid, [0, 1, 2],
+                                         "fake", "v1", "", 1.0)
+        self.assertEqual(have, {0, 1})
+        self.assertGreater(chars, 0)
+
+    def test_resume_skips_done_even_without_cache(self):
+        jobs.render_book(self.conn, self.storage, self.speech, "u1", self.bid,
+                         voice="v1", only=[0, 1])
+        # drop the global cache: only the renditions table still says 0 and 1
+        # are done. Resume must still skip them, not synthesize again.
+        self.conn.execute("DELETE FROM render_cache")
+        self.conn.commit()
+        calls = self.speech.calls
+        jid = jobs.render_book(self.conn, self.storage, self.speech, "u1",
+                               self.bid, voice="v1")
+        j = jobs.job(self.conn, jid)
+        self.assertEqual(j["status"], "done")
+        self.assertEqual(j["current"], 3)
+        self.assertEqual(self.speech.calls, calls + 1,
+                         "only the missing chapter synthesizes")
+        rows = library.chapters(self.conn, self.bid)
+        self.assertTrue(all(r["audio_ref"] for r in rows))

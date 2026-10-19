@@ -54,6 +54,7 @@ class App:
         self.db_path = db_path
         self.conn = db.connect(db_path)
         library.backfill_renditions(self.conn)   # a book voiced before renditions still lists its voice
+        jobs.sweep_stale(self.conn)              # a fresh boot has no live renderer
         self.storage_id = storage_id
         self.sale_connection = sale_connection
         self.rate_limiter = rate_limiter
@@ -534,6 +535,26 @@ class App:
         j = jobs.job(self.conn, q.get("id", ""))
         return (200, j) if j else (404, {"error": "no job"})
 
+    def estimate(self, q, body):
+        """Pre-convert time and disk, before the user commits to a long job."""
+        book_id = q.get("book", "")
+        provider = q.get("provider", "")
+        rows = library.chapters(self.conn, book_id)
+        idxs = [c["idx"] for c in rows]
+        only = q.get("chapters")
+        if only:
+            sel = set()
+            for x in str(only).split(","):
+                x = x.strip()
+                if x:
+                    try:
+                        sel.add(int(x))
+                    except ValueError:
+                        pass
+            idxs = [i for i in idxs if i in sel]
+        chars = sum((c["chars"] or 0) for c in rows if c["idx"] in set(idxs))
+        return 200, jobs.estimate(chars, provider)
+
     def progress(self, q, body):
         book_id = q.get("book", "")
         b = library.get_book(self.conn, book_id) or {}
@@ -863,6 +884,7 @@ GET_ROUTES = {
     "/": "ui", "/index.html": "ui", "/favicon.ico": "favicon",
     "/health": "health", "/plugins": "plugins", "/library": "library_list",
     "/job": "job", "/progress": "progress", "/chapter": "chapter",
+    "/estimate": "estimate",
     "/position": "get_position", "/last": "last_position", "/stop": "stop", "/text": "text",
     "/stats": "stats_get",
     "/connections": "connections_list", "/source-creds": "source_creds",
