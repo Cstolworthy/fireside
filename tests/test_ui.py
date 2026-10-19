@@ -481,3 +481,74 @@ class TestVolumePerDevice(unittest.TestCase):
         self.assertIn("localStorage.setItem(VOLKEY", html)
         self.assertIn("function applyVolume", html)
         self.assertIn("applyVolume();", html)
+
+
+class TestViewLoadPlayerSplit(unittest.TestCase):
+    """One player, always. Opening a book is a look, never a load; playing a
+    selection makes its book the player's book; Load book is the explicit
+    resume. The page and the player are separate, so browsing cannot steal your
+    place."""
+
+    def _html(self):
+        with open(os.path.join(UI_DIR, "index.html"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_viewing_never_rewrites_the_last_book(self):
+        html = self._html()
+        # opening a book used to write it as the last book and jump to the
+        # player; that write is gone.
+        self.assertNotIn("lastName = id; localStorage.setItem", html)
+        self.assertIn("function loadBook", html)
+
+    def test_play_makes_its_book_the_player_book(self):
+        html = self._html()
+        self.assertIn("let player = { id: '', title: '', chapters: [] }", html)
+        self.assertIn("async function playSelection", html)
+        self.assertIn("player = { id: bk.id, title: bk.title, chapters: bk.chapters }", html)
+
+    def test_load_book_button_is_on_the_page(self):
+        html = self._html()
+        self.assertIn('id="loadbook"', html)
+        self.assertIn(">Load book<", html)
+
+
+class TestQueue(unittest.TestCase):
+    """The queue is a drawer off the transport bar: an ordered list of books
+    where finishing one loads and plays the next."""
+
+    def _html(self):
+        with open(os.path.join(UI_DIR, "index.html"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_queue_drawer_and_controls(self):
+        html = self._html()
+        for anchor in ('id="queuedrawer"', 'id="qlist"', 'id="qplay"',
+                       'id="qclear"', 'id="qclose"', 'id="queueadd"',
+                       'id="tqueue"'):
+            self.assertIn(anchor, html)
+        self.assertIn("function queueNext", html)
+        self.assertIn("QKEY", html)
+
+    def test_end_of_book_advances_the_queue(self):
+        html = self._html()
+        self.assertIn("queueNext()", html)
+        self.assertIn("loadBook(nqb.id)", html)
+
+
+class TestUserStats(unittest.TestCase):
+    """Per-user stats live behind the account chip and read from the stats
+    route, not from anything the client made up."""
+
+    def _html(self):
+        with open(os.path.join(UI_DIR, "index.html"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_stats_surface_is_in_the_account_menu(self):
+        html = self._html()
+        self.assertIn('id="stats"', html)
+        self.assertIn("function loadStats", html)
+        self.assertIn("/stats?user=", html)
+        self.assertIn("/listen", html)
+        self.assertIn("Characters voiced", html)
+        self.assertIn("Books listened", html)
+        self.assertIn("Listen time", html)

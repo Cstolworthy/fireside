@@ -78,6 +78,8 @@ CREATE TABLE IF NOT EXISTS positions (
 CREATE TABLE IF NOT EXISTS devices (
     user_id VARCHAR(128), device_id VARCHAR(128), book_id VARCHAR(128), last_seen VARCHAR(32),
     stop INT DEFAULT 0, PRIMARY KEY (user_id, device_id, book_id));
+CREATE TABLE IF NOT EXISTS listens (
+    user_id VARCHAR(128), book_id VARCHAR(128), seconds DOUBLE, created_at VARCHAR(32));
 CREATE TABLE IF NOT EXISTS credentials (
     user_id VARCHAR(128), provider VARCHAR(64), data TEXT, updated_at VARCHAR(32),
     PRIMARY KEY (user_id, provider));
