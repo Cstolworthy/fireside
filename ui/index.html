@@ -156,6 +156,7 @@
   #transport{position:fixed;left:0;right:0;bottom:0;z-index:65;display:none;align-items:center;gap:10px;padding:8px 16px;background:var(--surface);border-top:1px solid var(--line)}
   #transport.on{display:flex}
   #transport .tplay{width:38px;height:38px;flex:none;border-radius:50%;border:0;background:var(--flame);color:var(--on-flame);font-size:15px;cursor:pointer}
+  #transport .tq{background:none;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:7px 10px;cursor:pointer;font-size:13px;line-height:1}
   #transport .tnav{background:none;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:7px 12px;cursor:pointer;font-size:13px;line-height:1}
   #transport .tnow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--soft);font-size:13px}
   #transport .ttime{color:var(--faint);font-variant-numeric:tabular-nums;font-size:12px}
@@ -163,6 +164,23 @@
   #transport .vol input{width:90px;padding:0;border:0;background:none}
   body.hastransport #ribbon{bottom:55px}
   body.hastransport #toasts{bottom:112px}
+  /* --- per-user stats, tucked behind the account chip -------------------- */
+  .menu .stats{padding:9px 11px;border-bottom:1px solid var(--line);margin-bottom:6px}
+  .menu .stats[hidden]{display:none}
+  .statrow{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:var(--soft);padding:2px 0}
+  .statrow .r{color:var(--text);font-variant-numeric:tabular-nums}
+  /* --- the queue: a drawer off the transport bar ------------------------- */
+  #queuedrawer{position:fixed;right:16px;bottom:60px;z-index:66;width:340px;max-width:calc(100vw - 32px);max-height:60vh;overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:0 18px 50px #0009;padding:14px 16px}
+  #queuedrawer[hidden]{display:none}
+  #queuedrawer .qh{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  #queuedrawer .qh h3{margin:0;font-size:15px}
+  #queuedrawer .x{background:none;border:0;color:var(--faint);font-size:18px;line-height:1;cursor:pointer}
+  .qlist{display:flex;flex-direction:column;gap:6px;margin:6px 0}
+  .qrow{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:9px;padding:7px 9px;font-size:13px}
+  .qrow.cur{border-color:var(--flame)}
+  .qrow .qt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .qrow .qi{color:var(--faint);font-variant-numeric:tabular-nums;font-size:12px}
+  .qrow button{background:none;border:1px solid var(--line);border-radius:7px;color:var(--soft);cursor:pointer;font-size:12px;padding:2px 7px;line-height:1.4}
   @media(max-width:600px){ #transport .tnow{display:none} #transport .vol input{width:64px} }
   .toast{background:var(--raise);border:1px solid var(--line);border-left:3px solid var(--flame);border-radius:9px;padding:10px 12px;font-size:13px;box-shadow:0 10px 30px #0007}
   .toast.bad{border-left-color:var(--warn)}.toast.ok{border-left-color:var(--ready)}
@@ -263,6 +281,7 @@
       <button class="avatar" id="avatar" type="button" aria-label="Account menu">?</button>
       <div class="menu" id="usermenu" hidden>
         <div class="who" id="auth"></div>
+        <div class="stats" id="stats" hidden></div>
         <button id="menuset" type="button">Settings</button>
         <button id="signout" type="button">Sign out</button>
       </div>
@@ -330,6 +349,8 @@
           </div>
           <div class="row" style="margin-top:14px">Characters in this book<span class="r" id="npchars">0</span></div>
           <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" id="loadbook" type="button">Load book</button>
+            <button class="btn quiet" id="queueadd" type="button">＋ Queue</button>
             <button class="btn quiet" id="convertbtn">Convert to voice</button>
             <button class="btn quiet" id="offline">Download for offline</button>
             <button class="btn quiet" id="settingsbtn" type="button">Book settings</button>
@@ -410,9 +431,19 @@
   <button class="tplay" id="tplay" type="button" aria-label="Play">▶</button>
   <button class="tnav" id="tfwd" type="button" title="Forward 15 seconds">+15s</button>
   <button class="tnav" id="tnext" type="button" title="Next chapter" aria-label="Next chapter">⏭</button>
+  <button class="tq" id="tqueue" type="button" title="Queue" aria-label="Queue">☰</button>
   <span class="tnow" id="tnowbook"></span>
   <span class="ttime" id="ttimes"></span>
   <label class="vol" title="Volume">Vol<input id="tvol" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume"></label>
+</div>
+<div id="queuedrawer" hidden>
+  <div class="qh"><h3>Queue</h3><button class="x" id="qclose" type="button" aria-label="Close">×</button></div>
+  <p class="small" id="qempty">The queue is empty. Open a book and press ＋ Queue to add it. When a book finishes, the next one plays.</p>
+  <div id="qlist" class="qlist"></div>
+  <div class="connrow">
+    <button class="btn quiet" id="qplay" type="button">Play queue</button>
+    <button class="btn quiet" id="qclear" type="button">Clear queue</button>
+  </div>
 </div>
 <div class="modal" id="convertdlg" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-label="Convert to voice">
@@ -465,6 +496,11 @@ const $ = s => document.querySelector(s);
 const UKEY = 'fireside.user', SKEY = 'fireside.settings', LKEY = 'fireside.lastbook', DEVICE = 'web-' + Math.random().toString(36).slice(2, 8);
 let USER = localStorage.getItem(UKEY) || '';
 let plugins = null, sources = [], voices = [], books = [], book = null, cur = -1;
+// The player is separate from the page. `book` is whatever book you are looking
+// at; `player` is the one thing actually playing, and it owns pcur. Playing a
+// selection (or Load book) makes its book the player's book. Viewing never does.
+let player = { id: '', title: '', chapters: [] };
+let pcur = -1;
 let state = {};                 // idx -> ready | avail | down | voice | fail | miss | todo
 let SELECT = new Set();         // chapter idx chosen for a conditional convert
 let selVoice = '';              // the voice being played: provider\u0000voice\u0000model
@@ -472,6 +508,8 @@ const BADGE = { ready: 'on device', avail: 'voiced', voice: 'voicing', down: '�
 let lastName = localStorage.getItem(LKEY) || '';
 let RESUME = null;             // the last book the server saw this user in, with chapter + offset
 const VOLKEY = 'fireside.volume';   // volume is per device; the position is not
+const QKEY = 'fireside.queue';      // the play queue: an ordered list of book ids
+let queue = [];                    // [{id, title}]
 const cache = new Map();        // audio_ref -> {url, bytes}   verified this session
 
 // --- tiny SHA-256 (crypto.subtle is unavailable on plain-HTTP LAN origins) ----
@@ -573,7 +611,8 @@ function renderAlerts() { const m = $('#alertmenu'); m.innerHTML = '';
 $('#rdismiss').onclick = () => { _ribbon('', ''); $('#rdismiss').hidden = true; };
 $('#bell').onclick = () => { $('#alertmenu').hidden = !$('#alertmenu').hidden; $('#usermenu').hidden = true;
   if (!$('#alertmenu').hidden) renderAlerts(); };
-$('#avatar').onclick = () => { $('#usermenu').hidden = !$('#usermenu').hidden; $('#alertmenu').hidden = true; };
+$('#avatar').onclick = () => { $('#usermenu').hidden = !$('#usermenu').hidden; $('#alertmenu').hidden = true;
+  if (!$('#usermenu').hidden) loadStats(); };
 $('#menuset').onclick = () => { $('#usermenu').hidden = true; show('set'); };
 document.addEventListener('click', e => { const w = $('#who'); if (w && !w.contains(e.target)) {
   $('#usermenu').hidden = true; $('#alertmenu').hidden = true; } });
@@ -588,6 +627,9 @@ function ago(iso) { if (!iso) return '';
   if (s < 86400) return Math.round(s/3600) + 'h ago'; return Math.round(s/86400) + 'd ago'; }
 const hms = s => { s = Math.max(1, Math.round(s||0)); const h = Math.floor(s/3600), m = Math.floor((s%3600)/60);
   if (h) return h + 'h ' + m + 'm'; if (m) return m + 'm ' + (s%60) + 's'; return (s%60) + 's'; };
+const dur = s => { s = Math.max(0, Math.round(s||0));
+  if (!s) return 'none yet'; const h = Math.floor(s/3600), m = Math.round((s%3600)/60);
+  if (h) return h + 'h ' + m + 'm'; if (m) return m + 'm'; return s + 's'; };
 function needUser() { if (!USER) { fail('set your name first (top right)'); throw new Error('no user'); } }
 
 // --- views -----------------------------------------------------------------
@@ -991,12 +1033,15 @@ function renderResume() {
   const states = Array.from({ length: b.chapters }, (_, i) => i < b.rendered ? 'avail' : 'todo');
   const sp = spineEl(states, -1); sp.style.margin = '12px 0';
   const go = document.createElement('button'); go.className = 'btn'; go.textContent = 'Continue listening';
-  go.onclick = () => { openBook(b.id, true); };
+  go.onclick = () => loadBook(b.id);
   col.append(kick, h, meta, sp, go);
   box.append(cover, col);
 }
 
 // --- book + chapters -------------------------------------------------------
+// View a book: load its page. This never touches playback and never rewrites
+// the book you are listening to; opening a book is a look, not a load. The one
+// change it makes is `book` (the page), and `cur = -1` (no chapter pinned yet).
 async function openBook(id, jumpPlay) {
   if (!id) return; $('#err').textContent = '';
   try {
@@ -1007,25 +1052,35 @@ async function openBook(id, jumpPlay) {
              isbn: bk.isbn || '', author: bk.author || '',
              description: bk.description || '', publisher: bk.publisher || '',
              published: bk.published || '', chapters: prog.chapters || [] };
-    lastName = id; localStorage.setItem(LKEY, id);
     SELECT.clear();
     selVoice = defaultVoiceKey();       // the newest voice, until the reader picks another
     refreshStates();
     cur = -1;
     renderPlay();
     if (jumpPlay) show('play');
-    try { const pos = await api('/position?user=' + encodeURIComponent(USER) + '&book=' + encodeURIComponent(id));
-      if (pos && pos.chapter_index != null) {
-        idle('Resume at chapter ' + (pos.chapter_index + 1) + ', ' + Math.round(pos.offset_seconds) + 's.');
-        if (jumpPlay) {
-          const rc = book.chapters.find(x => x.idx === pos.chapter_index);
-          const rr = rc && renditionFor(rc);
-          if (rr && rr.audio_ref) { play(pos.chapter_index, true); return; }
-        }
-      } }
-    catch (_) {}
-    idle('Loaded ' + book.title + '.');
+    idle('Opened ' + book.title + '.');
   } catch (e) { fail(e); }
+}
+
+// Load a book into the player: bind it and resume its saved spot. This is the
+// explicit way to replace what you are listening to. It also happens on its own
+// when you start a selection somewhere else, so there is only ever one thing
+// playing.
+async function loadBook(id) {
+  if (!USER) return;
+  if (!book || book.id !== id) { await openBook(id); }
+  if (!book || book.id !== id) return;
+  show('play');
+  player = { id: book.id, title: book.title, chapters: book.chapters };
+  lastName = player.id; try { localStorage.setItem(LKEY, lastName); } catch (_) {}
+  const voiced = book.chapters.filter(c => { const r = renditionFor(c); return r && r.audio_ref; });
+  if (!voiced.length) { renderPlay(); idle('Nothing voiced in this voice yet — convert the book first.'); return; }
+  let idx = voiced[0].idx;
+  try { const pos = await api('/position?user=' + encodeURIComponent(USER) + '&book=' + encodeURIComponent(id));
+    if (pos && pos.chapter_index != null && voiced.some(c => c.idx === pos.chapter_index)) idx = pos.chapter_index;
+  } catch (_) {}
+  renderResume();
+  await playSelection(book, idx, true);
 }
 
 // --- voices on a book: more than one conversion means a picker -------------
@@ -1368,23 +1423,37 @@ async function fetchChapter(id, idx, ref, nbytes, r) {
   cache.set(key, entry); return entry;
 }
 
-async function play(idx, autoplay = true) {
-  if (!book) return; $('#err').textContent = '';
-  const c = book.chapters.find(x => x.idx === idx); if (!c) return;
-  const vl = renditionFor(c) ? rlabel(renditionFor(c)) : ($('#voice').selectedOptions[0] ? $('#voice').selectedOptions[0].textContent : '');
+function play(idx, autoplay = true) { return playSelection(book, idx, autoplay); }
+
+// Play a chapter of `bk` and make `bk` the player's book. One play, always: the
+// single audio element means a new selection replaces whatever was playing. The
+// page re-renders only when `bk` is the book you are actually looking at.
+async function playSelection(bk, idx, autoplay = true) {
+  if (!bk) return; $('#err').textContent = '';
+  const c = bk.chapters.find(x => x.idx === idx); if (!c) return;
   const rd = renditionFor(c);
-  if (!rd || !rd.audio_ref) { cur = idx; renderPlay(); loadText(idx); idle('Not converted in this voice yet.'); return; }
-  state[idx] = cache.has(rd.audio_ref) ? 'ready' : 'down'; drawSpine();
+  const viewed = !!(book && book.id === bk.id);
+  if (!rd || !rd.audio_ref) {
+    if (viewed) { cur = idx; renderPlay(); loadText(idx); }
+    idle('Not converted in this voice yet.'); return;
+  }
+  if (viewed) { state[idx] = cache.has(rd.audio_ref) ? 'ready' : 'down'; drawSpine(); }
   busy((autoplay ? 'Downloading chapter ' : 'Loading chapter ') + (idx + 1) + '…');
   try {
-    const e = await fetchChapter(book.id, idx, rd.audio_ref, rd.audio_bytes, rd);
+    const e = await fetchChapter(bk.id, idx, rd.audio_ref, rd.audio_bytes, rd);
     const a = $('#audio'); a.src = e.url;
-    if (autoplay) { await jpost('/claim', { user: USER, book: book.id, device: DEVICE }); a.play().catch(() => {}); }
-    cur = idx; state[idx] = 'ready';
-    renderPlay(); await loadText(idx);
+    player = { id: bk.id, title: bk.title, chapters: bk.chapters };
+    pcur = idx;
+    lastName = player.id; try { localStorage.setItem(LKEY, lastName); } catch (_) {}
+    if (viewed) { state[idx] = 'ready'; cur = idx; renderPlay(); await loadText(idx); }
+    if (autoplay) { await jpost('/claim', { user: USER, book: player.id, device: DEVICE }); a.play().catch(() => {}); }
     if (autoplay) { markResume(); pollStop(); }
-    idle('Ready · ' + vl + ' · ' + fmt(e.bytes));
-  } catch (err) { state[idx] = 'fail'; drawSpine(); drawNote(); fail(err); }
+    updateTransport(); renderResume(); renderQueue();
+    idle('Ready · ' + rlabel(rd) + ' · ' + fmt(e.bytes));
+  } catch (err) {
+    if (viewed) { state[idx] = 'fail'; drawSpine(); drawNote(); }
+    fail(err);
+  }
 }
 
 // --- transport -------------------------------------------------------------
@@ -1397,25 +1466,25 @@ function syncTog() {
 // --- the global transport: the same audio element, reachable from any tab ---
 function updateTransport() {
   const box = $('#transport'); if (!box) return;
-  const on = !!book;
+  const on = !!player.id;
   box.classList.toggle('on', on);
   document.body.classList.toggle('hastransport', on);
   const lbl = $('#tnowbook');
-  if (lbl) lbl.textContent = on ? (book.title + (cur >= 0 ? ' · ch ' + (cur + 1) : '')) : '';
+  if (lbl) lbl.textContent = on ? (player.title + (pcur >= 0 ? ' · ch ' + (pcur + 1) : '')) : '';
 }
 // step to the nearest chapter (in `dir`) that has audio in the current voice
 function chapterStep(dir) {
-  if (!book || cur < 0) return;
-  const chs = book.chapters.slice().sort((a, b) => a.idx - b.idx);
-  let at = chs.findIndex(c => c.idx === cur);
+  if (!player.id || pcur < 0) return;
+  const chs = player.chapters.slice().sort((a, b) => a.idx - b.idx);
+  let at = chs.findIndex(c => c.idx === pcur);
   if (at < 0) at = dir < 0 ? chs.length : -1;
   for (let i = at + dir; i >= 0 && i < chs.length; i += dir) {
     const r = renditionFor(chs[i]);
-    if (r && r.audio_ref) { play(chs[i].idx); return; }
+    if (r && r.audio_ref) { playSelection(player, chs[i].idx); return; }
   }
   idle('No ' + (dir < 0 ? 'previous' : 'next') + ' chapter is voiced in this voice yet.');
 }
-$('#tplay').onclick = () => { if (!book || cur < 0) return; $a.paused ? $a.play().catch(()=>{}) : $a.pause(); };
+$('#tplay').onclick = () => { if (!player.id || pcur < 0) return; $a.paused ? $a.play().catch(()=>{}) : $a.pause(); };
 $('#tprev').onclick = () => chapterStep(-1);
 $('#tnext').onclick = () => chapterStep(1);
 $('#tback').onclick = () => { $a.currentTime = Math.max(0, ($a.currentTime || 0) - 15); };
@@ -1425,11 +1494,12 @@ $('#tvol').oninput = () => { const v = parseFloat($('#tvol').value); $a.volume =
   try { localStorage.setItem(VOLKEY, String(v)); } catch (e) {} };
 function applyVolume() { let v = parseFloat(localStorage.getItem(VOLKEY) || '1'); if (isNaN(v)) v = 1;
   v = Math.min(1, Math.max(0, v)); $a.volume = v; const s = $('#tvol'); if (s) s.value = String(v); }
-$('#tog').onclick = () => { if (!book || cur < 0) return; $a.paused ? $a.play().catch(()=>{}) : $a.pause(); };
+$('#tog').onclick = () => { if (!player.id || pcur < 0) return; $a.paused ? $a.play().catch(()=>{}) : $a.pause(); };
 $('#back30').onclick = () => { $a.currentTime = Math.max(0, ($a.currentTime || 0) - 15); };
 const SPD = [1.0, 1.1, 1.25, 1.5]; let si = 1;
 $('#speed').onclick = () => { si = (si + 1) % SPD.length; $a.playbackRate = SPD[si]; $('#speed').textContent = SPD[si] + '×'; };
-$a.addEventListener('play', syncTog); $a.addEventListener('pause', syncTog);
+$a.addEventListener('play', () => { syncTog(); listenStart(); });
+$a.addEventListener('pause', () => { syncTog(); listenStop(); });
 $a.addEventListener('timeupdate', () => {
   const d = $a.duration || 0; $('#progfill').style.width = d ? (100 * $a.currentTime / d) + '%' : '0';
   $('#tcur').textContent = mmss($a.currentTime);
@@ -1441,36 +1511,136 @@ $('#prog').onclick = e => { const d = $a.duration || 0; if (!d) return;
 
 // --- position + handoff ----------------------------------------------------
 async function savePosition() {
-  if (!book || cur < 0) return;
-  try { await jpost('/position', { user: USER, book: book.id, chapter_index: cur,
+  if (!player.id || pcur < 0) return;
+  try { await jpost('/position', { user: USER, book: player.id, chapter_index: pcur,
     offset_seconds: $a.currentTime || 0, device: DEVICE }); } catch (_) {}
 }
 let timer = null;
 function markResume() { clearInterval(timer); timer = setInterval(savePosition, 15000); }
+// --- listen time: one append-only heartbeat per running stretch ------------
+let listenTimer = null, lastListen = 0;
+function listenPulse() {
+  if (!player.id) return;
+  const nowMs = Date.now();
+  if (!lastListen) { lastListen = nowMs; return; }
+  const secs = (nowMs - lastListen) / 1000; lastListen = nowMs;
+  if (secs > 0) jpost('/listen', { user: USER, book: player.id, seconds: secs }).catch(() => {});
+}
+function listenStart() {
+  if (!player.id) return;
+  lastListen = Date.now();
+  clearInterval(listenTimer); listenTimer = setInterval(listenPulse, 20000);
+}
+function listenStop() {
+  clearInterval(listenTimer); listenTimer = null;
+  if (!player.id || !lastListen) { lastListen = 0; return; }
+  const secs = (Date.now() - lastListen) / 1000; lastListen = 0;
+  if (secs > 0) jpost('/listen', { user: USER, book: player.id, seconds: secs }).catch(() => {});
+}
 $a.addEventListener('pause', savePosition);
 $a.addEventListener('seeked', savePosition);
 $a.addEventListener('loadedmetadata', async () => {
-  if (!book || cur < 0) return;
-  try { const p = await api('/position?user=' + encodeURIComponent(USER) + '&book=' + encodeURIComponent(book.id));
-    if (p && p.chapter_index === cur && p.offset_seconds > 3) $a.currentTime = p.offset_seconds; } catch (_) {}
+  if (!player.id || pcur < 0) return;
+  try { const p = await api('/position?user=' + encodeURIComponent(USER) + '&book=' + encodeURIComponent(player.id));
+    if (p && p.chapter_index === pcur && p.offset_seconds > 3) $a.currentTime = p.offset_seconds; } catch (_) {}
 });
 $a.addEventListener('ended', () => {
-  if (!book || cur < 0) return;
-  const nx = cur + 1; const c = book.chapters.find(x => x.idx === nx);
+  if (!player.id || pcur < 0) return;
+  const nx = pcur + 1; const c = player.chapters.find(x => x.idx === nx);
   const r = c && renditionFor(c);
-  if (r && r.audio_ref) play(nx);
-  else idle('Paused at the next chapter (not voiced in this voice yet).');
+  if (r && r.audio_ref) { playSelection(player, nx); return; }
+  const nqb = queueNext();
+  if (nqb) { idle('Finished ' + (player.title || 'the book') + ' — loading ' + (nqb.title || 'the next book') + '.'); loadBook(nqb.id); return; }
+  idle('Paused at the next chapter (not voiced in this voice yet).');
 });
 let stopTimer = null;
 function pollStop() {
   clearInterval(stopTimer);
   stopTimer = setInterval(async () => {
-    if (!book) return;
-    try { const d = await api('/stop?user=' + encodeURIComponent(USER) + '&book=' + encodeURIComponent(book.id) + '&device=' + DEVICE);
+    if (!player.id) return;
+    try { const d = await api('/stop?user=' + encodeURIComponent(USER) + '&book=' + encodeURIComponent(player.id) + '&device=' + DEVICE);
       if (d.stop) { $a.pause(); await savePosition();
-        await jpost('/ack', { user: USER, book: book.id, device: DEVICE }); idle('Stopped — another device took over.'); } }
+        await jpost('/ack', { user: USER, book: player.id, device: DEVICE }); idle('Stopped — another device took over.'); } }
     catch (_) {}
   }, 5000);
+}
+
+// --- the queue: an ordered list of books, auto-advancing -------------------
+// The queue is where auto-advance lives: when a book runs out of voiced
+// chapters, the next queue entry loads and plays. It is a drawer off the
+// transport bar, not a tab, so it stays one click from whatever is playing.
+function loadQueue() {
+  try { queue = JSON.parse(localStorage.getItem(QKEY) || '[]') || []; } catch (_) { queue = []; }
+  queue = queue.filter(q => q && q.id);
+}
+function saveQueue() { try { localStorage.setItem(QKEY, JSON.stringify(queue)); } catch (_) {} }
+function queueIndexOf(id) { return queue.findIndex(q => q.id === id); }
+function queueAdd(id) {
+  if (!id) return;
+  if (queueIndexOf(id) >= 0) { idle('Already in the queue.'); return; }
+  const b = bookById(id); queue.push({ id, title: (b && b.title) || id });
+  saveQueue(); renderQueue(); idle('Added to the queue.');
+}
+function queueRemove(id) { queue = queue.filter(q => q.id !== id); saveQueue(); renderQueue(); }
+function queueMove(id, dir) {
+  const i = queueIndexOf(id), j = i + dir;
+  if (i < 0 || j < 0 || j >= queue.length) return;
+  const t = queue[i]; queue[i] = queue[j]; queue[j] = t; saveQueue(); renderQueue();
+}
+function queueNext() {
+  if (player.id) { const i = queueIndexOf(player.id); if (i >= 0) return queue[i + 1] || null; }
+  return queue[0] || null;
+}
+function renderQueue() {
+  const box = $('#qlist'); if (!box) return;
+  box.innerHTML = '';
+  const em = $('#qempty'); if (em) em.hidden = queue.length > 0;
+  queue.forEach((q, i) => {
+    const row = document.createElement('div'); row.className = 'qrow' + (q.id === player.id ? ' cur' : '');
+    const n = document.createElement('span'); n.className = 'qi'; n.textContent = (i + 1);
+    const t = document.createElement('span'); t.className = 'qt'; t.textContent = q.title || q.id;
+    const up = document.createElement('button'); up.type = 'button'; up.textContent = '↑'; up.title = 'Move up';
+    up.onclick = () => queueMove(q.id, -1);
+    const dn = document.createElement('button'); dn.type = 'button'; dn.textContent = '↓'; dn.title = 'Move down';
+    dn.onclick = () => queueMove(q.id, 1);
+    const rm = document.createElement('button'); rm.type = 'button'; rm.textContent = '×'; rm.title = 'Remove';
+    rm.onclick = () => queueRemove(q.id);
+    row.append(n, t, up, dn, rm); box.append(row);
+  });
+}
+function toggleQueue(force) {
+  const d = $('#queuedrawer'); if (!d) return;
+  d.hidden = (force === undefined) ? !d.hidden : !force;
+  if (!d.hidden) renderQueue();
+}
+$('#tqueue').onclick = () => toggleQueue();
+$('#qclose').onclick = () => toggleQueue(false);
+$('#queueadd').onclick = () => { if (book) queueAdd(book.id); };
+$('#qclear').onclick = () => { queue = []; saveQueue(); renderQueue(); };
+$('#qplay').onclick = () => {
+  const first = queue[0] || (book ? { id: book.id } : null);
+  if (!first) { idle('The queue is empty.'); return; }
+  toggleQueue(false); loadBook(first.id);
+};
+$('#loadbook').onclick = () => { if (book) loadBook(book.id); };
+
+// --- per-user stats, behind the account chip -------------------------------
+async function loadStats() {
+  const box = $('#stats'); if (!box) return;
+  if (!USER) { box.hidden = true; return; }
+  try {
+    const s = await api('/stats?user=' + encodeURIComponent(USER));
+    box.innerHTML = '';
+    const line = (label, val) => { const d = document.createElement('div'); d.className = 'statrow';
+      const l = document.createElement('span'); l.textContent = label;
+      const v = document.createElement('span'); v.className = 'r'; v.textContent = val;
+      d.append(l, v); box.append(d); };
+    line('Characters voiced', nf(s.chars_total));
+    Object.keys(s.chars_by_provider || {}).sort().forEach(p => { if (p) line('· ' + p, nf(s.chars_by_provider[p])); });
+    line('Books listened', nf(s.books_listened));
+    line('Listen time', dur(s.listen_seconds));
+    box.hidden = false;
+  } catch (_) { box.hidden = true; }
 }
 
 // --- offline (pull-only) ---------------------------------------------------
@@ -1640,12 +1810,14 @@ window.addEventListener('load', async () => {
   const ok = await requireSession();
   if (!ok) return;
   try { await loadPlugins(); } catch (e) { fail(e); }
+  loadQueue();
   await loadLibrary();
   try { const lp = await api('/last?user=' + encodeURIComponent(USER));
     if (lp && lp.book_id) { RESUME = lp; lastName = lp.book_id;
       try { localStorage.setItem(LKEY, lastName); } catch (e) {}
       renderResume(); } } catch (_) {}
   if (lastName) { try { await openBook(lastName); } catch (_) {} }
+  renderQueue();
   applyVolume();
   syncTog();
 });

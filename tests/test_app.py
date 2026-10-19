@@ -243,6 +243,26 @@ class TestApp(unittest.TestCase):
             urllib.request.urlopen(req)
         self.assertEqual(cm.exception.code, 400)
 
+    def test_stats_and_listen_over_http(self):
+        # chars come from finished render jobs; listen time is an append-only
+        # log written by the play heartbeat.
+        s, imp = self._post("/import", {"user": "u1", "kind": "upload"})
+        bid = imp["book_id"]
+        _, r = self._post("/render", {"user": "u1", "book": bid,
+                                       "provider": "fake", "voice": "v"})
+        self._wait_job(r["job_id"])
+        s, st = self._jget("/stats?user=u1")
+        self.assertEqual(s, 200)
+        self.assertEqual(st["chars_total"], len("hello world") + len("second chapter"))
+        self.assertEqual(st["chars_by_provider"].get("fake"),
+                         len("hello world") + len("second chapter"))
+        self.assertEqual(st["books_listened"], 0)
+        self._post("/listen", {"user": "u1", "book": bid, "seconds": 12.5})
+        self._post("/listen", {"user": "u1", "book": bid, "seconds": 7.5})
+        s, st = self._jget("/stats?user=u1")
+        self.assertEqual(st["books_listened"], 1)
+        self.assertEqual(st["listen_seconds"], 20.0)
+
 
 if __name__ == "__main__":
     unittest.main()
