@@ -37,7 +37,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
-from host import accounting, auth, billing, connections, credentials, db, jobs, library, payments, playback, pron, stats
+from host import accounting, auth, billing, connections, credentials, db, jobs, library, payments, playback, pron, quota, stats
 from sources._fetch import fetch as _fetch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -185,10 +185,41 @@ class App:
             return 400, {"error": "no reader matched"}
         cred = self._source_cred(user, plugin.id, body.get("cred"))
         book = plugin.obj.read(req, self._make_fetch(plugin.obj, cred), cred)
+        incoming = self._book_bytes(book)
+        plan = (billing.get(self.conn, user) or {}).get("plan") or ""
+        if not quota.check_room(self.conn, self.storage, user, plan, incoming):
+            left = max(0, quota.allowance_bytes(plan)
+                       - quota.usage(self.conn, self.storage, user)["own_bytes"])
+            return 507, {"error": "not enough storage",
+                         "detail": "this book needs about %d bytes; %d left in your plan"
+                                   % (incoming, left)}
         bid = library.add_book(self.conn, self.storage, user, book)
         self._maybe_cover(bid, book)
         return 200, {"book_id": bid, "title": getattr(book, "title", ""),
                      "chapters": len(getattr(book, "chapters", []))}
+
+    @staticmethod
+    def _book_bytes(book):
+        """Upper-bound bytes an import would add: every chapter's text plus the
+        reader's cover, if any. Not deduped against blobs the user already holds,
+        so the gate may over-refuse; it must never over-commit."""
+        total = 0
+        for ch in getattr(book, "chapters", None) or []:
+            text = ch.text if isinstance(ch.text, str) else str(ch.text)
+            total += len(text.encode("utf-8"))
+        cover = getattr(book, "cover", None)
+        if cover:
+            total += len(cover)
+        return total
+
+    def _plan(self, user_id):
+        return (billing.get(self.conn, user_id) or {}).get("plan") or ""
+
+    def _storage_ok(self, user_id, nbytes):
+        """True when `nbytes` of new storage fits this user's plan. Reads only;
+        the caller refuses the write."""
+        return quota.check_room(self.conn, self.storage, user_id,
+                                self._plan(user_id), nbytes)
 
     # ---- cover art -----------------------------------------------------------
     # A book's cover is its own image when the reader handed one over (an epub
@@ -242,14 +273,19 @@ class App:
 
     def put_cover(self, q, body):
         book_id = body.get("book", "")
-        if not library.get_book(self.conn, book_id):
+        book = library.get_book(self.conn, book_id)
+        if not book:
             return 404, {"error": "no such book"}
+        owner = book["user_id"]
         url = (body.get("url") or "").strip()
         if url:
             got = self._cover_from_url(url)
             if not got:
                 return 400, {"error": "could not fetch an image from that URL"}
             data, mime = got
+            if not self._storage_ok(owner, len(data)):
+                return 507, {"error": "not enough storage",
+                             "detail": "your plan has no room for this cover"}
             library.set_cover(self.conn, self.storage, book_id, data, mime)
             return 200, {"ok": True, "cover": library.get_book(self.conn, book_id)["cover"]}
         raw = body.get("data_b64") or ""
@@ -261,6 +297,9 @@ class App:
             return 400, {"error": "no image"}
         if len(data) > self.COVER_MAX_BYTES:
             return 413, {"error": "image is too large"}
+        if not self._storage_ok(owner, len(data)):
+            return 507, {"error": "not enough storage",
+                         "detail": "your plan has no room for this cover"}
         library.set_cover(self.conn, self.storage, book_id, data,
                           body.get("mime") or "image/jpeg")
         return 200, {"ok": True, "cover": library.get_book(self.conn, book_id)["cover"]}
@@ -524,6 +563,12 @@ class App:
         todo = [c["idx"] for c in rows]
         if only is not None:
             todo = [i for i in todo if i in set(only)]
+        todo_chars = sum(c["chars"] or 0 for c in rows if c["idx"] in set(todo))
+        est_bytes = jobs.estimate(todo_chars, provider)["audio_bytes"]
+        if not self._storage_ok(user, est_bytes):
+            return 507, {"error": "not enough storage",
+                         "detail": "this render needs about %d bytes of audio and "
+                                   "your plan has no room for it" % est_bytes}
         sale = accounting.sale_connection_matches(self.sale_connection, provider, voice, model)
         res_id = None
         if sale:
@@ -663,6 +708,20 @@ class App:
         return 200, {"subscription": billing.get(self.conn, uid) if uid else None,
                      "plans": plans,
                      "payments_configured": payments.configured()}
+
+    def storage_get(self, q, body):
+        """The signed-in user's storage: the bytes their own shelf holds and how
+        much their plan includes. A held book bills its own bytes; there is no
+        sharing discount and nothing is auto-released. Read-only."""
+        uid = self._uid(q, body)
+        sub = billing.get(self.conn, uid) if uid else None
+        plan = (sub or {}).get("plan") or ""
+        u = quota.usage(self.conn, self.storage, uid) if uid else {
+            "user_id": uid, "own_bytes": 0, "total_bytes": 0, "blobs": 0}
+        allowed = quota.allowance_bytes(plan)
+        u.update({"plan": plan, "allowance_bytes": allowed,
+                  "remaining_bytes": max(0, allowed - u["own_bytes"])})
+        return 200, u
 
     def billing_checkout(self, q, body):
         uid = self._uid(q, body)
@@ -1140,6 +1199,7 @@ GET_ROUTES = {
     "/sessions": "sessions_list",
     "/auth/users": "auth_users", "/credits": "credits",
     "/billing": "billing_get",
+    "/storage": "storage_get",
 }
 POST_ROUTES = {
     "/import": "import_book", "/render": "render", "/voices": "voices",

@@ -161,6 +161,14 @@ class Storage:
     def delete(self, ref: str) -> None:
         raise NotImplementedError
 
+    def size(self, ref: str) -> int:
+        """Bytes for a blob, or 0 when it is absent. Storage accounting uses
+        this instead of trusting a recorded byte count. The default reads the
+        blob; a backend that can answer more cheaply overrides it."""
+        if not self.has(ref):
+            return 0
+        return len(self.get(ref))
+
     def info(self) -> StorageInfo:
         return StorageInfo()
 
