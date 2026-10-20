@@ -37,7 +37,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
-from host import accounting, auth, connections, credentials, db, jobs, library, payments, playback, pron, stats
+from host import accounting, auth, billing, connections, credentials, db, jobs, library, payments, playback, pron, stats
 from sources._fetch import fetch as _fetch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -649,6 +649,56 @@ class App:
         return 200, {"ok": True, "chars": chars, "balance": total,
                      "reference": receipt.reference}
 
+    # ---- billing (the recurring platform tier) -------------------------------
+    # The provider is the authority on plans and on whether a checkout is paid.
+    # The host records only what the provider reported.
+
+    def billing_get(self, q, body):
+        uid = self._uid(q, body)
+        pp = payments.get()
+        plans = []
+        fn = getattr(pp, "plans", None)
+        if callable(fn):
+            plans = [p.dict() if hasattr(p, "dict") else dict(p) for p in fn()]
+        return 200, {"subscription": billing.get(self.conn, uid) if uid else None,
+                     "plans": plans,
+                     "payments_configured": payments.configured()}
+
+    def billing_checkout(self, q, body):
+        uid = self._uid(q, body)
+        if not uid:
+            return 401, {"error": "auth required"}
+        pp = payments.get()
+        fn = getattr(pp, "checkout", None)
+        if not callable(fn):
+            return 503, {"error": "payments not configured",
+                         "detail": "the platform tier is held until a payments provider lands"}
+        plan = (body or {}).get("plan") or q.get("plan") or ""
+        co = fn(plan, {"user": uid,
+                       "return_url": (body or {}).get("return_url") or ""})
+        if not getattr(co, "ok", False):
+            return 402, {"error": "checkout refused",
+                         "detail": getattr(co, "detail", "")}
+        return 200, {"url": co.url, "reference": co.reference}
+
+    def billing_confirm(self, q, body):
+        uid = self._uid(q, body)
+        if not uid:
+            return 401, {"error": "auth required"}
+        pp = payments.get()
+        fn = getattr(pp, "confirm", None)
+        if not callable(fn):
+            return 503, {"error": "payments not configured"}
+        ref = (body or {}).get("reference") or q.get("reference") or ""
+        sub = fn(ref)
+        if not getattr(sub, "ok", False):
+            return 402, {"error": "not confirmed",
+                         "detail": getattr(sub, "detail", "")}
+        row = billing.upsert(self.conn, uid, sub.plan, sub.status,
+                             provider=getattr(pp, "id", ""), reference=ref,
+                             current_period_end=sub.current_period_end)
+        return 200, {"ok": True, "subscription": row}
+
     def job(self, q, body):
         j = jobs.job(self.conn, q.get("id", ""))
         return (200, j) if j else (404, {"error": "no job"})
@@ -1089,6 +1139,7 @@ GET_ROUTES = {
     "/auth/linked": "auth_linked",
     "/sessions": "sessions_list",
     "/auth/users": "auth_users", "/credits": "credits",
+    "/billing": "billing_get",
 }
 POST_ROUTES = {
     "/import": "import_book", "/render": "render", "/voices": "voices",
@@ -1102,6 +1153,7 @@ POST_ROUTES = {
     "/source-creds": "source_cred_save", "/source-creds/delete": "source_cred_delete",
     "/connections/override": "connection_override", "/prefs": "prefs_set",
     "/pron": "pron_set", "/credits/purchase": "credits_purchase",
+    "/billing/checkout": "billing_checkout", "/billing/confirm": "billing_confirm",
     "/sessions/revoke": "session_revoke",
     "/sessions/revoke_all": "sessions_revoke_all",
 }
@@ -1378,6 +1430,7 @@ def make_handler(app):
 
 
 def serve(app=None, port=8788, host="127.0.0.1"):
+    payments.load()      # register the payment provider named by FIRESIDE_PAYMENT_PROVIDER
     app = app or App()
     httpd = ThreadingHTTPServer((host, port), make_handler(app))
     return app, httpd
