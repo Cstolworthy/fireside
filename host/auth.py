@@ -25,6 +25,7 @@ import urllib.request
 SESSION_TTL = 30 * 24 * 3600          # 30 days; cookie and row share it
 STATE_COOKIE = "fireside_oauth_state"
 LINK_COOKIE = "fireside_oauth_link"
+CLAIM_COOKIE = "fireside_oauth_claim"
 SESSION_COOKIE = "fireside_session"
 
 # provider table: data, not code paths. id_env names the two secrets to read.
@@ -365,20 +366,51 @@ def has_local_account(conn, user_id):
                         (user_id,)).fetchone() is not None
 
 
+def claim_methods(conn, user_id):
+    """How the owner of an account can prove it: a password it has, and the
+    providers already attached to it. Logging in the way the account already
+    does IS the proof - a password is only one door, not the door."""
+    return {
+        "has_password": has_local_account(conn, user_id),
+        "providers": linked_providers(conn, user_id),
+    }
+
+
 def complete_claim(conn, token, password):
     """Attach a pending social identity once the account's password is proven.
 
-    Returns the user id on success. Raises AuthError when the password is wrong
-    or the existing account has no password to prove with - in that case the
-    only door is to sign in the way the account already does, then link from
-    Settings.
+    Returns the user id on success. Raises AuthError when the account has no
+    password to prove with - the other door is complete_claim_via_identity:
+    sign in through a provider the account already uses.
     """
     claim = take_claim(conn, token)
     if not has_local_account(conn, claim["user_id"]):
-        raise AuthError("that account has no password to confirm with; sign in "
-                        "the way you already do, then link this login from Settings")
+        raise AuthError("that account has no password; sign in the way it "
+                        "already does instead")
     if not local_password_proof(conn, claim["user_id"], password):
         raise AuthError("that password does not match the existing account")
+    return _finish_claim(conn, token, claim)
+
+
+def complete_claim_via_identity(conn, token, provider, ident):
+    """Attach a pending social identity after proving ownership by signing in
+    as the existing account through one of ITS OWN providers.
+
+    The proof is that the identity just authenticated already belongs to the
+    claim's account. An identity owned by someone else (or by nobody) proves
+    nothing and is refused - otherwise a second social login could seize the
+    account.
+    """
+    claim = take_claim(conn, token)
+    subject = ident.get("subject") or ""
+    owner = identity_user(conn, provider, subject)
+    if owner is None or owner != claim["user_id"]:
+        raise AuthError("that login is not one this account already uses")
+    return _finish_claim(conn, token, claim)
+
+
+def _finish_claim(conn, token, claim):
+    """Link the pending identity to the claim's account and consume the claim."""
     ident = {"subject": claim["subject"], "name": claim["name"],
              "email": claim["email"],
              "email_verified": bool(claim["email_verified"])}
@@ -496,6 +528,18 @@ class Auth:
                     ident["email_verified"] = bool(primary.get("verified"))
             except Exception:
                 pass
+        return ident
+
+    def identity_from_code(self, pid, code, redirect_uri):
+        """Exchange a callback code and return the normalized identity, without
+        touching users or sessions. Used by the claim-proof path, where the
+        identity itself is the evidence."""
+        if pid not in self.table:
+            raise AuthError("unknown provider %s" % pid)
+        access = self._exchange(pid, code, redirect_uri)
+        ident = self.identity(pid, access)
+        if not ident["subject"]:
+            raise AuthError("provider %s returned no subject" % pid)
         return ident
 
     def login(self, pid, code, redirect_uri):

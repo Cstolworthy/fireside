@@ -180,6 +180,51 @@ class TestClaimProof(unittest.TestCase):
         uid = auth.upsert_user(self.conn, "microsoft", self._ident("m1"))
         self.assertEqual(uid, self.uid)
 
+    def test_claim_methods_offers_password_and_providers(self):
+        token = self._collide()
+        claim = auth.take_claim(self.conn, token)
+        m = auth.claim_methods(self.conn, claim["user_id"])
+        self.assertTrue(m["has_password"])          # chris registered a password
+        self.assertEqual(m["providers"], ["google"])  # and linked google
+
+    def test_proof_via_the_accounts_own_provider_links(self):
+        # a social-only account: no password, so prove it by signing in through
+        # the provider it already uses. That IS the proof.
+        self.conn.execute("DELETE FROM local_accounts")
+        self.conn.execute("DELETE FROM users")
+        self.conn.commit()
+        owner = auth.upsert_user(self.conn, "google", self._ident("g1"))
+        try:
+            auth.upsert_user(self.conn, "microsoft", self._ident("m1"))
+        except auth.AccountExistsError as e:
+            token = auth.create_claim(self.conn, e.provider, e.ident, e.user_id)
+        m = auth.claim_methods(self.conn, owner)
+        self.assertFalse(m["has_password"])
+        self.assertEqual(m["providers"], ["google"])
+        got = auth.complete_claim_via_identity(
+            self.conn, token, "google", self._ident("g1"))
+        self.assertEqual(got, owner)
+        self.assertEqual(auth.identity_user(self.conn, "microsoft", "m1"), owner)
+        # the claim is consumed
+        with self.assertRaises(auth.AuthError):
+            auth.take_claim(self.conn, token)
+
+    def test_proof_via_an_unlinked_identity_links_nothing(self):
+        token = self._collide()
+        with self.assertRaises(auth.AuthError):
+            auth.complete_claim_via_identity(
+                self.conn, token, "google", self._ident("not-linked"))
+        self.assertIsNone(auth.identity_user(self.conn, "microsoft", "m1"))
+
+    def test_proof_via_another_account_is_refused(self):
+        # someone else's google identity proves a different account, not this one
+        other = auth.upsert_user(self.conn, "github", self._ident("h1", "other@x.com"))
+        token = self._collide()
+        with self.assertRaises(auth.AuthError):
+            auth.complete_claim_via_identity(
+                self.conn, token, "github", self._ident("h1", "other@x.com"))
+        self.assertIsNone(auth.identity_user(self.conn, "microsoft", "m1"))
+
 
 class TestProviderIdentity(unittest.TestCase):
     def _auth(self, responses):

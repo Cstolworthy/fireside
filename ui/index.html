@@ -1030,8 +1030,9 @@ async function requireSession() {
 }
 
 // A social login whose verified email already belongs to an account does not
-// open that account - it has to be proven. We ask for the account's password
-// and only then attach the identity.
+// open that account - it has to be proven. Prove it the way that account
+// already signs in: its password, or one of its own providers. Anything
+// else, and we attach nothing.
 async function renderClaim() {
   $('#locktitle').textContent = 'confirm this account';
   $('#lockuser').closest('.field').hidden = true;
@@ -1041,26 +1042,38 @@ async function renderClaim() {
   $('#lockgo').textContent = 'Confirm and link';
   $('#locktoggle').hidden = true;
   authMsg('');
-  $('#lockproviders').innerHTML = '';
   const provs = $('#lockproviders'); provs.innerHTML = '';
-  const who = (label) => ('An account already uses ' +
-    (AUTH.claimInfo && AUTH.claimInfo.email ? AUTH.claimInfo.email : 'this email') +
-    '. ' + label);
+  try {
+    const ce = new URLSearchParams(location.search).get('claimerr');
+    if (ce) authMsg(ce);
+  } catch (_) {}
   try {
     const d = await api('/auth/claim?token=' + encodeURIComponent(AUTH.claim));
     AUTH.claimInfo = d;
     const label = d.provider_label || d.provider;
-    if (d.has_password) {
-      $('#locksub').textContent = who('Enter that account\'s password to link your ' + label + ' login to it.');
-    } else {
-      $('#locksub').textContent = who('It has no password to confirm with. Sign in the way you already do, then link this login from Settings.');
-      $('#lockpass').disabled = true; $('#lockgo').disabled = true;
+    $('#locksub').textContent = 'An account already uses ' + (d.email || 'this email') +
+      '. Sign in to that account to link your ' + label + ' login to it.';
+    const pfield = $('#lockpass'), go = $('#lockgo');
+    pfield.closest('.field').hidden = !d.has_password;
+    go.hidden = !d.has_password;
+    pfield.disabled = !d.has_password;
+    go.disabled = !d.has_password;
+    (d.methods || []).forEach(p => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'btn ghost';
+      b.textContent = 'Continue with ' + p.label;
+      b.onclick = () => { location.href = p.start + '?claim=' + encodeURIComponent(AUTH.claim); };
+      provs.append(b);
+    });
+    if (d.has_password) { pfield.focus(); }
+    else if (!(d.methods || []).length) {
+      $('#locksub').textContent = 'This sign-in has expired. Go back and start again.';
     }
-    $('#lockpass').focus();
   } catch (e) {
     $('#locksub').textContent = 'This sign-in has expired. Go back and start again.';
     authMsg(e.message || '');
-    $('#lockpass').disabled = true; $('#lockgo').disabled = true;
+    $('#lockpass').closest('.field').hidden = true;
+    $('#lockgo').hidden = true;
   }
 }
 

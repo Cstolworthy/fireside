@@ -1116,14 +1116,19 @@ def make_handler(app):
                 redirect_uri = self._base_url() + "/auth/%s/callback" % pid
                 if action == "start":
                     link = _truthy(q.get("link"))
+                    claim = q.get("claim") or ""
                     uid = auth.session_user(app.conn, self._token()) or ""
                     if link and not uid:
                         return self.send_error(401, "sign in before linking an account")
+                    if claim:
+                        auth.take_claim(app.conn, claim)   # expired/unknown -> AuthError
                     state = auth.new_state()
                     url = app.auth.authorize_url(pid, redirect_uri, state)
                     return self._redirect(url, [
                         self._cookie_str(auth.STATE_COOKIE, state, path="/auth", max_age=600),
                         self._cookie_str(auth.LINK_COOKIE, uid if link else "",
+                                         path="/auth", max_age=600),
+                        self._cookie_str(auth.CLAIM_COOKIE, claim,
                                          path="/auth", max_age=600)])
                 if action == "callback":
                     if q.get("error"):
@@ -1131,8 +1136,10 @@ def make_handler(app):
                     if not q.get("state") or q["state"] != self._cookie(auth.STATE_COOKIE):
                         return self.send_error(400, "bad oauth state")
                     clear = [self._cookie_str(auth.STATE_COOKIE, "", path="/auth", max_age=0),
-                             self._cookie_str(auth.LINK_COOKIE, "", path="/auth", max_age=0)]
+                             self._cookie_str(auth.LINK_COOKIE, "", path="/auth", max_age=0),
+                             self._cookie_str(auth.CLAIM_COOKIE, "", path="/auth", max_age=0)]
                     link_user = self._cookie(auth.LINK_COOKIE)
+                    claim_tok = self._cookie(auth.CLAIM_COOKIE)
                     if link_user:
                         # a link flow, not a login: it must resolve to the same
                         # session that started it, and it never mints a session.
@@ -1141,6 +1148,23 @@ def make_handler(app):
                             return self.send_error(401, "session changed during link")
                         app.auth.link(pid, q.get("code", ""), redirect_uri, link_user)
                         return self._redirect("/?linked=%s" % pid, clear)
+                    if claim_tok:
+                        # proving ownership of an account a social login collided
+                        # with: signing in through one of ITS OWN providers is the
+                        # proof. Wrong provider / not this account -> do nothing.
+                        try:
+                            ident = app.auth.identity_from_code(pid, q.get("code", ""),
+                                                                redirect_uri)
+                            uid = auth.complete_claim_via_identity(app.conn, claim_tok,
+                                                                   pid, ident)
+                        except auth.AuthError as e:
+                            return self._redirect(
+                                "/?claim=%s&claimerr=%s" % (
+                                    urllib.parse.quote(claim_tok),
+                                    urllib.parse.quote(str(e))), clear)
+                        token = auth.create_session(app.conn, uid, "link")
+                        return self._redirect("/", clear + [self._cookie_str(
+                            auth.SESSION_COOKIE, token, max_age=auth.SESSION_TTL)])
                     uid, token = app.auth.login(pid, q.get("code", ""), redirect_uri)
                     return self._redirect("/", clear + [self._cookie_str(
                         auth.SESSION_COOKIE, token, max_age=auth.SESSION_TTL)])
@@ -1195,11 +1219,17 @@ def make_handler(app):
                     c = auth.take_claim(app.conn, cq.get("token", ""))
                 except auth.AuthError as e:
                     return self._json(410, {"error": str(e)})
+                m = auth.claim_methods(app.conn, c["user_id"])
+                methods = [{"id": pid,
+                            "label": app.auth.table.get(pid, {}).get("label", pid),
+                            "start": "/auth/%s/start" % pid}
+                           for pid in m["providers"]]
                 return self._json(200, {
                     "provider": c["provider"], "email": c["email"],
                     "provider_label": (app.auth.table.get(c["provider"], {})
                                        .get("label", c["provider"])),
-                    "has_password": auth.has_local_account(app.conn, c["user_id"])})
+                    "has_password": m["has_password"],
+                    "methods": methods})
             if path == "/auth/claim/confirm" and self.command == "POST":
                 n = int(self.headers.get("Content-Length") or 0)
                 try:
