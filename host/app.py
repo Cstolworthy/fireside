@@ -1218,6 +1218,7 @@ def make_handler(app):
 
 
 def serve(app=None, port=8788, host="127.0.0.1"):
+    payments.load()      # register the payment provider named by FIRESIDE_PAYMENT_PROVIDER
     app = app or App()
     httpd = ThreadingHTTPServer((host, port), make_handler(app))
     return app, httpd

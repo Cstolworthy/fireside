@@ -11,7 +11,10 @@ money actually moved. The host credits characters only on ok, and the receipt's
 reference is what an operator reconciles a purchase against.
 """
 
-__all__ = ["Receipt", "register", "get", "configured", "REGISTRY"]
+import importlib
+import os
+
+__all__ = ["Receipt", "register", "get", "configured", "load", "REGISTRY"]
 
 
 class Receipt:
@@ -44,3 +47,21 @@ def get(provider_id=None):
 
 def configured():
     return bool(REGISTRY)
+
+
+def load(dotted=None):
+    """Register the provider named by $FIRESIDE_PAYMENT_PROVIDER (or `dotted`).
+
+    The core never names a provider: the operator points at a module, the host
+    imports it and asks for `from_env()`. A module with no key configured returns
+    None and nothing is registered, so an unconfigured deployment keeps refusing
+    purchases. Returns the provider object, or None.
+    """
+    dotted = dotted or os.environ.get("FIRESIDE_PAYMENT_PROVIDER", "").strip()
+    if not dotted:
+        return None
+    mod = importlib.import_module(dotted)
+    provider = mod.from_env()
+    if provider is not None:
+        register(provider)
+    return provider
