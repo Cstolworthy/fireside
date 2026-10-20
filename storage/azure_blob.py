@@ -94,16 +94,31 @@ class AzureBlobBackend:
 
     # ---- auth -----------------------------------------------------------------
 
-    def _sign(self, method, path, headers, content_length):
+    @staticmethod
+    def _canonicalized_resource(account, path, query=""):
+        """CanonicalizedResource for SharedKey signing.
+
+        The resource path, then any query parameters as sorted
+        "\n<key>:<value>" lines (key lowercased). Omitting the query is the
+        classic bug: a container create (restype=container) then fails 403
+        AuthenticationFailed even though blob reads and writes succeed.
+        """
+        res = "/%s%s" % (account, path)
+        for part in sorted(p for p in query.split("&") if p):
+            k, _, v = part.partition("=")
+            res += "\n%s:%s" % (k.lower(), v)
+        return res
+
+    def _sign(self, method, path, headers, content_length, query=""):
         """Azure SharedKey StringToSign -> Authorization header value.
 
-        Path is /<container>/<blob>. Query parameters are added by _request when
-        present (only container create uses one).
+        Path is /<container>/<blob>; query carries any query string so the
+        canonicalized resource matches what the service signs.
         """
         xms = sorted((k.lower(), v) for k, v in headers.items()
                      if k.lower().startswith("x-ms-"))
         canon_headers = "".join("%s:%s\n" % (k, v) for k, v in xms)
-        canon_res = "/%s%s" % (self.account, path)
+        canon_res = self._canonicalized_resource(self.account, path, query)
         length = str(content_length) if content_length else ""
         sts = "\n".join([
             method,
@@ -138,7 +153,7 @@ class AzureBlobBackend:
         if not self.sas:
             headers["Authorization"] = self._sign(
                 method, "/%s%s" % (urllib.parse.quote(self.container), path),
-                headers, len(data) if data else 0)
+                headers, len(data) if data else 0, query=query)
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
