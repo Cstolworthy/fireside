@@ -418,6 +418,14 @@
       <p class="hint" style="margin-top:0">Each source asks for what it needs (AO3 asks for a cookie). These live on the server, never in this browser.</p>
       <div id="sources"></div>
     </div>
+    <h3 style="margin-top:30px">Pronunciations</h3>
+    <p class="sub">Words the voice says wrong. Left: the word as it appears. Right: how it should sound, spelled out (Qui-Gon → Kwai-Gon). Applies to every book.</p>
+    <div id="pronrows"></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn quiet" id="pronadd" type="button">＋ Add a word</button>
+      <button class="btn" id="pronsave" type="button">Save</button>
+    </div>
+    <div id="pronmsg" class="sub" style="margin-top:8px"></div>
   </section>
 
   <div class="err" id="err"></div>
@@ -638,6 +646,7 @@ function needUser() { if (!USER) { fail('set your name first (top right)'); thro
 function show(v) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+  if (v === 'set') loadPron();
 }
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.dataset.v));
 
@@ -814,6 +823,61 @@ $('#save').onclick = async () => {
     idle('Saved.');
   } catch (e) { fail(e); }
 };
+
+// --- pronunciation fixes: word -> how it should sound, applied on the server -
+// Left is the word as it appears; right is the respelling the engine will read.
+// Test speaks the respelling in the default voice, so you hear it before saving.
+let PRON = [];
+function pronRow(frm, to) {
+  const row = document.createElement('div');
+  row.className = 'prow'; row.style.cssText = 'display:flex;gap:6px;margin-top:6px';
+  const a = document.createElement('input'); a.value = frm || ''; a.placeholder = 'word in the text'; a.style.flex = '1 1 0';
+  const b = document.createElement('input'); b.value = to || ''; b.placeholder = 'how it should sound'; b.style.flex = '1.4 1 0';
+  const t = document.createElement('button'); t.type = 'button'; t.className = 'btn quiet'; t.textContent = 'Test';
+  t.onclick = () => { collectPron(); testPron(b.value || a.value); };
+  const x = document.createElement('button'); x.type = 'button'; x.className = 'btn quiet'; x.textContent = '\u2715';
+  x.onclick = () => { row.remove(); collectPron(); };
+  row.append(a, b, t, x);
+  $('#pronrows').append(row);
+}
+function collectPron() {
+  PRON = [...$('#pronrows').querySelectorAll('.prow')].map(r => {
+    const i = r.querySelectorAll('input');
+    return { from: i[0].value.trim(), to: i[1].value.trim() };
+  }).filter(r => r.from && r.to);
+}
+function showPron(rules) {
+  $('#pronrows').innerHTML = '';
+  (rules && rules.length ? rules : [{ from: '', to: '' }]).forEach(r => pronRow(r.from, r.to));
+}
+async function loadPron() {
+  try { const d = await api('/pron'); PRON = d.rules || []; showPron(PRON); }
+  catch (e) { showPron([]); }
+}
+async function savePron() {
+  collectPron();
+  try {
+    const d = await jpost('/pron', { rules: PRON });
+    PRON = d.rules || PRON; showPron(PRON);
+    $('#pronmsg').textContent = PRON.length + ' word(s) set. A chapter re-renders the next time it is converted.';
+  } catch (e) { fail(e); }
+}
+async function testPron(text) {
+  text = (text || '').trim();
+  if (!text) { fail('type how it should sound first'); return; }
+  const cid = $('#dconn').value, v = $('#voice').value;
+  if (!v) { fail('pick a default voice first'); return; }
+  busy('Hearing "' + text + '"...');
+  try {
+    const r = await api('/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, connection_id: cid, voice: v, speed: 1 }) });
+    const blob = await r.blob();
+    const au = $('#audio'); au.src = URL.createObjectURL(blob); await au.play();
+    idle('That is "' + text + '" in the default voice.');
+  } catch (e) { fail(e); }
+}
+$('#pronadd').onclick = () => pronRow('', '');
+$('#pronsave').onclick = savePron;
 // --- the door: the whole app is behind a session ---------------------------
 let AUTH = { user: '', admin: false, hasAccounts: false, registrationOpen: true,
              providers: [], mode: 'sign' };

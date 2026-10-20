@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS render_cache (
 CREATE TABLE IF NOT EXISTS renditions (
     rk VARCHAR(191) PRIMARY KEY, book_id VARCHAR(128), idx INT,
     provider VARCHAR(64), voice VARCHAR(128), voice_label VARCHAR(255),
-    model VARCHAR(128), speed DOUBLE, audio_ref VARCHAR(255), audio_bytes INT,
+    model VARCHAR(128), speed DOUBLE, pron VARCHAR(16) DEFAULT '',
+    audio_ref VARCHAR(255), audio_bytes INT,
     duration_s DOUBLE, created_at VARCHAR(32));
 CREATE TABLE IF NOT EXISTS jobs (
     id VARCHAR(128) PRIMARY KEY, user_id VARCHAR(128), book_id VARCHAR(128), kind VARCHAR(32),
@@ -103,7 +104,7 @@ CREATE TABLE IF NOT EXISTS connection_overrides (
     PRIMARY KEY (user_id, connection_id));
 CREATE TABLE IF NOT EXISTS user_prefs (
     user_id VARCHAR(128) PRIMARY KEY, default_connection_id VARCHAR(128),
-    default_voice VARCHAR(255), updated_at VARCHAR(32));
+    default_voice VARCHAR(255), pron TEXT, updated_at VARCHAR(32));
 """
 
 
@@ -197,6 +198,8 @@ _ADDED_COLUMNS = [
     ("books", "publisher", "VARCHAR(255) DEFAULT ''"),
     ("books", "published", "VARCHAR(64) DEFAULT ''"),
     ("books", "description", "TEXT"),
+    ("user_prefs", "pron", "TEXT"),
+    ("renditions", "pron", "VARCHAR(16) DEFAULT ''"),
 ]
 
 

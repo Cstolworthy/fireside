@@ -155,8 +155,12 @@ def set_prefs(conn, uid, connection_id=None, voice=None):
     cur = get_prefs(conn, uid)
     cid = cur["default_connection_id"] if connection_id is None else connection_id
     v = cur["default_voice"] if voice is None else voice
+    # carry `pron` through: INSERT OR REPLACE drops any column left out of
+    # the list, so saving a default voice must not wipe the pronunciation list.
+    row = conn.execute("SELECT pron FROM user_prefs WHERE user_id=?", (uid,)).fetchone()
+    bag = (row["pron"] if row and row["pron"] else "") or ""
     conn.execute(
         "INSERT OR REPLACE INTO user_prefs"
-        "(user_id,default_connection_id,default_voice,updated_at) VALUES(?,?,?,?)",
-        (uid, cid or "", v or "", now()))
+        "(user_id,default_connection_id,default_voice,pron,updated_at) VALUES(?,?,?,?,?)",
+        (uid, cid or "", v or "", bag, now()))
     conn.commit()

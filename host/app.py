@@ -37,7 +37,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
-from host import accounting, auth, connections, credentials, db, jobs, library, playback, stats
+from host import accounting, auth, connections, credentials, db, jobs, library, playback, pron, stats
 from sources._fetch import fetch as _fetch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -846,6 +846,19 @@ class App:
         connections.set_prefs(self.conn, uid, **kw)
         return 200, {"ok": True}
 
+    # ---- pronunciation fixes (per user, applied before any engine) ----------
+
+    def pron_get(self, q, body):
+        uid = self._uid(q, body)
+        return 200, {"rules": pron.load(self.conn, uid)}
+
+    def pron_set(self, q, body):
+        uid = self._uid(q, body)
+        if not uid:
+            return 401, {"error": "auth required"}
+        return 200, {"ok": True,
+                     "rules": pron.save(self.conn, uid, body.get("rules"))}
+
     # ---- auth (social sign-in; the session lives in sqlite) ------------------
 
     def auth_providers(self, q, body):
@@ -886,7 +899,7 @@ GET_ROUTES = {
     "/job": "job", "/progress": "progress", "/chapter": "chapter",
     "/estimate": "estimate",
     "/position": "get_position", "/last": "last_position", "/stop": "stop", "/text": "text",
-    "/stats": "stats_get",
+    "/stats": "stats_get", "/pron": "pron_get",
     "/connections": "connections_list", "/source-creds": "source_creds",
     "/cover": "cover_get",
     "/auth/providers": "auth_providers", "/me": "me", "/auth/policy": "auth_policy",
@@ -903,6 +916,7 @@ POST_ROUTES = {
     "/connections": "connection_save", "/connections/delete": "connection_delete",
     "/source-creds": "source_cred_save", "/source-creds/delete": "source_cred_delete",
     "/connections/override": "connection_override", "/prefs": "prefs_set",
+    "/pron": "pron_set",
 }
 
 # reachable without a session even when auth is required: the page, its health,

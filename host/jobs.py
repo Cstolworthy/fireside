@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 
-from host import library
+from host import library, pron
 from host.db import now
 
 
@@ -73,9 +73,10 @@ def sweep_stale(conn, stale_seconds=0):
     return getattr(cur, "rowcount", 0) or 0
 
 
-def render_key(text_ref, provider, voice, model, speed):
+def render_key(text_ref, provider, voice, model, speed, extra=""):
     raw = "|".join([text_ref or "", provider or "", voice or "",
-                    model or "", "%.3f" % float(speed if speed is not None else 1.0)])
+                    model or "", "%.3f" % float(speed if speed is not None else 1.0),
+                    extra or ""])
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -88,17 +89,26 @@ def _chapter_row(conn, book_id, idx):
 
 
 def render_chapter(conn, storage, speech, book_id, idx, voice="", model="", speed=1.0,
-                   cred=None, opts=None, voice_label=""):
-    """Render one chapter. Returns "cached" or "rendered"."""
+                   cred=None, opts=None, voice_label="", pron_rules=None):
+    """Render one chapter. Returns "cached" or "rendered".
+
+    Pronunciation fixes are applied to the text here, before the engine sees
+    it, so every engine gets them (including the local one that cannot take
+    phonemes). The cache key carries a tag for only the rules that match this
+    chapter, so adding a rule elsewhere leaves this chapter's audio alone.
+    """
     row = _chapter_row(conn, book_id, idx)
-    key = render_key(row["text_ref"], speech.id, voice, model, speed)
+    text = storage.get(row["text_ref"]).decode("utf-8")
+    rules = pron_rules or []
+    extra = pron.token_for(text, rules)
+    key = render_key(row["text_ref"], speech.id, voice, model, speed, extra)
     cached = conn.execute("SELECT * FROM render_cache WHERE `key`=?", (key,)).fetchone()
     if cached:
         _write_chapter_audio(conn, book_id, idx, cached, speech.id, voice, model, speed,
-                             voice_label=voice_label)
+                             voice_label=voice_label, pron_tag=extra)
         conn.commit()
         return "cached"
-    text = storage.get(row["text_ref"]).decode("utf-8")
+    text = pron.apply(text, rules)
     o = dict(opts or {})
     o.setdefault("speed", speed)
     o.setdefault("model", model)
@@ -111,13 +121,13 @@ def render_chapter(conn, storage, speech, book_id, idx, voice="", model="", spee
         (key, ref, len(audio.data), None, speech.id, voice, model, now()))
     entry = {"audio_ref": ref, "audio_bytes": len(audio.data), "duration_s": None}
     _write_chapter_audio(conn, book_id, idx, entry, speech.id, voice, model, speed,
-                         voice_label=voice_label)
+                         voice_label=voice_label, pron_tag=extra)
     conn.commit()
     return "rendered"
 
 
 def _write_chapter_audio(conn, book_id, idx, entry, provider, voice, model, speed,
-                         voice_label=""):
+                         voice_label="", pron_tag=""):
     conn.execute(
         "UPDATE chapters SET audio_ref=?,audio_bytes=?,duration_s=?,"
         "provider=?,voice=?,model=?,speed=? WHERE book_id=? AND idx=?",
@@ -127,7 +137,7 @@ def _write_chapter_audio(conn, book_id, idx, entry, provider, voice, model, spee
     # default, the renditions table is what lets the player offer a choice
     library.add_rendition(conn, book_id, idx, provider, voice, model, speed,
                           entry["audio_ref"], entry["audio_bytes"], entry["duration_s"],
-                          voice_label=voice_label)
+                          voice_label=voice_label, pron=pron_tag)
 
 
 def start_job(conn, user_id, book_id, provider, voice="", model="", total=0, kind="render"):
@@ -142,19 +152,23 @@ def start_job(conn, user_id, book_id, provider, voice="", model="", total=0, kin
     return job_id
 
 
-def _resume_state(conn, book_id, idxs, provider, voice, model, speed):
+def _resume_state(conn, book_id, idxs, provider, voice, model, speed, tokens=None):
     """Which of `idxs` are already converted in this exact voice.
 
     A restart must not throw away an hour of work: chapters that already have
     a rendition for (provider, voice, model, speed) are done, and the render
-    resumes at the first one that is not.
+    resumes at the first one that is not. The pronunciation tag counts too:
+    a chapter voiced under a different rule set is not done for the current
+    one, so changing a rule re-renders exactly the chapters it affects.
     """
+    tokens = tokens or {}
     want = set(idxs)
     have = set()
     for r in library.renditions(conn, book_id):
         if (r["idx"] in want and r["provider"] == provider and r["voice"] == voice
                 and (r["model"] or "") == (model or "")
-                and abs(float(r["speed"] or 1.0) - float(speed or 1.0)) < 1e-6):
+                and abs(float(r["speed"] or 1.0) - float(speed or 1.0)) < 1e-6
+                and (r.get("pron") or "") == (tokens.get(r["idx"], ""))):
             have.add(r["idx"])
     chars = 0
     for r in conn.execute("SELECT idx,chars FROM chapters WHERE book_id=?",
@@ -178,8 +192,20 @@ def render_book(conn, storage, speech, user_id, book_id, voice="", model="",
     idxs = [r["idx"] for r in rows]
     if only is not None:
         idxs = [i for i in idxs if i in set(only)]
+    # A chapter is already done for this (voice, model, speed) only if its
+    # pronunciation tag matches too, so a run restarted after a crash skips
+    # what it finished while a changed rule makes just the affected chapters
+    # redo. The tag covers only the rules that match each chapter's text.
+    rules = pron.load(conn, user_id)
+    tokens = {}
+    for i in idxs:
+        try:
+            text = storage.get(_chapter_row(conn, book_id, i)["text_ref"]).decode("utf-8")
+        except Exception:
+            text = ""
+        tokens[i] = pron.token_for(text, rules)
     already, done_chars = _resume_state(conn, book_id, idxs, speech.id, voice,
-                                        model, speed)
+                                        model, speed, tokens)
     todo = [i for i in idxs if i not in already]
     if job_id is None:
         job_id = start_job(conn, user_id, book_id, speech.id, voice, model, len(idxs))
@@ -199,7 +225,8 @@ def render_book(conn, storage, speech, user_id, book_id, voice="", model="",
             conn.commit()
             for i in todo:
                 render_chapter(conn, storage, speech, book_id, i, voice, model, speed,
-                               cred=cred, opts=opts, voice_label=voice_label)
+                               cred=cred, opts=opts, voice_label=voice_label,
+                               pron_rules=rules)
                 done += 1
                 cr = conn.execute("SELECT chars FROM chapters WHERE book_id=? AND idx=?",
                                   (book_id, i)).fetchone()
