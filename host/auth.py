@@ -363,6 +363,60 @@ def revoke_sessions(conn, user_id, keep_token=""):
     return cur.rowcount
 
 
+def list_all_sessions(conn, current_token=""):
+    """Every live session, across every account, newest activity first.
+
+    The admin view: each row carries the `user` it belongs to, so an admin can
+    see the whole server and end any of them. The token still never leaves.
+    """
+    now = int(time.time())
+    rows = conn.execute(
+        "SELECT token,sid,user_id,provider,created_at,expires_at,user_agent,ip,last_seen"
+        " FROM sessions ORDER BY last_seen DESC, created_at DESC").fetchall()
+    out = []
+    for r in rows:
+        if int(r["expires_at"] or 0) < now:
+            continue
+        out.append({
+            "id": r["sid"] or "",
+            "user": r["user_id"] or "",
+            "provider": r["provider"] or "",
+            "label": device_label(r["user_agent"]),
+            "user_agent": r["user_agent"] or "",
+            "ip": r["ip"] or "",
+            "created_at": int(r["created_at"] or 0),
+            "last_seen": int(r["last_seen"] or 0),
+            "current": bool(current_token) and r["token"] == current_token,
+        })
+    return out
+
+
+def revoke_any(conn, sid):
+    """Admin: end ANY session by its public id, whoever owns it.
+
+    Returns the user id it belonged to, or None when no such session exists.
+    """
+    if not sid:
+        return None
+    row = conn.execute("SELECT user_id FROM sessions WHERE sid=?", (sid,)).fetchone()
+    if row is None:
+        return None
+    conn.execute("DELETE FROM sessions WHERE sid=?", (sid,))
+    conn.commit()
+    return row["user_id"]
+
+
+def revoke_all_sessions(conn, keep_token=""):
+    """Admin: end every session on the server, keeping one token when given so
+    the button does not sign the admin out of the page they are on."""
+    if keep_token:
+        cur = conn.execute("DELETE FROM sessions WHERE token<>?", (keep_token,))
+    else:
+        cur = conn.execute("DELETE FROM sessions")
+    conn.commit()
+    return cur.rowcount
+
+
 def account_for_verified_email(conn, email):
     """The user that already owns a VERIFIED email, or None.
 

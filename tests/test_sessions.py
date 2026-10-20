@@ -63,6 +63,10 @@ class TestSessions(unittest.TestCase):
         with op.open(_request(path, port=self.port, ua=ua)) as r:
             return r.status, json.loads(r.read())
 
+    def _jpost(self, op, path, obj, ua=None):
+        with op.open(_request(path, obj, port=self.port, ua=ua)) as r:
+            return r.status, json.loads(r.read())
+
     def _register(self, op, name="chris", ua=None):
         self._post(op, "/auth/local/register",
                    {"username": name, "password": "longenough"}, ua=ua)
@@ -155,6 +159,67 @@ class TestSessions(unittest.TestCase):
             self._req(op, "/sessions")
         self.assertEqual(cm.exception.code, 401)
 
+    def test_admin_sees_every_session_on_the_server(self):
+        a = _browser()
+        self._register(a, "chris", ua=self.UA_CHROME)      # first account = admin
+        b = _browser()
+        self._register(b, "sam", ua=self.UA_PHONE)
+        s, d = self._jget(a, "/sessions", ua=self.UA_CHROME)
+        self.assertEqual(s, 200)
+        self.assertTrue(d.get("admin"))
+        users = sorted(r["user"] for r in d["all"])
+        self.assertIn("local:sam", users)
+        self.assertIn("local:chris", users)
+        self.assertEqual(len(d["sessions"]), 1)            # sam's is not in the own list
+
+    def test_a_non_admin_gets_no_server_wide_list(self):
+        a = _browser()
+        self._register(a, "chris", ua=self.UA_CHROME)
+        b = _browser()
+        self._register(b, "sam", ua=self.UA_PHONE)
+        s, d = self._jget(b, "/sessions", ua=self.UA_PHONE)
+        self.assertEqual(s, 200)
+        self.assertFalse(d.get("admin"))
+        self.assertNotIn("all", d)
+
+    def test_admin_boots_another_users_session(self):
+        a = _browser()
+        self._register(a, "chris", ua=self.UA_CHROME)
+        b = _browser()
+        self._register(b, "sam", ua=self.UA_PHONE)
+        _, db = self._jget(b, "/sessions", ua=self.UA_PHONE)
+        target = db["sessions"][0]["id"]
+        s, da = self._jget(a, "/sessions", ua=self.UA_CHROME)
+        s, d = self._jpost(a, "/sessions/revoke", {"id": target}, ua=self.UA_CHROME)
+        self.assertEqual(s, 200)
+        self.assertTrue(d["ok"])
+        with self.assertRaises(urllib.error.HTTPError) as cm:   # sam is out
+            self._jget(b, "/sessions", ua=self.UA_PHONE)
+        self.assertEqual(cm.exception.code, 401)
+
+    def test_admin_boot_everyone_keeps_the_admin_signed_in(self):
+        a = _browser()
+        self._register(a, "chris", ua=self.UA_CHROME)
+        b = _browser()
+        self._register(b, "sam", ua=self.UA_PHONE)
+        s, d = self._jpost(a, "/sessions/revoke_all", {"all_users": True}, ua=self.UA_CHROME)
+        self.assertEqual(s, 200)
+        self.assertGreaterEqual(d["revoked"], 1)
+        s, da = self._jget(a, "/sessions", ua=self.UA_CHROME)   # admin still on
+        self.assertEqual(s, 200)
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._jget(b, "/sessions", ua=self.UA_PHONE)
+        self.assertEqual(cm.exception.code, 401)
+
+    def test_non_admin_cannot_boot_everyone(self):
+        a = _browser()
+        self._register(a, "chris", ua=self.UA_CHROME)
+        b = _browser()
+        self._register(b, "sam", ua=self.UA_PHONE)
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._jpost(b, "/sessions/revoke_all", {"all_users": True}, ua=self.UA_PHONE)
+        self.assertEqual(cm.exception.code, 403)
+
 
 class TestDeviceLabel(unittest.TestCase):
     def test_labels(self):
@@ -198,6 +263,26 @@ class TestRevokeHelpers(unittest.TestCase):
         t1 = auth.create_session(self.conn, "u1", "local")
         t2 = auth.create_session(self.conn, "u1", "local")
         n = auth.revoke_sessions(self.conn, "u1", keep_token=t1)
+        self.assertEqual(n, 1)
+        self.assertEqual(auth.session_user(self.conn, t1), "u1")
+        self.assertIsNone(auth.session_user(self.conn, t2))
+
+    def test_revoke_any_finds_the_owner_and_clears_it(self):
+        t1 = auth.create_session(self.conn, "u1", "local", ua="chrome")
+        t2 = auth.create_session(self.conn, "u2", "local", ua="phone")
+        rows = auth.list_all_sessions(self.conn, t1)
+        self.assertEqual(len(rows), 2)
+        self.assertTrue([r for r in rows if r["current"] and r["user"] == "u1"])
+        sid = [r for r in rows if r["user"] == "u2"][0]["id"]
+        self.assertEqual(auth.revoke_any(self.conn, sid), "u2")
+        self.assertIsNone(auth.session_user(self.conn, t2))
+        self.assertEqual(auth.session_user(self.conn, t1), "u1")
+        self.assertIsNone(auth.revoke_any(self.conn, "nosuchid"))
+
+    def test_revoke_all_sessions_keeps_given_token(self):
+        t1 = auth.create_session(self.conn, "u1", "local")
+        t2 = auth.create_session(self.conn, "u2", "local")
+        n = auth.revoke_all_sessions(self.conn, keep_token=t1)
         self.assertEqual(n, 1)
         self.assertEqual(auth.session_user(self.conn, t1), "u1")
         self.assertIsNone(auth.session_user(self.conn, t2))

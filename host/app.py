@@ -1019,38 +1019,58 @@ class App:
 
     # ---- devices and sessions (see and end a session anywhere) ---------------
 
+    def _session_state(self, q, uid):
+        """The caller's own sessions, plus (for an admin) every session on the
+        server, so the same panel can boot a device anywhere."""
+        tok = (q or {}).get("_token") or ""
+        out = {"sessions": auth.list_sessions(self.conn, uid, tok)}
+        if auth.is_admin(self.conn, uid):
+            out["admin"] = True
+            out["all"] = auth.list_all_sessions(self.conn, tok)
+        return out
+
     def sessions_list(self, q, body):
-        """Every live session of the signed-in user, the current one flagged."""
+        """Every live session of the signed-in user, the current one flagged.
+        An admin also gets every session on the server."""
         uid = (q or {}).get("_user") or ""
         if not uid:
             return 401, {"error": "auth required"}
-        return 200, {"sessions": auth.list_sessions(self.conn, uid,
-                                                    (q or {}).get("_token") or "")}
+        return 200, self._session_state(q, uid)
 
     def session_revoke(self, q, body):
-        """Log out one session by its id. Scoped to the caller's own user, so no
-        account can end another's session. A stale id is simply not found."""
+        """Log out one session by its id. A user may end any of their own; an
+        admin may end any session on the server. A stale id is not found."""
         uid = (q or {}).get("_user") or ""
         if not uid:
             return 401, {"error": "auth required"}
         sid = ((body or {}).get("id") or "").strip()
         ok = auth.revoke_session(self.conn, uid, sid)
-        return (200 if ok else 404), {"ok": ok,
-                                      "sessions": auth.list_sessions(
-                                          self.conn, uid, (q or {}).get("_token") or "")}
+        if not ok and auth.is_admin(self.conn, uid):
+            ok = auth.revoke_any(self.conn, sid) is not None
+        out = self._session_state(q, uid)
+        out["ok"] = ok
+        return (200 if ok else 404), out
 
     def sessions_revoke_all(self, q, body):
-        """Log out everywhere: every session of the user except (by default) the
-        one calling, so the button does not sign you out of the page you are on."""
+        """Log out: the caller's own sessions (default), or, for an admin with
+        {all_users: true}, every session on the server. Either way keep the one
+        calling, so the button does not sign you out of the page you are on."""
         uid = (q or {}).get("_user") or ""
         if not uid:
             return 401, {"error": "auth required"}
         others = (body or {}).get("others")
         keep_current = others is None or _truthy(others)
         keep = ((q or {}).get("_token") or "") if keep_current else ""
-        n = auth.revoke_sessions(self.conn, uid, keep)
-        return 200, {"ok": True, "revoked": n,
-                     "sessions": auth.list_sessions(self.conn, uid, keep)}
+        if _truthy((body or {}).get("all_users")):
+            if not auth.is_admin(self.conn, uid):
+                return 403, {"error": "admin only"}
+            n = auth.revoke_all_sessions(self.conn, keep)
+        else:
+            n = auth.revoke_sessions(self.conn, uid, keep)
+        out = self._session_state(q, uid)
+        out["ok"] = True
+        out["revoked"] = n
+        return 200, out
 
 
 GET_ROUTES = {
