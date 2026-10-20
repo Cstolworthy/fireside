@@ -46,6 +46,12 @@ class LocalBackend:
     def has(self, ref):
         return os.path.isfile(self._path(ref))
 
+    def size(self, ref):
+        """Bytes on disk for a blob, or 0 when it is absent. Used by storage
+        accounting, which never trusts a stored byte count over the file."""
+        p = self._path(ref)
+        return os.path.getsize(p) if os.path.isfile(p) else 0
+
     def get(self, ref):
         p = self._path(ref)
         if not os.path.isfile(p):

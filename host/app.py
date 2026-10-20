@@ -37,7 +37,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
-from host import accounting, auth, billing, connections, credentials, db, jobs, library, payments, playback, pron, stats
+from host import accounting, auth, billing, connections, credentials, db, jobs, library, payments, playback, pron, quota, stats
 from sources._fetch import fetch as _fetch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -664,6 +664,39 @@ class App:
                      "plans": plans,
                      "payments_configured": payments.configured()}
 
+    def storage_get(self, q, body):
+        """The signed-in user's storage: what they own, what they save by
+        sharing, what is in an adopt window, and how much their plan includes.
+        Read-only."""
+        uid = self._uid(q, body)
+        sub = billing.get(self.conn, uid) if uid else None
+        plan = (sub or {}).get("plan") or ""
+        u = quota.usage(self.conn, self.storage, uid) if uid else {
+            "user_id": uid, "own_bytes": 0, "pending_bytes": 0, "shared_bytes": 0,
+            "total_bytes": 0, "blobs": 0, "shared_blobs": 0, "pending_blobs": 0}
+        allowed = quota.allowance_bytes(plan)
+        u.update({"plan": plan,
+                  "allowance_bytes": allowed,
+                  "remaining_bytes": max(0, allowed - u["own_bytes"]),
+                  "pending": quota.pending_for(self.conn, self.storage, uid) if uid else []})
+        return 200, u
+
+    def storage_adopt(self, q, body):
+        """Claim sole-referenced blobs onto the user's quota, ending their adopt
+        window. Only refs this user actually, solely, references are accepted."""
+        uid = self._uid(q, body)
+        if not uid:
+            return 401, {"error": "auth required"}
+        refs = (body or {}).get("refs") or []
+        owned = {}   # ref -> sole referencer, from the live shelf
+        ref_users, _ = quota.index(self.conn, self.storage)
+        for ref, users in ref_users.items():
+            if len(users) == 1:
+                owned[ref] = next(iter(users))
+        allowed = [r for r in refs if owned.get(r) == uid]
+        n = quota.adopt(self.conn, allowed)
+        return 200, {"adopted": n, "requested": len(refs)}
+
     def billing_checkout(self, q, body):
         uid = self._uid(q, body)
         if not uid:
@@ -1140,6 +1173,7 @@ GET_ROUTES = {
     "/sessions": "sessions_list",
     "/auth/users": "auth_users", "/credits": "credits",
     "/billing": "billing_get",
+    "/storage": "storage_get",
 }
 POST_ROUTES = {
     "/import": "import_book", "/render": "render", "/voices": "voices",
@@ -1156,6 +1190,7 @@ POST_ROUTES = {
     "/billing/checkout": "billing_checkout", "/billing/confirm": "billing_confirm",
     "/sessions/revoke": "session_revoke",
     "/sessions/revoke_all": "sessions_revoke_all",
+    "/storage/adopt": "storage_adopt",
 }
 
 # reachable without a session even when auth is required: the page, its health,
