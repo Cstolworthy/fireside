@@ -90,6 +90,15 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS local_accounts (
     username VARCHAR(191) PRIMARY KEY, user_id VARCHAR(128), digest TEXT, salt TEXT,
     created_at VARCHAR(32));
+CREATE TABLE IF NOT EXISTS identities (
+    provider VARCHAR(64), subject VARCHAR(191), user_id VARCHAR(128),
+    email VARCHAR(255) DEFAULT '', email_verified INT DEFAULT 0,
+    created_at VARCHAR(32), PRIMARY KEY (provider, subject));
+CREATE TABLE IF NOT EXISTS login_claims (
+    token VARCHAR(191) PRIMARY KEY, provider VARCHAR(64), subject VARCHAR(191),
+    name VARCHAR(255) DEFAULT '', email VARCHAR(255) DEFAULT '',
+    email_verified INT DEFAULT 0, user_id VARCHAR(128),
+    created_at BIGINT, expires_at BIGINT);
 CREATE TABLE IF NOT EXISTS admins (
     user_id VARCHAR(128) PRIMARY KEY, created_at VARCHAR(32));
 CREATE TABLE IF NOT EXISTS settings (
@@ -204,6 +213,11 @@ _ADDED_COLUMNS = [
     ("books", "description", "TEXT"),
     ("user_prefs", "pron", "TEXT"),
     ("renditions", "pron", "VARCHAR(16) DEFAULT ''"),
+    # device tracking on a session: a public id to name it, and what it is.
+    ("sessions", "sid", "VARCHAR(32) DEFAULT ''"),
+    ("sessions", "user_agent", "TEXT"),
+    ("sessions", "ip", "VARCHAR(64) DEFAULT ''"),
+    ("sessions", "last_seen", "BIGINT DEFAULT 0"),
 ]
 
 

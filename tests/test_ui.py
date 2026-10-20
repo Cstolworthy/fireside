@@ -216,6 +216,78 @@ class TestBootSafetyNet(unittest.TestCase):
                          "index.html reaches for ids that do not exist")
 
 
+class TestClaimEndpoints(unittest.TestCase):
+    """The collision-proof door over real HTTP: describe, then confirm by password."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        root = os.path.join(self.tmp, "plugins")
+        write_plugin(root, "reader", "fake", order=10, body=READER_BODY)
+        write_plugin(root, "speech", "fake", body=SPEECH_BODY)
+        write_plugin(root, "storage", "mem", body=STORAGE_BODY)
+        self.app = App(root, db_path=os.path.join(self.tmp, "db.sqlite"),
+                       storage_id="mem")
+        self.app.require_auth = True
+        from http.server import ThreadingHTTPServer
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.app))
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+
+    def _post(self, path, obj, cookie=None):
+        h = {"Content-Type": "application/json"}
+        if cookie:
+            h["Cookie"] = cookie
+        req = urllib.request.Request("http://127.0.0.1:%d%s" % (self.port, path),
+                                     data=json.dumps(obj).encode(), headers=h)
+        with urllib.request.urlopen(req) as r:
+            return r.status, json.loads(r.read()), r.headers.get("Set-Cookie", "")
+
+    def _get(self, path, cookie=None):
+        req = urllib.request.Request("http://127.0.0.1:%d%s" % (self.port, path))
+        if cookie:
+            req.add_header("Cookie", cookie)
+        with urllib.request.urlopen(req) as r:
+            return r.status, json.loads(r.read())
+
+    def _seed_collision(self):
+        from host import auth
+        uid = auth.local_register(self.app.conn, "chris", "hunter2hunter2")
+        auth.link_identity(self.app.conn, "google", {
+            "subject": "g1", "name": "Chris", "email": "chris@example.com",
+            "email_verified": True}, uid)
+        return auth.create_claim(self.app.conn, "microsoft", {
+            "subject": "m1", "name": "Chris", "email": "chris@example.com",
+            "email_verified": True}, uid)
+
+    def test_describe_and_confirm(self):
+        token = self._seed_collision()
+        s, d = self._get("/auth/claim?token=" + token)
+        self.assertEqual(s, 200)
+        self.assertEqual(d["provider"], "microsoft")
+        self.assertTrue(d["has_password"])
+        s, d, cookie = self._post("/auth/claim/confirm",
+                                  {"claim": token, "password": "hunter2hunter2"})
+        self.assertEqual(s, 200)
+        self.assertTrue(d["ok"])
+        s, me = self._get("/me", cookie=cookie)
+        self.assertTrue(me["authenticated"])
+
+    def test_wrong_password_refuses(self):
+        token = self._seed_collision()
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d/auth/claim/confirm" % self.port,
+            data=json.dumps({"claim": token, "password": "nope"}).encode(),
+            headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(req)
+            self.fail("wrong password should be refused")
+        except urllib.error.HTTPError as e:
+            self.assertEqual(e.code, 401)
+
+
 if __name__ == "__main__":
     unittest.main()
 
