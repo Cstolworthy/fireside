@@ -79,3 +79,28 @@ registers one. `GET /credits` is read-only (balance, rate, bundles);
 
 Still to build: the platform+storage monthly tier (a recurring subscription
 separate from character capacity), and the Stripe provider once it is registered.
+
+## Storage: a held book bills its own bytes
+
+Chris's rule (2026-10-20), and the launch model: **drop a book, and it consumes
+storage.** Every distinct blob a user's shelf names - chapter text, the audio,
+its renditions, its cover - counts against that user's plan, once per blob.
+
+- **No sharing discount.** Two people holding the same book each bill its bytes.
+  Content addressing still keeps one physical copy on disk; billing is per shelf,
+  never per copy. This was a deliberate simplification: the refcount/auto-release
+  model was more code and more ways to be wrong, and it charged nobody for the
+  common case.
+- **The allowance is the platform tier's** (2 GB at launch). Bytes above it bill.
+  An account with no plan is on the platform tier (payments are held for launch),
+  so it is never locked out of its own library.
+- **A write that would cross the allowance is refused up front** (import, cover,
+  render). Existing bytes are never silently removed to make room.
+- **Promote-to-shared is parked.** Handing a book to the shared catalog so it
+  stops billing you is a real later feature; nothing here releases storage
+  automatically.
+
+Cost lever: because storage is a pluggable backend, Azure Blob lifecycle rules
+move rarely-read books down through hot -> cool -> cold -> archive. Blob storage
+at the hot tier is ~$0.018/GB/mo (LRS, US), cool ~$0.01, archive ~$0.002, so the
+bytes are rounding error next to the server; the tier's real cost is the box.
