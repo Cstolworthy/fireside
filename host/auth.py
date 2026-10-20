@@ -24,6 +24,7 @@ import urllib.request
 
 SESSION_TTL = 30 * 24 * 3600          # 30 days; cookie and row share it
 STATE_COOKIE = "fireside_oauth_state"
+LINK_COOKIE = "fireside_oauth_link"
 SESSION_COOKIE = "fireside_session"
 
 # provider table: data, not code paths. id_env names the two secrets to read.
@@ -52,6 +53,17 @@ PROVIDERS = {
         "identity": "https://graph.microsoft.com/oidc/userinfo",
         "scope": "openid email profile",
         "id_env": ("FIRESIDE_OAUTH_MICROSOFT_CLIENT_ID", "FIRESIDE_OAUTH_MICROSOFT_SECRET"),
+    },
+    # Proton has no consumer OAuth of its own; SimpleLogin (Proton-owned) is the
+    # door. Its sign-in page carries a "Log in with Proton" button, and it hands
+    # back a verified email. SimpleLogin documents the 'profile' scope only.
+    "simplelogin": {
+        "label": "SimpleLogin",
+        "authorize": "https://app.simplelogin.io/oauth2/authorize",
+        "token": "https://app.simplelogin.io/oauth2/token",
+        "identity": "https://app.simplelogin.io/oauth2/userinfo",
+        "scope": "profile",
+        "id_env": ("FIRESIDE_OAUTH_SIMPLELOGIN_CLIENT_ID", "FIRESIDE_OAUTH_SIMPLELOGIN_SECRET"),
     },
 }
 
@@ -177,14 +189,21 @@ def new_state():
 
 
 def _identity(pid, data):
-    """Normalize a provider's profile to {subject, name, email}."""
+    """Normalize a provider's profile to {subject, name, email, email_verified}.
+
+    email_verified is only ever trusted as the provider reports it; linking by
+    email depends on it, so an unverified address links nothing.
+    """
+    verified = bool(data.get("email_verified"))
     if pid == "github":
         return {"subject": str(data.get("id") or ""),
                 "name": data.get("name") or data.get("login") or "",
-                "email": data.get("email") or ""}
+                "email": data.get("email") or "",
+                "email_verified": verified}
     return {"subject": str(data.get("sub") or data.get("id") or ""),
             "name": data.get("name") or data.get("preferred_username") or "",
-            "email": data.get("email") or ""}
+            "email": data.get("email") or "",
+            "email_verified": verified}
 
 
 def _now():
@@ -223,13 +242,77 @@ def delete_session(conn, token):
 
 
 def upsert_user(conn, provider, ident):
-    uid = "%s:%s" % (provider, ident["subject"])
-    row = conn.execute("SELECT id FROM users WHERE id=?", (uid,)).fetchone()
-    if row is None:
-        conn.execute("INSERT INTO users(id,name,created_at) VALUES(?,?,?)",
-                     (uid, ident.get("name", ""), _now()))
-        conn.commit()
+    """Resolve a provider identity to one user id, linking by verified email.
+
+    An identity seen before keeps its user. A new identity claims an existing
+    user only when the provider reports a VERIFIED email that user already
+    owns - so a Google login onto a mailbox that already has an account lands
+    in that account instead of opening a second empty one. No verified email,
+    no link: we never join accounts on a name or an unverified address.
+    """
+    subject = ident["subject"]
+    email = (ident.get("email") or "").strip().lower()
+    verified = 1 if ident.get("email_verified") else 0
+    row = conn.execute("SELECT user_id FROM identities WHERE provider=? AND subject=?",
+                       (provider, subject)).fetchone()
+    if row is not None:
+        uid = row["user_id"]
+    else:
+        uid = None
+        if verified and email:
+            prev = conn.execute(
+                "SELECT user_id FROM identities WHERE email=? AND email_verified=1"
+                " ORDER BY created_at LIMIT 1", (email,)).fetchone()
+            if prev is not None:
+                uid = prev["user_id"]
+        if uid is None:
+            uid = "%s:%s" % (provider, subject)
+            conn.execute("INSERT OR IGNORE INTO users(id,name,created_at) VALUES(?,?,?)",
+                         (uid, ident.get("name", ""), _now()))
+    conn.execute("INSERT OR REPLACE INTO identities"
+                 "(provider,subject,user_id,email,email_verified,created_at)"
+                 " VALUES(?,?,?,?,?,?)",
+                 (provider, subject, uid, email, verified, _now()))
+    conn.commit()
     return uid
+
+
+def identity_user(conn, provider, subject):
+    """The user a provider identity already resolves to, or None."""
+    row = conn.execute("SELECT user_id FROM identities WHERE provider=? AND subject=?",
+                       (provider, subject)).fetchone()
+    return row["user_id"] if row is not None else None
+
+
+def link_identity(conn, provider, ident, user_id):
+    """Attach a provider identity to an explicit, already-authenticated user.
+
+    This is the user-initiated door (settings > link an account), not the
+    login door. It refuses when the identity already belongs to a DIFFERENT
+    account - otherwise a link flow could be used to seize someone's login -
+    and re-linking to the same user is idempotent.
+    """
+    subject = ident["subject"]
+    existing = identity_user(conn, provider, subject)
+    if existing is not None and existing != user_id:
+        raise AuthError("this %s account is already linked to another user" % provider)
+    email = (ident.get("email") or "").strip().lower()
+    verified = 1 if ident.get("email_verified") else 0
+    conn.execute("INSERT OR REPLACE INTO identities"
+                 "(provider,subject,user_id,email,email_verified,created_at)"
+                 " VALUES(?,?,?,?,?,?)",
+                 (provider, subject, user_id, email, verified, _now()))
+    conn.commit()
+    return user_id
+
+
+def linked_providers(conn, user_id):
+    """Which social providers a user has attached to their account."""
+    if not user_id:
+        return []
+    rows = conn.execute("SELECT DISTINCT provider FROM identities WHERE user_id=?",
+                        (user_id,)).fetchall()
+    return sorted(r["provider"] for r in rows)
 
 
 class Auth:
@@ -290,12 +373,16 @@ class Auth:
     def identity(self, pid, access_token):
         cfg = self.table[pid]
         ident = _identity(pid, self._get_json(cfg["identity"], access_token))
-        if pid == "github" and not ident["email"] and cfg.get("emails"):
+        if pid == "github" and cfg.get("emails"):
+            # GitHub's /user carries no verified flag; /user/emails does. Fetch it
+            # so a github address is only ever linked on a verified one.
             try:
                 emails = self._get_json(cfg["emails"], access_token)
-                primary = next((e["email"] for e in emails if e.get("primary")),
-                               emails[0]["email"] if emails else "")
-                ident["email"] = primary or ""
+                primary = next((e for e in emails if e.get("primary")),
+                               emails[0] if emails else None)
+                if primary:
+                    ident["email"] = primary.get("email") or ident["email"]
+                    ident["email_verified"] = bool(primary.get("verified"))
             except Exception:
                 pass
         return ident
@@ -309,4 +396,14 @@ class Auth:
             raise AuthError("provider %s returned no subject" % pid)
         uid = upsert_user(self.conn, pid, ident)
         return uid, create_session(self.conn, uid, pid)
+
+    def link(self, pid, code, redirect_uri, user_id):
+        """Finish a link flow: attach this provider to an existing user."""
+        if pid not in self.table:
+            raise AuthError("unknown provider %s" % pid)
+        access = self._exchange(pid, code, redirect_uri)
+        ident = self.identity(pid, access)
+        if not ident["subject"]:
+            raise AuthError("provider %s returned no subject" % pid)
+        return link_identity(self.conn, pid, ident, user_id)
 

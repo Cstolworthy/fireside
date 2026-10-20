@@ -1010,6 +1010,13 @@ class App:
         return 200, {"user": uid, "authenticated": bool(uid),
                      "admin": auth.is_admin(self.conn, uid)}
 
+    def auth_linked(self, q, body):
+        """Which social providers the signed-in user has attached."""
+        uid = (q or {}).get("_user") or ""
+        if not uid:
+            return 401, {"error": "auth required"}
+        return 200, {"linked": auth.linked_providers(self.conn, uid)}
+
 
 GET_ROUTES = {
     "/": "ui", "/index.html": "ui", "/favicon.ico": "favicon",
@@ -1024,6 +1031,7 @@ GET_ROUTES = {
     "/connections": "connections_list", "/source-creds": "source_creds",
     "/cover": "cover_get",
     "/auth/providers": "auth_providers", "/me": "me", "/auth/policy": "auth_policy",
+    "/auth/linked": "auth_linked",
     "/auth/users": "auth_users", "/credits": "credits",
 }
 POST_ROUTES = {
@@ -1107,19 +1115,35 @@ def make_handler(app):
             try:
                 redirect_uri = self._base_url() + "/auth/%s/callback" % pid
                 if action == "start":
+                    link = _truthy(q.get("link"))
+                    uid = auth.session_user(app.conn, self._token()) or ""
+                    if link and not uid:
+                        return self.send_error(401, "sign in before linking an account")
                     state = auth.new_state()
                     url = app.auth.authorize_url(pid, redirect_uri, state)
-                    return self._redirect(url, [self._cookie_str(
-                        auth.STATE_COOKIE, state, path="/auth", max_age=600)])
+                    return self._redirect(url, [
+                        self._cookie_str(auth.STATE_COOKIE, state, path="/auth", max_age=600),
+                        self._cookie_str(auth.LINK_COOKIE, uid if link else "",
+                                         path="/auth", max_age=600)])
                 if action == "callback":
                     if q.get("error"):
                         return self.send_error(400, "oauth error: %s" % q["error"])
                     if not q.get("state") or q["state"] != self._cookie(auth.STATE_COOKIE):
                         return self.send_error(400, "bad oauth state")
+                    clear = [self._cookie_str(auth.STATE_COOKIE, "", path="/auth", max_age=0),
+                             self._cookie_str(auth.LINK_COOKIE, "", path="/auth", max_age=0)]
+                    link_user = self._cookie(auth.LINK_COOKIE)
+                    if link_user:
+                        # a link flow, not a login: it must resolve to the same
+                        # session that started it, and it never mints a session.
+                        cur = auth.session_user(app.conn, self._token()) or ""
+                        if cur != link_user:
+                            return self.send_error(401, "session changed during link")
+                        app.auth.link(pid, q.get("code", ""), redirect_uri, link_user)
+                        return self._redirect("/?linked=%s" % pid, clear)
                     uid, token = app.auth.login(pid, q.get("code", ""), redirect_uri)
-                    return self._redirect("/", [
-                        self._cookie_str(auth.SESSION_COOKIE, token, max_age=auth.SESSION_TTL),
-                        self._cookie_str(auth.STATE_COOKIE, "", path="/auth", max_age=0)])
+                    return self._redirect("/", clear + [self._cookie_str(
+                        auth.SESSION_COOKIE, token, max_age=auth.SESSION_TTL)])
             except auth.AuthError as e:
                 return self._json(401, {"error": str(e)})
             return self.send_error(404)

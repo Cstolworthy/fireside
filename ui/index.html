@@ -448,6 +448,9 @@
       <button class="btn" id="pronsave" type="button">Save</button>
     </div>
     <div id="pronmsg" class="sub" style="margin-top:8px"></div>
+    <h3 style="margin-top:30px">Connected accounts</h3>
+    <p class="sub">Sign in with Google, GitHub, Microsoft or SimpleLogin instead of a password. Link one here while you are signed in.</p>
+    <div id="oauthrows"></div>
   </section>
 
   <div class="err" id="err"></div>
@@ -668,7 +671,7 @@ function needUser() { if (!USER) { fail('set your name first (top right)'); thro
 function show(v) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
-  if (v === 'set') loadPron();
+  if (v === 'set') { loadPron(); loadLinked(); }
 }
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.dataset.v));
 
@@ -900,6 +903,34 @@ async function testPron(text) {
 }
 $('#pronadd').onclick = () => pronRow('', '');
 $('#pronsave').onclick = savePron;
+// --- connected accounts: link a social login to this account ---------------
+// The link door, not the login door: you are already signed in, and the
+// provider gets attached to the account you are in.
+async function loadLinked() {
+  const box = $('#oauthrows'); if (!box) return;
+  box.innerHTML = '';
+  let provs = [];
+  try { const d = await api('/auth/providers'); provs = d.providers || []; } catch (_) {}
+  let linked = [];
+  try { const d = await api('/auth/linked'); linked = d.linked || []; } catch (_) {}
+  const social = provs.filter(p => p.kind !== 'local' && p.start);
+  if (!social.length) {
+    const p = document.createElement('p'); p.className = 'small';
+    p.textContent = 'No social sign-in is set up on this server.';
+    box.append(p); return;
+  }
+  social.forEach(p => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;margin-top:8px';
+    const name = document.createElement('div'); name.style.flex = '1 1 0'; name.textContent = p.label;
+    const on = linked.includes(p.id);
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'btn quiet';
+    b.textContent = on ? 'Connected' : 'Link ' + p.label;
+    b.disabled = !!on;
+    b.onclick = () => { location.href = p.start + '?link=1'; };
+    row.append(name, b); box.append(row);
+  });
+}
 // --- the door: the whole app is behind a session ---------------------------
 let AUTH = { user: '', admin: false, hasAccounts: false, registrationOpen: true,
              providers: [], mode: 'sign' };
@@ -2082,6 +2113,13 @@ window.addEventListener('load', async () => {
   renderQueue();
   applyVolume();
   syncTog();
+  try {
+    const lp = new URLSearchParams(location.search);
+    if (lp.get('linked')) {
+      idle('Linked with ' + lp.get('linked') + '. You can sign in that way from now on.');
+      history.replaceState({}, '', location.pathname);
+    }
+  } catch (_) {}
 });
 </script>
 </body>
