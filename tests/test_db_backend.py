@@ -148,3 +148,35 @@ class SchemaPortability(unittest.TestCase):
     def test_text_columns_have_no_literal_default(self):
         bad = re.findall(r"\b(TEXT|BLOB|GEOMETRY|JSON)\s+DEFAULT\b", db.SCHEMA, re.I)
         self.assertEqual(bad, [], "MySQL rejects DEFAULT on %s column(s)" % bad)
+
+
+class MySQLTls(unittest.TestCase):
+    """A hosted MySQL needs TLS; a LAN self-host must not be forced into it.
+
+    Azure Database for MySQL runs with require_secure_transport=ON, so a
+    plaintext connection is refused before auth. pymysql only speaks TLS when
+    handed an SSL context, so `mysql_ssl_kwargs()` is the single decision point.
+    The default is deliberately empty: nothing changes for an existing
+    plaintext deployment.
+    """
+
+    def tearDown(self):
+        os.environ.pop("FIRESIDE_DB_SSL", None)
+
+    def test_unset_keeps_the_plaintext_default(self):
+        self.assertEqual(db.mysql_ssl_kwargs(), {})
+
+    def test_require_turns_on_tls(self):
+        import ssl
+        os.environ["FIRESIDE_DB_SSL"] = "1"
+        kw = db.mysql_ssl_kwargs()
+        self.assertIsInstance(kw["ssl"], ssl.SSLContext)
+        self.assertEqual(kw["ssl"].verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(kw["ssl"].check_hostname)
+
+    def test_noverify_encrypts_without_verifying(self):
+        import ssl
+        os.environ["FIRESIDE_DB_SSL"] = "noverify"
+        ctx = db.mysql_ssl_kwargs()["ssl"]
+        self.assertEqual(ctx.verify_mode, ssl.CERT_NONE)
+        self.assertFalse(ctx.check_hostname)
