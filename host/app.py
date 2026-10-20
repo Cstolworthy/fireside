@@ -142,6 +142,34 @@ class App:
         with open(os.path.join(ASSETS_DIR, "favicon.ico"), "rb") as f:
             return 200, {"_raw": f.read(), "_mime": "image/x-icon"}
 
+
+    # ---- PWA ------------------------------------------------------------------
+    # Static bits a browser fetches outside any session: the manifest, the
+    # service worker (it must live at the root to claim the whole scope), and the
+    # install icons. All are public routes, because Chrome fetches them before a
+    # session exists.
+
+    def _asset(self, name, mime):
+        with open(os.path.join(ASSETS_DIR, name), "rb") as f:
+            return 200, {"_raw": f.read(), "_mime": mime}
+
+    def manifest(self, q, body):
+        with open(os.path.join(UI_DIR, "manifest.webmanifest"), "rb") as f:
+            return 200, {"_raw": f.read(), "_mime": "application/manifest+json"}
+
+    def service_worker(self, q, body):
+        with open(os.path.join(UI_DIR, "sw.js"), "rb") as f:
+            return 200, {"_raw": f.read(), "_mime": "text/javascript; charset=utf-8"}
+
+    def icon192(self, q, body):
+        return self._asset("icon-192.png", "image/png")
+
+    def icon512(self, q, body):
+        return self._asset("icon-512.png", "image/png")
+
+    def icon_maskable(self, q, body):
+        return self._asset("icon-maskable-512.png", "image/png")
+
     # ---- library --------------------------------------------------------------
 
     def library_list(self, q, body):
@@ -895,6 +923,9 @@ class App:
 
 GET_ROUTES = {
     "/": "ui", "/index.html": "ui", "/favicon.ico": "favicon",
+    "/manifest.webmanifest": "manifest", "/sw.js": "service_worker",
+    "/icon-192.png": "icon192", "/icon-512.png": "icon512",
+    "/icon-maskable-512.png": "icon_maskable",
     "/health": "health", "/plugins": "plugins", "/library": "library_list",
     "/job": "job", "/progress": "progress", "/chapter": "chapter",
     "/estimate": "estimate",
@@ -921,7 +952,9 @@ POST_ROUTES = {
 
 # reachable without a session even when auth is required: the page, its health,
 # the sign-in surface, and the browser's cache of who it is.
-PUBLIC_ROUTES = {"/", "/index.html", "/favicon.ico", "/health", "/auth/providers", "/auth/policy", "/me"}
+PUBLIC_ROUTES = {"/", "/index.html", "/favicon.ico", "/health", "/auth/providers",
+                 "/auth/policy", "/me", "/manifest.webmanifest", "/sw.js",
+                 "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"}
 
 # auth sub-routes the handler serves directly (they set cookies / redirect),
 # so they are not in the GET/POST dispatch tables above. Declared here so the

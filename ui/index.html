@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>fireside</title>
 <link rel="icon" href="/favicon.ico">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#14110f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="fireside">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <style>
   :root{
     --bg:#14110f; --surface:#1d1915; --raise:#272119; --line:#3a3128;
@@ -283,6 +289,7 @@
         <div class="who" id="auth"></div>
         <div class="stats" id="stats" hidden></div>
         <button id="menuset" type="button">Settings</button>
+        <button id="menuinstall" type="button" hidden>Install app</button>
         <button id="signout" type="button">Sign out</button>
       </div>
       <div class="menu" id="alertmenu" hidden></div>
@@ -1596,7 +1603,9 @@ async function playSelection(bk, idx, autoplay = true) {
     const e = await fetchChapter(bk.id, idx, rd.audio_ref, rd.audio_bytes, rd);
     const a = $('#audio'); a.src = e.url;
     player = { id: bk.id, title: bk.title, chapters: bk.chapters };
+    player.cover = bk.cover || '';
     pcur = idx;
+    setNowPlaying();
     lastName = player.id; try { localStorage.setItem(LKEY, lastName); } catch (_) {}
     if (viewed) { state[idx] = 'ready'; cur = idx; renderPlay(); await loadText(idx); }
     if (autoplay) { await jpost('/claim', { user: USER, book: player.id, device: DEVICE }); a.play().catch(() => {}); }
@@ -1651,9 +1660,12 @@ $('#tog').onclick = () => { if (!player.id || pcur < 0) return; $a.paused ? $a.p
 $('#back30').onclick = () => { $a.currentTime = Math.max(0, ($a.currentTime || 0) - 15); };
 const SPD = [1.0, 1.1, 1.25, 1.5]; let si = 1;
 $('#speed').onclick = () => { si = (si + 1) % SPD.length; $a.playbackRate = SPD[si]; $('#speed').textContent = SPD[si] + '×'; };
-$a.addEventListener('play', () => { syncTog(); listenStart(); });
-$a.addEventListener('pause', () => { syncTog(); listenStop(); });
+$a.addEventListener('play', () => { syncTog(); listenStart();
+  if ('mediaSession' in navigator) { try { navigator.mediaSession.playbackState = 'playing'; } catch (_) {} } });
+$a.addEventListener('pause', () => { syncTog(); listenStop();
+  if ('mediaSession' in navigator) { try { navigator.mediaSession.playbackState = 'paused'; } catch (_) {} } });
 $a.addEventListener('timeupdate', () => {
+  setPositionState();
   const d = $a.duration || 0; $('#progfill').style.width = d ? (100 * $a.currentTime / d) + '%' : '0';
   $('#tcur').textContent = mmss($a.currentTime);
   $('#tleft').textContent = '−' + mmss(Math.max(0, d - $a.currentTime));
@@ -1958,7 +1970,75 @@ window.addEventListener('error', e => {
   } catch (_) {}
 });
 
+
+// --- PWA: installable, lockscreen controls, and background playback ----------
+// Chrome only registers a service worker, and only offers Install, on a secure
+// origin: https, or localhost. On a plain-http LAN address the page still works,
+// it just cannot be installed (see the README's PWA note).
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+let INSTALL = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault(); INSTALL = e;
+  const b = $('#menuinstall'); if (b) b.hidden = false;
+});
+window.addEventListener('appinstalled', () => {
+  INSTALL = null; const b = $('#menuinstall'); if (b) b.hidden = true;
+});
+{
+  const b = $('#menuinstall');
+  if (b && window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) b.hidden = true;
+  if (b) b.onclick = async () => {
+    if (!INSTALL) { toast('ok', 'Use your browser menu: Install app, or Add to Home screen.'); return; }
+    INSTALL.prompt(); try { await INSTALL.userChoice; } catch (_) {}
+    INSTALL = null; b.hidden = true;
+  };
+}
+// The system player (lockscreen, notification shade, headset buttons) reads this.
+function nowPlayingArt() {
+  const art = [];
+  if (player.cover) art.push({ src: coverURL(player.id, player.cover), sizes: '512x512', type: 'image/jpeg' });
+  art.push({ src: '/icon-192.png', sizes: '192x192', type: 'image/png' });
+  art.push({ src: '/icon-512.png', sizes: '512x512', type: 'image/png' });
+  return art;
+}
+function setNowPlaying() {
+  if (!('mediaSession' in navigator) || !player.id) return;
+  const c = player.chapters.find(x => x.idx === pcur) || {};
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: c.title || ('Chapter ' + (pcur + 1)),
+      artist: player.title || 'fireside',
+      album: 'fireside',
+      artwork: nowPlayingArt()
+    });
+  } catch (_) {}
+  try { navigator.mediaSession.playbackState = $a.paused ? 'paused' : 'playing'; } catch (_) {}
+}
+function setPositionState() {
+  if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
+  const d = $a.duration || 0; if (!d || !isFinite(d)) return;
+  try { navigator.mediaSession.setPositionState({ duration: d,
+    position: Math.min(d, $a.currentTime || 0), playbackRate: $a.playbackRate || 1 }); } catch (_) {}
+}
+if ('mediaSession' in navigator) {
+  const ms = navigator.mediaSession;
+  const act = (name, fn) => { try { ms.setActionHandler(name, fn); } catch (_) {} };
+  act('play', () => { $a.play().catch(() => {}); });
+  act('pause', () => { $a.pause(); });
+  act('seekbackward', d => { $a.currentTime = Math.max(0, ($a.currentTime || 0) - ((d && d.seekOffset) || 15)); });
+  act('seekforward', d => { const x = ($a.currentTime || 0) + ((d && d.seekOffset) || 15);
+    const dur = $a.duration || 0; $a.currentTime = dur ? Math.min(dur, x) : x; });
+  act('seekto', d => { if (d && d.seekTime != null) $a.currentTime = d.seekTime; });
+  act('previoustrack', () => chapterStep(-1));
+  act('nexttrack', () => chapterStep(1));
+}
+
 // --- boot ------------------------------------------------------------------
+
 window.addEventListener('load', async () => {
   const ok = await requireSession();
   if (!ok) return;
