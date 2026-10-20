@@ -113,6 +113,74 @@ class TestAuth(unittest.TestCase):
             self._jget("/auth/users")
         self.assertEqual(cm.exception.code, 403)
 
+    # ---- linking a provider to an already-signed-in account ----------------
+
+    def _wire_fake_provider(self):
+        """A provider whose token + userinfo are answered locally, no network."""
+        table = self.app.auth.table
+        table["fake"] = {"label": "Fake", "authorize": "http://id.test/authorize",
+                         "token": "http://id.test/token", "identity": "http://id.test/me",
+                         "scope": "profile",
+                         "id_env": ("FIRESIDE_OAUTH_FAKE_CLIENT_ID",
+                                    "FIRESIDE_OAUTH_FAKE_SECRET")}
+        os.environ["FIRESIDE_OAUTH_FAKE_CLIENT_ID"] = "cid"
+        os.environ["FIRESIDE_OAUTH_FAKE_SECRET"] = "sec"
+
+        def fetch(req, timeout=20):
+            if req.full_url == "http://id.test/token":
+                return json.dumps({"access_token": "tok"}).encode()
+            return json.dumps({"sub": "u1", "name": "Chris",
+                               "email": "chris@x.com", "email_verified": True}).encode()
+        self.app.auth.fetch = fetch
+
+    def _get_no_redirect(self, url):
+        """Open without following the redirect, but still on the cookie jar."""
+        class _Stop(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *a, **k):
+                return None
+        op = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(self.jar), _Stop)
+        try:
+            return op.open(url)
+        except urllib.error.HTTPError as e:
+            return e
+
+    def _state_cookie(self):
+        for c in self.jar:
+            if c.name == auth.STATE_COOKIE:
+                return c.value
+        return ""
+
+    def test_start_without_a_session_refuses_to_link(self):
+        self._wire_fake_provider()
+        r = self._get_no_redirect("http://127.0.0.1:%d/auth/fake/start?link=1" % self.port)
+        self.assertEqual(r.code, 401)
+
+    def test_link_attaches_the_provider_to_the_signed_in_account(self):
+        self._post("/auth/local/register", {"username": "chris", "password": "longenough"})
+        self._wire_fake_provider()
+        r = self._get_no_redirect("http://127.0.0.1:%d/auth/fake/start?link=1" % self.port)
+        self.assertEqual(r.code, 302)
+        self.assertIn("http://id.test/authorize", r.headers.get("Location", ""))
+        # the callback ends the flow, and it never mints a new session
+        before = next(c.value for c in self.jar if c.name == auth.SESSION_COOKIE)
+        self._get_no_redirect("http://127.0.0.1:%d/auth/fake/callback?code=abc&state=%s"
+                              % (self.port, self._state_cookie()))
+        after = next(c.value for c in self.jar if c.name == auth.SESSION_COOKIE)
+        self.assertEqual(before, after)
+        s, d = self._jget("/auth/linked")
+        self.assertEqual(d["linked"], ["fake"])
+
+    def test_a_bad_state_is_refused(self):
+        self._post("/auth/local/register", {"username": "chris", "password": "longenough"})
+        self._wire_fake_provider()
+        self._get_no_redirect("http://127.0.0.1:%d/auth/fake/start?link=1" % self.port)
+        r = self._get_no_redirect(
+            "http://127.0.0.1:%d/auth/fake/callback?code=abc&state=wrong" % self.port)
+        self.assertEqual(r.code, 400)
+        s, d = self._jget("/auth/linked")
+        self.assertEqual(d["linked"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

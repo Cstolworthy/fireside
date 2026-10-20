@@ -140,15 +140,16 @@ def rendition_key(book_id, idx, provider, voice, model, speed):
 
 
 def add_rendition(conn, book_id, idx, provider, voice, model, speed,
-                  audio_ref, audio_bytes, duration_s=None, voice_label=""):
+                  audio_ref, audio_bytes, duration_s=None, voice_label="", pron=""):
     rk = rendition_key(book_id, idx, provider, voice, model, speed)
     conn.execute(
         "INSERT OR REPLACE INTO renditions"
-        "(rk,book_id,idx,provider,voice,voice_label,model,speed,"
+        "(rk,book_id,idx,provider,voice,voice_label,model,speed,pron,"
         " audio_ref,audio_bytes,duration_s,created_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (rk, book_id, idx, provider or "", voice or "", voice_label or "",
-         model or "", float(speed or 1.0), audio_ref, audio_bytes, duration_s, now()))
+         model or "", float(speed or 1.0), pron or "", audio_ref, audio_bytes,
+         duration_s, now()))
 
 
 def renditions(conn, book_id):

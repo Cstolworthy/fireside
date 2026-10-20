@@ -37,7 +37,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
-from host import accounting, auth, connections, credentials, db, jobs, library, playback, stats
+from host import accounting, auth, connections, credentials, db, jobs, library, payments, playback, pron, stats
 from sources._fetch import fetch as _fetch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -141,6 +141,34 @@ class App:
         """The browser-tab icon: the same mark the install screen shows."""
         with open(os.path.join(ASSETS_DIR, "favicon.ico"), "rb") as f:
             return 200, {"_raw": f.read(), "_mime": "image/x-icon"}
+
+
+    # ---- PWA ------------------------------------------------------------------
+    # Static bits a browser fetches outside any session: the manifest, the
+    # service worker (it must live at the root to claim the whole scope), and the
+    # install icons. All are public routes, because Chrome fetches them before a
+    # session exists.
+
+    def _asset(self, name, mime):
+        with open(os.path.join(ASSETS_DIR, name), "rb") as f:
+            return 200, {"_raw": f.read(), "_mime": mime}
+
+    def manifest(self, q, body):
+        with open(os.path.join(UI_DIR, "manifest.webmanifest"), "rb") as f:
+            return 200, {"_raw": f.read(), "_mime": "application/manifest+json"}
+
+    def service_worker(self, q, body):
+        with open(os.path.join(UI_DIR, "sw.js"), "rb") as f:
+            return 200, {"_raw": f.read(), "_mime": "text/javascript; charset=utf-8"}
+
+    def icon192(self, q, body):
+        return self._asset("icon-192.png", "image/png")
+
+    def icon512(self, q, body):
+        return self._asset("icon-512.png", "image/png")
+
+    def icon_maskable(self, q, body):
+        return self._asset("icon-maskable-512.png", "image/png")
 
     # ---- library --------------------------------------------------------------
 
@@ -499,7 +527,7 @@ class App:
         sale = accounting.sale_connection_matches(self.sale_connection, provider, voice, model)
         res_id = None
         if sale:
-            quote = speech.quote({"chars_est": est, "cred": cred})
+            quote = speech.quote({"chars_est": est, "cred": cred, "sale": True})
             if not getattr(quote, "eligible", True):
                 return 402, {"error": "not eligible",
                              "reason": getattr(quote, "refusal_reason", "")}
@@ -523,13 +551,103 @@ class App:
                                  model, speed, cred=cred, opts=opts, only=only,
                                  job_id=jid, voice_label=voice_label)
                 if sale and res_id:
-                    rep = speech.report({"chars_actual": est, "cred": cred, "job_id": jid})
+                    # The plugin reports the real count. A failed run leaves the
+                    # job's done_chars short of the estimate, so a partial render
+                    # is charged only for what was actually voiced.
+                    jr = jobs.job(c, jid)
+                    done = (jr or {}).get("done_chars")
+                    rep = speech.report({"chars_actual": (done if done else est),
+                                         "cred": cred, "job_id": jid, "sale": True})
                     accounting.settle(c, res_id, rep)
             finally:
                 c.close()
 
         threading.Thread(target=_work, daemon=True).start()
         return 200, {"job_id": jid, "total": len(todo)}
+
+    # ---- credits (resold speech capacity, counted in characters) -------------
+    # The sale connection's plugin is the authority on the rate and on how many
+    # characters a payment buys; the host only holds the per-user character
+    # balance and moves it. A metered run holds its estimate, the plugin reports
+    # the real count, the host settles. Nothing here knows what a character costs.
+
+    def _sale_connection(self, uid):
+        """(provider, speech plugin, stored cred) for the designated sale
+        connection. Pricing reads the connection's STORED data, never a user's
+        override: a buyer must not be able to edit the rate they are charged."""
+        spec = self.sale_connection or {}
+        c = None
+        cid = spec.get("connection_id")
+        if cid:
+            c = connections.get(self.conn, cid)
+        elif spec.get("provider"):
+            for cand in connections.list_for(self.conn, uid):
+                if cand["provider"] == spec["provider"]:
+                    c = cand
+                    break
+        if not c:
+            return None, None, None
+        p = self.host.speech.get(c["provider"])
+        if p is None:
+            return None, None, None
+        return c["provider"], p.obj, dict(c["data"])
+
+    def credits(self, q, body):
+        """The signed-in user's character balance, plus what a sale connection
+        would charge. Read-only: buying happens at /credits/purchase."""
+        uid = self._uid(q, body)
+        out = {
+            "balance": accounting.balance(self.conn, uid),
+            "reserved": accounting.reserved_total(self.conn, uid),
+            "available": accounting.available(self.conn, uid),
+            "unit": "chars",
+            "payments_configured": payments.configured(),
+            "sale": None,
+        }
+        provider, speech, cred = self._sale_connection(uid)
+        if speech is not None:
+            rate_fn = getattr(speech, "sale_rate_per_1m", None)
+            bundles_fn = getattr(speech, "bundles", None)
+            out["sale"] = {
+                "provider": provider,
+                "rate_per_1m_chars": rate_fn(cred) if callable(rate_fn) else None,
+                "currency": "USD",
+                "bundles": bundles_fn(cred) if callable(bundles_fn) else [],
+            }
+        return 200, out
+
+    def credits_purchase(self, q, body):
+        """Buy character capacity. Held until a payment provider is configured.
+        The plugin sets how many characters a dollar amount buys (rounded down),
+        and the host credits exactly that many, never more."""
+        uid = self._uid(q, body)
+        if not uid:
+            return 401, {"error": "auth required"}
+        provider, speech, cred = self._sale_connection(uid)
+        if speech is None:
+            return 400, {"error": "no sale connection configured"}
+        try:
+            usd = float((body or {}).get("usd") or 0)
+        except (TypeError, ValueError):
+            return 400, {"error": "bad amount"}
+        if usd <= 0:
+            return 400, {"error": "amount must be greater than zero"}
+        pp = payments.get()
+        if pp is None:
+            return 503, {"error": "payments not configured",
+                         "detail": "purchases are held until a payment provider lands"}
+        to_chars = getattr(speech, "chars_for_payment", None)
+        chars = int(to_chars(usd, cred)) if callable(to_chars) else 0
+        if chars <= 0:
+            return 400, {"error": "amount too small to buy characters"}
+        receipt = pp.charge(usd, {"user": uid, "provider": provider, "chars": chars})
+        if not receipt.ok:
+            return 402, {"error": "payment refused", "detail": receipt.detail}
+        total = accounting.topup(self.conn, uid, chars, currency="chars",
+                                 note="purchase %.2f USD -> %d chars (%s)"
+                                      % (usd, chars, receipt.reference))
+        return 200, {"ok": True, "chars": chars, "balance": total,
+                     "reference": receipt.reference}
 
     def job(self, q, body):
         j = jobs.job(self.conn, q.get("id", ""))
@@ -846,6 +964,19 @@ class App:
         connections.set_prefs(self.conn, uid, **kw)
         return 200, {"ok": True}
 
+    # ---- pronunciation fixes (per user, applied before any engine) ----------
+
+    def pron_get(self, q, body):
+        uid = self._uid(q, body)
+        return 200, {"rules": pron.load(self.conn, uid)}
+
+    def pron_set(self, q, body):
+        uid = self._uid(q, body)
+        if not uid:
+            return 401, {"error": "auth required"}
+        return 200, {"ok": True,
+                     "rules": pron.save(self.conn, uid, body.get("rules"))}
+
     # ---- auth (social sign-in; the session lives in sqlite) ------------------
 
     def auth_providers(self, q, body):
@@ -879,18 +1010,85 @@ class App:
         return 200, {"user": uid, "authenticated": bool(uid),
                      "admin": auth.is_admin(self.conn, uid)}
 
+    def auth_linked(self, q, body):
+        """Which social providers the signed-in user has attached."""
+        uid = (q or {}).get("_user") or ""
+        if not uid:
+            return 401, {"error": "auth required"}
+        return 200, {"linked": auth.linked_providers(self.conn, uid)}
+
+    # ---- devices and sessions (see and end a session anywhere) ---------------
+
+    def _session_state(self, q, uid):
+        """The caller's own sessions, plus (for an admin) every session on the
+        server, so the same panel can boot a device anywhere."""
+        tok = (q or {}).get("_token") or ""
+        out = {"sessions": auth.list_sessions(self.conn, uid, tok)}
+        if auth.is_admin(self.conn, uid):
+            out["admin"] = True
+            out["all"] = auth.list_all_sessions(self.conn, tok)
+        return out
+
+    def sessions_list(self, q, body):
+        """Every live session of the signed-in user, the current one flagged.
+        An admin also gets every session on the server."""
+        uid = (q or {}).get("_user") or ""
+        if not uid:
+            return 401, {"error": "auth required"}
+        return 200, self._session_state(q, uid)
+
+    def session_revoke(self, q, body):
+        """Log out one session by its id. A user may end any of their own; an
+        admin may end any session on the server. A stale id is not found."""
+        uid = (q or {}).get("_user") or ""
+        if not uid:
+            return 401, {"error": "auth required"}
+        sid = ((body or {}).get("id") or "").strip()
+        ok = auth.revoke_session(self.conn, uid, sid)
+        if not ok and auth.is_admin(self.conn, uid):
+            ok = auth.revoke_any(self.conn, sid) is not None
+        out = self._session_state(q, uid)
+        out["ok"] = ok
+        return (200 if ok else 404), out
+
+    def sessions_revoke_all(self, q, body):
+        """Log out: the caller's own sessions (default), or, for an admin with
+        {all_users: true}, every session on the server. Either way keep the one
+        calling, so the button does not sign you out of the page you are on."""
+        uid = (q or {}).get("_user") or ""
+        if not uid:
+            return 401, {"error": "auth required"}
+        others = (body or {}).get("others")
+        keep_current = others is None or _truthy(others)
+        keep = ((q or {}).get("_token") or "") if keep_current else ""
+        if _truthy((body or {}).get("all_users")):
+            if not auth.is_admin(self.conn, uid):
+                return 403, {"error": "admin only"}
+            n = auth.revoke_all_sessions(self.conn, keep)
+        else:
+            n = auth.revoke_sessions(self.conn, uid, keep)
+        out = self._session_state(q, uid)
+        out["ok"] = True
+        out["revoked"] = n
+        return 200, out
+
 
 GET_ROUTES = {
     "/": "ui", "/index.html": "ui", "/favicon.ico": "favicon",
+    "/manifest.webmanifest": "manifest", "/sw.js": "service_worker",
+    "/icon-192.png": "icon192", "/icon-512.png": "icon512",
+    "/icon-maskable-512.png": "icon_maskable",
     "/health": "health", "/plugins": "plugins", "/library": "library_list",
     "/job": "job", "/progress": "progress", "/chapter": "chapter",
     "/estimate": "estimate",
     "/position": "get_position", "/last": "last_position", "/stop": "stop", "/text": "text",
-    "/stats": "stats_get",
+    "/stats": "stats_get", "/pron": "pron_get",
     "/connections": "connections_list", "/source-creds": "source_creds",
     "/cover": "cover_get",
     "/auth/providers": "auth_providers", "/me": "me", "/auth/policy": "auth_policy",
-    "/auth/users": "auth_users",
+    "/auth/linked": "auth_linked",
+    "/sessions": "sessions_list",
+    "/auth/users": "auth_users", "/credits": "credits",
 }
 POST_ROUTES = {
     "/import": "import_book", "/render": "render", "/voices": "voices",
@@ -903,16 +1101,21 @@ POST_ROUTES = {
     "/connections": "connection_save", "/connections/delete": "connection_delete",
     "/source-creds": "source_cred_save", "/source-creds/delete": "source_cred_delete",
     "/connections/override": "connection_override", "/prefs": "prefs_set",
+    "/pron": "pron_set", "/credits/purchase": "credits_purchase",
+    "/sessions/revoke": "session_revoke",
+    "/sessions/revoke_all": "sessions_revoke_all",
 }
 
 # reachable without a session even when auth is required: the page, its health,
 # the sign-in surface, and the browser's cache of who it is.
-PUBLIC_ROUTES = {"/", "/index.html", "/favicon.ico", "/health", "/auth/providers", "/auth/policy", "/me"}
+PUBLIC_ROUTES = {"/", "/index.html", "/favicon.ico", "/health", "/auth/providers",
+                 "/auth/policy", "/me", "/manifest.webmanifest", "/sw.js",
+                 "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"}
 
 # auth sub-routes the handler serves directly (they set cookies / redirect),
 # so they are not in the GET/POST dispatch tables above. Declared here so the
 # browser client's served-route guard can see them too.
-AUTH_ROUTES = {"/auth/logout"}
+AUTH_ROUTES = {"/auth/logout", "/auth/claim", "/auth/claim/confirm"}
 
 
 def _truthy(v):
@@ -961,6 +1164,14 @@ def make_handler(app):
                     tok = authz[7:]
             return tok
 
+        def _ua(self):
+            return (self.headers.get("User-Agent") or "")[:400]
+
+        def _ip(self):
+            # behind the tunnel the peer address is the proxy; trust only the
+            # socket peer, and say so plainly rather than trust an XFF header.
+            return (self.client_address[0] if self.client_address else "")[:64]
+
         def _auth_route(self, parts, parsed):
             from urllib.parse import parse_qs
             q = {k: v[0] for k, v in parse_qs(parsed.query).items()}
@@ -970,19 +1181,67 @@ def make_handler(app):
             try:
                 redirect_uri = self._base_url() + "/auth/%s/callback" % pid
                 if action == "start":
+                    link = _truthy(q.get("link"))
+                    claim = q.get("claim") or ""
+                    uid = auth.session_user(app.conn, self._token()) or ""
+                    if link and not uid:
+                        return self.send_error(401, "sign in before linking an account")
+                    if claim:
+                        auth.take_claim(app.conn, claim)   # expired/unknown -> AuthError
                     state = auth.new_state()
                     url = app.auth.authorize_url(pid, redirect_uri, state)
-                    return self._redirect(url, [self._cookie_str(
-                        auth.STATE_COOKIE, state, path="/auth", max_age=600)])
+                    return self._redirect(url, [
+                        self._cookie_str(auth.STATE_COOKIE, state, path="/auth", max_age=600),
+                        self._cookie_str(auth.LINK_COOKIE, uid if link else "",
+                                         path="/auth", max_age=600),
+                        self._cookie_str(auth.CLAIM_COOKIE, claim,
+                                         path="/auth", max_age=600)])
                 if action == "callback":
                     if q.get("error"):
                         return self.send_error(400, "oauth error: %s" % q["error"])
                     if not q.get("state") or q["state"] != self._cookie(auth.STATE_COOKIE):
                         return self.send_error(400, "bad oauth state")
-                    uid, token = app.auth.login(pid, q.get("code", ""), redirect_uri)
-                    return self._redirect("/", [
-                        self._cookie_str(auth.SESSION_COOKIE, token, max_age=auth.SESSION_TTL),
-                        self._cookie_str(auth.STATE_COOKIE, "", path="/auth", max_age=0)])
+                    clear = [self._cookie_str(auth.STATE_COOKIE, "", path="/auth", max_age=0),
+                             self._cookie_str(auth.LINK_COOKIE, "", path="/auth", max_age=0),
+                             self._cookie_str(auth.CLAIM_COOKIE, "", path="/auth", max_age=0)]
+                    link_user = self._cookie(auth.LINK_COOKIE)
+                    claim_tok = self._cookie(auth.CLAIM_COOKIE)
+                    if link_user:
+                        # a link flow, not a login: it must resolve to the same
+                        # session that started it, and it never mints a session.
+                        cur = auth.session_user(app.conn, self._token()) or ""
+                        if cur != link_user:
+                            return self.send_error(401, "session changed during link")
+                        app.auth.link(pid, q.get("code", ""), redirect_uri, link_user)
+                        return self._redirect("/?linked=%s" % pid, clear)
+                    if claim_tok:
+                        # proving ownership of an account a social login collided
+                        # with: signing in through one of ITS OWN providers is the
+                        # proof. Wrong provider / not this account -> do nothing.
+                        try:
+                            ident = app.auth.identity_from_code(pid, q.get("code", ""),
+                                                                redirect_uri)
+                            uid = auth.complete_claim_via_identity(app.conn, claim_tok,
+                                                                   pid, ident)
+                        except auth.AuthError as e:
+                            return self._redirect(
+                                "/?claim=%s&claimerr=%s" % (
+                                    urllib.parse.quote(claim_tok),
+                                    urllib.parse.quote(str(e))), clear)
+                        token = auth.create_session(app.conn, uid, "link",
+                                                    ua=self._ua(), ip=self._ip())
+                        return self._redirect("/", clear + [self._cookie_str(
+                            auth.SESSION_COOKIE, token, max_age=auth.SESSION_TTL)])
+                    uid, token = app.auth.login(pid, q.get("code", ""), redirect_uri,
+                                                ua=self._ua(), ip=self._ip())
+                    return self._redirect("/", clear + [self._cookie_str(
+                        auth.SESSION_COOKIE, token, max_age=auth.SESSION_TTL)])
+            except auth.AccountExistsError as e:
+                # The provider proved the mailbox, not the account. Do not drop
+                # them into it; hold the identity and ask for the account's own
+                # login. Never mint a session on a collision.
+                claim = auth.create_claim(app.conn, e.provider, e.ident, e.user_id)
+                return self._redirect("/?claim=%s" % claim, clear)
             except auth.AuthError as e:
                 return self._json(401, {"error": str(e)})
             return self.send_error(404)
@@ -1014,9 +1273,46 @@ def make_handler(app):
                                                body.get("password", ""))
                 except auth.AuthError as e:
                     return self._json(401, {"error": str(e)})
-                token = auth.create_session(app.conn, uid, "local")
+                token = auth.create_session(app.conn, uid, "local",
+                                            ua=self._ua(), ip=self._ip())
                 return self._json(200, {"ok": True, "user": uid,
                                         "admin": auth.is_admin(app.conn, uid)},
+                                  cookie=self._cookie_str(
+                                      auth.SESSION_COOKIE, token,
+                                      max_age=auth.SESSION_TTL))
+            # Proving ownership of an account a social login collided with.
+            # Both are public by construction: the claim token IS the capability.
+            if path == "/auth/claim" and self.command == "GET":
+                cq = {k: v[0] for k, v in parse_qs(u.query).items()}
+                try:
+                    c = auth.take_claim(app.conn, cq.get("token", ""))
+                except auth.AuthError as e:
+                    return self._json(410, {"error": str(e)})
+                m = auth.claim_methods(app.conn, c["user_id"])
+                methods = [{"id": pid,
+                            "label": app.auth.table.get(pid, {}).get("label", pid),
+                            "start": "/auth/%s/start" % pid}
+                           for pid in m["providers"]]
+                return self._json(200, {
+                    "provider": c["provider"], "email": c["email"],
+                    "provider_label": (app.auth.table.get(c["provider"], {})
+                                       .get("label", c["provider"])),
+                    "has_password": m["has_password"],
+                    "methods": methods})
+            if path == "/auth/claim/confirm" and self.command == "POST":
+                n = int(self.headers.get("Content-Length") or 0)
+                try:
+                    body = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+                except ValueError:
+                    return self.send_error(400)
+                try:
+                    uid = auth.complete_claim(app.conn, body.get("claim", ""),
+                                              body.get("password", ""))
+                except auth.AuthError as e:
+                    return self._json(401, {"error": str(e)})
+                token = auth.create_session(app.conn, uid, "link",
+                                            ua=self._ua(), ip=self._ip())
+                return self._json(200, {"ok": True, "user": uid},
                                   cookie=self._cookie_str(
                                       auth.SESSION_COOKIE, token,
                                       max_age=auth.SESSION_TTL))
@@ -1033,6 +1329,7 @@ def make_handler(app):
                     except ValueError:
                         return self.send_error(400)
             q["_user"] = auth.session_user(app.conn, self._token()) or ""
+            q["_token"] = self._token()
             if app.require_auth and path not in PUBLIC_ROUTES and not q["_user"]:
                 return self._json(401, {"error": "auth required"})
             try:

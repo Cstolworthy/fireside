@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>fireside</title>
 <link rel="icon" href="/favicon.ico">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#14110f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="fireside">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <style>
   :root{
     --bg:#14110f; --surface:#1d1915; --raise:#272119; --line:#3a3128;
@@ -247,6 +253,21 @@
   .smeta .row{margin:4px 0}
   .smeta .desc{white-space:pre-wrap;margin-top:8px}
 </style>
+<script>
+/* Fireside native bridge hook. In the Android shell, window.NativeMedia raises a
+   foreground media service so playback survives screen lock / backgrounding.
+   Absent in a plain browser, so this is a harmless no-op there. */
+(function () {
+  if (window.__fsNativeMediaHooked) return;
+  window.__fsNativeMediaHooked = true;
+  function nm(name) { try { if (window.NativeMedia && window.NativeMedia[name]) window.NativeMedia[name](); } catch (e) {} }
+  if (!window.HTMLMediaElement) return;
+  var proto = HTMLMediaElement.prototype;
+  var _play = proto.play, _pause = proto.pause;
+  proto.play = function () { nm('start'); return _play.apply(this, arguments); };
+  proto.pause = function () { nm('stop'); return _pause.apply(this, arguments); };
+})();
+</script>
 </head>
 <body>
 <div class="lock" id="lock" hidden>
@@ -283,6 +304,7 @@
         <div class="who" id="auth"></div>
         <div class="stats" id="stats" hidden></div>
         <button id="menuset" type="button">Settings</button>
+        <button id="menuinstall" type="button">Install app</button>
         <button id="signout" type="button">Sign out</button>
       </div>
       <div class="menu" id="alertmenu" hidden></div>
@@ -417,6 +439,33 @@
       <label>Text sources</label>
       <p class="hint" style="margin-top:0">Each source asks for what it needs (AO3 asks for a cookie). These live on the server, never in this browser.</p>
       <div id="sources"></div>
+    </div>
+    <h3 style="margin-top:30px">Pronunciations</h3>
+    <p class="sub">Words the voice says wrong. Left: the word as it appears. Right: how it should sound, spelled out (Qui-Gon → Kwai-Gon). Applies to every book.</p>
+    <div id="pronrows"></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn quiet" id="pronadd" type="button">＋ Add a word</button>
+      <button class="btn" id="pronsave" type="button">Save</button>
+    </div>
+    <div id="pronmsg" class="sub" style="margin-top:8px"></div>
+    <h3 style="margin-top:30px">Connected accounts</h3>
+    <p class="sub">Sign in with Google, GitHub, Microsoft or SimpleLogin instead of a password. Link one here while you are signed in.</p>
+    <div id="oauthrows"></div>
+    <h3 style="margin-top:30px">Devices &amp; sessions</h3>
+    <p class="sub">Everywhere this account is signed in. Log out a device you do not recognise.</p>
+    <div id="sessionrows"></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn quiet" id="sessothers" type="button">Log out other devices</button>
+      <button class="btn" id="sessall" type="button">Log out everywhere</button>
+    </div>
+    <div id="sessmsg" class="sub" style="margin-top:8px"></div>
+    <div id="adminwrap" style="display:none">
+      <h3 style="margin-top:30px">All sessions (admin)</h3>
+      <p class="sub">Every device signed in to this server. You can boot any of them.</p>
+      <div id="adminsessions"></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn" id="sessallusers" type="button">Sign out everyone</button>
+      </div>
     </div>
   </section>
 
@@ -638,6 +687,7 @@ function needUser() { if (!USER) { fail('set your name first (top right)'); thro
 function show(v) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+  if (v === 'set') { loadPron(); loadLinked(); loadSessions(); }
 }
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.dataset.v));
 
@@ -814,6 +864,186 @@ $('#save').onclick = async () => {
     idle('Saved.');
   } catch (e) { fail(e); }
 };
+
+// --- pronunciation fixes: word -> how it should sound, applied on the server -
+// Left is the word as it appears; right is the respelling the engine will read.
+// Test speaks the respelling in the default voice, so you hear it before saving.
+let PRON = [];
+function pronRow(frm, to) {
+  const row = document.createElement('div');
+  row.className = 'prow'; row.style.cssText = 'display:flex;gap:6px;margin-top:6px';
+  const a = document.createElement('input'); a.value = frm || ''; a.placeholder = 'word in the text'; a.style.flex = '1 1 0';
+  const b = document.createElement('input'); b.value = to || ''; b.placeholder = 'how it should sound'; b.style.flex = '1.4 1 0';
+  const t = document.createElement('button'); t.type = 'button'; t.className = 'btn quiet'; t.textContent = 'Test';
+  t.onclick = () => { collectPron(); testPron(b.value || a.value); };
+  const x = document.createElement('button'); x.type = 'button'; x.className = 'btn quiet'; x.textContent = '\u2715';
+  x.onclick = () => { row.remove(); collectPron(); };
+  row.append(a, b, t, x);
+  $('#pronrows').append(row);
+}
+function collectPron() {
+  PRON = [...$('#pronrows').querySelectorAll('.prow')].map(r => {
+    const i = r.querySelectorAll('input');
+    return { from: i[0].value.trim(), to: i[1].value.trim() };
+  }).filter(r => r.from && r.to);
+}
+function showPron(rules) {
+  $('#pronrows').innerHTML = '';
+  (rules && rules.length ? rules : [{ from: '', to: '' }]).forEach(r => pronRow(r.from, r.to));
+}
+async function loadPron() {
+  try { const d = await api('/pron'); PRON = d.rules || []; showPron(PRON); }
+  catch (e) { showPron([]); }
+}
+async function savePron() {
+  collectPron();
+  try {
+    const d = await jpost('/pron', { rules: PRON });
+    PRON = d.rules || PRON; showPron(PRON);
+    $('#pronmsg').textContent = PRON.length + ' word(s) set. A chapter re-renders the next time it is converted.';
+  } catch (e) { fail(e); }
+}
+async function testPron(text) {
+  text = (text || '').trim();
+  if (!text) { fail('type how it should sound first'); return; }
+  const cid = $('#dconn').value, v = $('#voice').value;
+  if (!v) { fail('pick a default voice first'); return; }
+  busy('Hearing "' + text + '"...');
+  try {
+    const r = await api('/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, connection_id: cid, voice: v, speed: 1 }) });
+    const blob = await r.blob();
+    const au = $('#audio'); au.src = URL.createObjectURL(blob); await au.play();
+    idle('That is "' + text + '" in the default voice.');
+  } catch (e) { fail(e); }
+}
+$('#pronadd').onclick = () => pronRow('', '');
+$('#pronsave').onclick = savePron;
+// --- connected accounts: link a social login to this account ---------------
+// The link door, not the login door: you are already signed in, and the
+// provider gets attached to the account you are in.
+async function loadLinked() {
+  const box = $('#oauthrows'); if (!box) return;
+  box.innerHTML = '';
+  let provs = [];
+  try { const d = await api('/auth/providers'); provs = d.providers || []; } catch (_) {}
+  let linked = [];
+  try { const d = await api('/auth/linked'); linked = d.linked || []; } catch (_) {}
+  const social = provs.filter(p => p.kind !== 'local' && p.start);
+  if (!social.length) {
+    const p = document.createElement('p'); p.className = 'small';
+    p.textContent = 'No social sign-in is set up on this server.';
+    box.append(p); return;
+  }
+  social.forEach(p => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;margin-top:8px';
+    const name = document.createElement('div'); name.style.flex = '1 1 0'; name.textContent = p.label;
+    const on = linked.includes(p.id);
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'btn quiet';
+    b.textContent = on ? 'Connected' : 'Link ' + p.label;
+    b.disabled = !!on;
+    b.onclick = () => { location.href = p.start + '?link=1'; };
+    row.append(name, b); box.append(row);
+  });
+}
+// --- devices & sessions: see where you're signed in, end any of them -------
+// A session row is addressed by its public id, never by the cookie token, so
+// the list can show it and a revoke button can name it without leaking a secret.
+function _agoUnix(sec) {
+  if (!sec) return 'never';
+  const s = Math.round(Date.now() / 1000 - sec);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+async function loadSessions() {
+  const box = $('#sessionrows'); if (!box) return;
+  box.innerHTML = '';
+  let list = [], data = {};
+  try { data = await api('/sessions') || {}; list = data.sessions || []; } catch (_) { data = {}; list = []; }
+  if (!list.length) {
+    const p = document.createElement('p'); p.className = 'small';
+    p.textContent = 'No active sessions.'; box.append(p);
+  }
+  list.forEach(s => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;margin-top:8px';
+    const name = document.createElement('div'); name.style.flex = '1 1 0';
+    const t1 = document.createElement('div'); t1.textContent = s.label || 'Device';
+    const t2 = document.createElement('div'); t2.className = 'small';
+    t2.textContent = 'last used ' + _agoUnix(s.last_seen)
+      + (s.provider ? ' · signed in with ' + s.provider : '') + (s.ip ? ' · ' + s.ip : '');
+    name.append(t1, t2);
+    row.append(name);
+    if (s.current) {
+      const tag = document.createElement('span'); tag.className = 'small';
+      tag.textContent = 'this device';
+      row.append(tag);
+    } else {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'btn quiet';
+      b.textContent = 'Log out';
+      b.onclick = async () => {
+        try { await jpost('/sessions/revoke', { id: s.id });
+              $('#sessmsg').textContent = 'Signed that device out.'; loadSessions(); }
+        catch (e) { $('#sessmsg').textContent = e.message || 'could not sign it out'; }
+      };
+      row.append(b);
+    }
+    box.append(row);
+  });
+  // admin: every session on the server, bootable from here
+  const wrap = $('#adminwrap'), abox = $('#adminsessions');
+  if (wrap && abox) {
+    abox.innerHTML = '';
+    const all = data.all || [];
+    wrap.style.display = data.admin ? '' : 'none';
+    if (data.admin) all.forEach(s => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;margin-top:8px';
+      const name = document.createElement('div'); name.style.flex = '1 1 0';
+      const t1 = document.createElement('div'); t1.textContent = (s.user || 'unknown') + ' · ' + (s.label || 'Device');
+      const t2 = document.createElement('div'); t2.className = 'small';
+      t2.textContent = 'last used ' + _agoUnix(s.last_seen) + (s.ip ? ' · ' + s.ip : '');
+      name.append(t1, t2);
+      row.append(name);
+      if (s.current) {
+        const tag = document.createElement('span'); tag.className = 'small'; tag.textContent = 'this device';
+        row.append(tag);
+      } else {
+        const b = document.createElement('button'); b.type = 'button'; b.className = 'btn quiet';
+        b.textContent = 'Boot';
+        b.onclick = async () => {
+          try { await jpost('/sessions/revoke', { id: s.id });
+                $('#sessmsg').textContent = 'Booted ' + (s.user || 'that session') + '.'; loadSessions(); }
+          catch (e) { $('#sessmsg').textContent = e.message || 'could not boot it'; }
+        };
+        row.append(b);
+      }
+      abox.append(row);
+    });
+  }
+}
+async function revokeSessions(others, allUsers) {
+  try {
+    const body = { others: others }; if (allUsers) body.all_users = true;
+    const d = await jpost('/sessions/revoke_all', body);
+    $('#sessmsg').textContent = allUsers
+      ? ('Booted ' + (d.revoked || 0) + ' session(s) across the server.')
+      : (others ? ('Signed out ' + (d.revoked || 0) + ' other device(s).')
+                : 'Signed out of every device. Please sign in again.');
+    if (!others && !allUsers) { setTimeout(() => location.reload(), 900); return; }
+    loadSessions();
+  } catch (e) { $('#sessmsg').textContent = e.message || 'could not sign out'; }
+}
+if ($('#sessothers')) $('#sessothers').onclick = () => revokeSessions(true);
+if ($('#sessall')) $('#sessall').onclick = () => {
+  if (confirm('Log out of every device, including this one?')) revokeSessions(false);
+};
+if ($('#sessallusers')) $('#sessallusers').onclick = () => {
+  if (confirm('Boot every session on the server, except this one?')) revokeSessions(true, true);
+};
 // --- the door: the whole app is behind a session ---------------------------
 let AUTH = { user: '', admin: false, hasAccounts: false, registrationOpen: true,
              providers: [], mode: 'sign' };
@@ -823,6 +1053,8 @@ function authMsg(t) { $('#autherr').textContent = t || ''; }
 function renderAuth() {
   const create = AUTH.mode === 'create';
   const closed = !create && AUTH.hasAccounts && !AUTH.registrationOpen;
+  $('#lockuser').closest('.field').hidden = false;   // claim mode hides it
+  $('#lockpass').disabled = false; $('#lockgo').disabled = false;
   $('#locktitle').textContent = create ? 'set up fireside' : 'sign in';
   $('#locksub').textContent = create
     ? (AUTH.hasAccounts
@@ -850,6 +1082,7 @@ function renderAuth() {
 async function authSubmit() {
   const u = $('#lockuser').value.trim(), p = $('#lockpass').value;
   const create = AUTH.mode === 'create';
+  if (AUTH.mode === 'claim') return claimSubmit();
   if (!u) return authMsg('enter a username');
   if (create) {
     // same rules the server enforces, said before the round trip
@@ -897,9 +1130,80 @@ async function requireSession() {
   AUTH.mode = AUTH.hasAccounts ? 'sign' : 'create';
   document.body.classList.add('locked');
   $('#lock').hidden = false;        // reveal the door; body.locked hid the app
+  let claim = '';
+  try { claim = new URLSearchParams(location.search).get('claim') || ''; } catch (_) {}
+  if (claim) {                      // a social login collided; prove the account
+    AUTH.mode = 'claim'; AUTH.claim = claim;
+    await renderClaim();
+    return false;
+  }
   renderAuth();
   $('#lockuser').focus();
   return false;
+}
+
+// A social login whose verified email already belongs to an account does not
+// open that account - it has to be proven. Prove it the way that account
+// already signs in: its password, or one of its own providers. Anything
+// else, and we attach nothing.
+async function renderClaim() {
+  $('#locktitle').textContent = 'confirm this account';
+  $('#lockuser').closest('.field').hidden = true;
+  $('#lockconfirm').hidden = true;
+  $('#lockpass').value = '';
+  $('#lockpass').setAttribute('autocomplete', 'current-password');
+  $('#lockgo').textContent = 'Confirm and link';
+  $('#locktoggle').hidden = true;
+  authMsg('');
+  const provs = $('#lockproviders'); provs.innerHTML = '';
+  try {
+    const ce = new URLSearchParams(location.search).get('claimerr');
+    if (ce) authMsg(ce);
+  } catch (_) {}
+  try {
+    const d = await api('/auth/claim?token=' + encodeURIComponent(AUTH.claim));
+    AUTH.claimInfo = d;
+    const label = d.provider_label || d.provider;
+    $('#locksub').textContent = 'An account already uses ' + (d.email || 'this email') +
+      '. Sign in to that account to link your ' + label + ' login to it.';
+    const pfield = $('#lockpass'), go = $('#lockgo');
+    pfield.closest('.field').hidden = !d.has_password;
+    go.hidden = !d.has_password;
+    pfield.disabled = !d.has_password;
+    go.disabled = !d.has_password;
+    (d.methods || []).forEach(p => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'btn ghost';
+      b.textContent = 'Continue with ' + p.label;
+      b.onclick = () => { location.href = p.start + '?claim=' + encodeURIComponent(AUTH.claim); };
+      provs.append(b);
+    });
+    if (d.has_password) { pfield.focus(); }
+    else if (!(d.methods || []).length) {
+      $('#locksub').textContent = 'This sign-in has expired. Go back and start again.';
+    }
+  } catch (e) {
+    $('#locksub').textContent = 'This sign-in has expired. Go back and start again.';
+    authMsg(e.message || '');
+    $('#lockpass').closest('.field').hidden = true;
+    $('#lockgo').hidden = true;
+  }
+}
+
+async function claimSubmit() {
+  const p = $('#lockpass').value;
+  if (!p) return authMsg('enter the password for that account');
+  authMsg(''); $('#lockgo').disabled = true;
+  try {
+    await api('/auth/claim/confirm', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ claim: AUTH.claim, password: p }) });
+    history.replaceState({}, '', location.pathname);   // drop ?claim= on reload
+    location.reload();
+  } catch (e) {
+    authMsg(e.message || 'that password did not match the existing account');
+    $('#lockgo').disabled = false;
+  }
 }
 
 $('#lockform').onsubmit = (e) => { e.preventDefault(); authSubmit(); };
@@ -1532,7 +1836,9 @@ async function playSelection(bk, idx, autoplay = true) {
     const e = await fetchChapter(bk.id, idx, rd.audio_ref, rd.audio_bytes, rd);
     const a = $('#audio'); a.src = e.url;
     player = { id: bk.id, title: bk.title, chapters: bk.chapters };
+    player.cover = bk.cover || '';
     pcur = idx;
+    setNowPlaying();
     lastName = player.id; try { localStorage.setItem(LKEY, lastName); } catch (_) {}
     if (viewed) { state[idx] = 'ready'; cur = idx; renderPlay(); await loadText(idx); }
     if (autoplay) { await jpost('/claim', { user: USER, book: player.id, device: DEVICE }); a.play().catch(() => {}); }
@@ -1587,9 +1893,12 @@ $('#tog').onclick = () => { if (!player.id || pcur < 0) return; $a.paused ? $a.p
 $('#back30').onclick = () => { $a.currentTime = Math.max(0, ($a.currentTime || 0) - 15); };
 const SPD = [1.0, 1.1, 1.25, 1.5]; let si = 1;
 $('#speed').onclick = () => { si = (si + 1) % SPD.length; $a.playbackRate = SPD[si]; $('#speed').textContent = SPD[si] + '×'; };
-$a.addEventListener('play', () => { syncTog(); listenStart(); });
-$a.addEventListener('pause', () => { syncTog(); listenStop(); });
+$a.addEventListener('play', () => { syncTog(); listenStart();
+  if ('mediaSession' in navigator) { try { navigator.mediaSession.playbackState = 'playing'; } catch (_) {} } });
+$a.addEventListener('pause', () => { syncTog(); listenStop();
+  if ('mediaSession' in navigator) { try { navigator.mediaSession.playbackState = 'paused'; } catch (_) {} } });
 $a.addEventListener('timeupdate', () => {
+  setPositionState();
   const d = $a.duration || 0; $('#progfill').style.width = d ? (100 * $a.currentTime / d) + '%' : '0';
   $('#tcur').textContent = mmss($a.currentTime);
   $('#tleft').textContent = '−' + mmss(Math.max(0, d - $a.currentTime));
@@ -1894,7 +2203,89 @@ window.addEventListener('error', e => {
   } catch (_) {}
 });
 
+
+// --- PWA: installable, lockscreen controls, and background playback ----------
+// Chrome only registers a service worker, and only offers Install, on a secure
+// origin: https, or localhost. On a plain-http LAN address the page still works,
+// it just cannot be installed (see the README's PWA note).
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+let INSTALL = null;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault(); INSTALL = e;
+  const b = $('#menuinstall'); if (b) b.hidden = false;
+});
+window.addEventListener('appinstalled', () => {
+  INSTALL = null; const b = $('#menuinstall'); if (b) b.hidden = true;
+});
+// The button is always offered, because the browsers that need the most help
+// installing (iOS Safari, Firefox) never fire beforeinstallprompt. When Chrome
+// has a prompt ready we use it; otherwise we name the two taps the person's
+// own browser wants.
+function installHint() {
+  const ua = navigator.userAgent || '';
+  const iOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (iOS) return 'Tap Share (the square with the up arrow), then Add to Home Screen.';
+  if (/Firefox\//.test(ua)) return 'Open the browser menu, then Add to home screen.';
+  return 'Open the browser menu, then Install app or Add to Home screen.';
+}
+{
+  const b = $('#menuinstall');
+  const installed = () => (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+  if (b && installed()) b.hidden = true;
+  if (b) b.onclick = async () => {
+    if (INSTALL) {
+      INSTALL.prompt(); try { await INSTALL.userChoice; } catch (_) {}
+      INSTALL = null; b.hidden = true; return;
+    }
+    toast('ok', 'Add fireside to your home screen. ' + installHint());
+  };
+}
+// The system player (lockscreen, notification shade, headset buttons) reads this.
+function nowPlayingArt() {
+  const art = [];
+  if (player.cover) art.push({ src: coverURL(player.id, player.cover), sizes: '512x512', type: 'image/jpeg' });
+  art.push({ src: '/icon-192.png', sizes: '192x192', type: 'image/png' });
+  art.push({ src: '/icon-512.png', sizes: '512x512', type: 'image/png' });
+  return art;
+}
+function setNowPlaying() {
+  if (!('mediaSession' in navigator) || !player.id) return;
+  const c = player.chapters.find(x => x.idx === pcur) || {};
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: c.title || ('Chapter ' + (pcur + 1)),
+      artist: player.title || 'fireside',
+      album: 'fireside',
+      artwork: nowPlayingArt()
+    });
+  } catch (_) {}
+  try { navigator.mediaSession.playbackState = $a.paused ? 'paused' : 'playing'; } catch (_) {}
+}
+function setPositionState() {
+  if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
+  const d = $a.duration || 0; if (!d || !isFinite(d)) return;
+  try { navigator.mediaSession.setPositionState({ duration: d,
+    position: Math.min(d, $a.currentTime || 0), playbackRate: $a.playbackRate || 1 }); } catch (_) {}
+}
+if ('mediaSession' in navigator) {
+  const ms = navigator.mediaSession;
+  const act = (name, fn) => { try { ms.setActionHandler(name, fn); } catch (_) {} };
+  act('play', () => { $a.play().catch(() => {}); });
+  act('pause', () => { $a.pause(); });
+  act('seekbackward', d => { $a.currentTime = Math.max(0, ($a.currentTime || 0) - ((d && d.seekOffset) || 15)); });
+  act('seekforward', d => { const x = ($a.currentTime || 0) + ((d && d.seekOffset) || 15);
+    const dur = $a.duration || 0; $a.currentTime = dur ? Math.min(dur, x) : x; });
+  act('seekto', d => { if (d && d.seekTime != null) $a.currentTime = d.seekTime; });
+  act('previoustrack', () => chapterStep(-1));
+  act('nexttrack', () => chapterStep(1));
+}
+
 // --- boot ------------------------------------------------------------------
+
 window.addEventListener('load', async () => {
   const ok = await requireSession();
   if (!ok) return;
@@ -1909,6 +2300,13 @@ window.addEventListener('load', async () => {
   renderQueue();
   applyVolume();
   syncTog();
+  try {
+    const lp = new URLSearchParams(location.search);
+    if (lp.get('linked')) {
+      idle('Linked with ' + lp.get('linked') + '. You can sign in that way from now on.');
+      history.replaceState({}, '', location.pathname);
+    }
+  } catch (_) {}
 });
 </script>
 </body>
