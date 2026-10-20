@@ -101,6 +101,18 @@ class TestConnectionString(unittest.TestCase):
         ref = "ab" + "c" * 62
         self.assertEqual(b._name(ref), "objects/ab/" + ref)
 
+    def test_canonicalized_resource_includes_sorted_query(self):
+        # The bug this guards: without the query the container-create signature
+        # mismatches and Azure returns 403 AuthenticationFailed.
+        res = AzureBlobBackend._canonicalized_resource(
+            "acct", "/ctr", query="restype=container&timeout=30")
+        self.assertEqual(res, "/acct/ctr\nrestype:container\ntimeout:30")
+
+    def test_canonicalized_resource_without_query_is_just_path(self):
+        self.assertEqual(
+            AzureBlobBackend._canonicalized_resource("acct", "/ctr/blob", ""),
+            "/acct/ctr/blob")
+
 
 class TestContract(unittest.TestCase):
     def setUp(self):
