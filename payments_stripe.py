@@ -5,8 +5,9 @@ about it: the deployment registers it by import path
 (`FIRESIDE_PAYMENT_PROVIDER=payments_stripe`) and the key is read from the
 environment at that moment, never from this file and never from the repository.
 
-It speaks the Stripe REST API over `requests` (already a host dependency), so no
-extra package is needed. The honesty rule is host/payments.py's: `charge` returns
+It speaks the Stripe REST API over the standard library (urllib), so it adds no
+package to the tree: a clean CI checkout with nothing installed still imports it.
+The honesty rule is host/payments.py's: `charge` returns
 ok=True only when Stripe says the charge actually settled, and `confirm` returns a
 subscription only when Stripe says the checkout is complete and paid. Anything
 else (requires_action, processing, a declined card, an abandoned session) is not
@@ -19,13 +20,59 @@ Stripe's canned test card. The recurring tier uses Stripe-hosted Checkout, so th
 client never sees a card at all - it just opens the URL.
 """
 
+import base64
+import json
 import os
-
-import requests
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from host.payments import Checkout, Plan, Receipt, Subscription
 
 STRIPE_API = os.environ.get("STRIPE_API_BASE", "https://api.stripe.com").rstrip("/")
+
+
+def _basic_auth(key):
+    # Stripe uses HTTP basic auth with the secret key as the username.
+    return "Basic " + base64.b64encode((key + ":").encode()).decode()
+
+
+class _Response:
+    """The slice of a `requests` response the provider reads: status + .json()."""
+
+    def __init__(self, status_code, body):
+        self.status_code = status_code
+        self._body = body
+
+    def json(self):
+        return json.loads(self._body or "{}")
+
+
+def _http_post(url, data=None, auth=None, timeout=None):
+    body = urllib.parse.urlencode(data or {}, doseq=True).encode()
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    if auth:
+        req.add_header("Authorization", _basic_auth(auth[0]))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout or 20) as r:
+            return _Response(getattr(r, "status", 200), r.read().decode())
+    except urllib.error.HTTPError as e:
+        # Stripe error bodies (card declined, etc.) arrive as HTTP 4xx with JSON.
+        return _Response(e.code, e.read().decode())
+
+
+def _http_get(url, params=None, auth=None, timeout=None):
+    if params:
+        url = url + "?" + urllib.parse.urlencode(params, doseq=True)
+    req = urllib.request.Request(url, method="GET")
+    if auth:
+        req.add_header("Authorization", _basic_auth(auth[0]))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout or 20) as r:
+            return _Response(getattr(r, "status", 200), r.read().decode())
+    except urllib.error.HTTPError as e:
+        return _Response(e.code, e.read().decode())
 
 # The plans this provider can sell. The provider is the sole authority on price.
 # The platform tier is the recurring one; character capacity is not a plan - it is
@@ -46,7 +93,7 @@ class StripeProvider:
         self.key = secret_key
         self.api_base = (api_base or STRIPE_API).rstrip("/")
         self.timeout = timeout
-        self._post = post or requests.post
+        self._post = post or _http_post
         self._plans = list(plans) if plans is not None else list(DEFAULT_PLANS)
 
     # -- helpers -------------------------------------------------------------
@@ -60,8 +107,8 @@ class StripeProvider:
         if callable(fn):
             return fn(self.api_base + path, params=params, auth=self._auth(),
                       timeout=self.timeout)
-        return requests.get(self.api_base + path, params=params,
-                            auth=self._auth(), timeout=self.timeout)
+        return _http_get(self.api_base + path, params=params,
+                         auth=self._auth(), timeout=self.timeout)
 
     def live(self):
         return self.key.startswith("sk_live_")
@@ -112,7 +159,7 @@ class StripeProvider:
         try:
             r = self._post(self.api_base + "/v1/payment_intents", data=data,
                            auth=self._auth(), timeout=self.timeout)
-        except requests.RequestException as e:
+        except (urllib.error.URLError, OSError) as e:
             return Receipt(False, "", "stripe unreachable: %s" % e)
         try:
             j = r.json()
@@ -170,7 +217,7 @@ class StripeProvider:
         try:
             r = self._post(self.api_base + "/v1/checkout/sessions", data=data,
                            auth=self._auth(), timeout=self.timeout)
-        except requests.RequestException as e:
+        except (urllib.error.URLError, OSError) as e:
             return Checkout(False, detail="stripe unreachable: %s" % e)
         try:
             j = r.json()
