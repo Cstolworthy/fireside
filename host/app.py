@@ -37,7 +37,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
-from host import accounting, auth, connections, credentials, db, jobs, library, playback, pron, stats
+from host import accounting, auth, connections, credentials, db, jobs, library, payments, playback, pron, stats
 from sources._fetch import fetch as _fetch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -527,7 +527,7 @@ class App:
         sale = accounting.sale_connection_matches(self.sale_connection, provider, voice, model)
         res_id = None
         if sale:
-            quote = speech.quote({"chars_est": est, "cred": cred})
+            quote = speech.quote({"chars_est": est, "cred": cred, "sale": True})
             if not getattr(quote, "eligible", True):
                 return 402, {"error": "not eligible",
                              "reason": getattr(quote, "refusal_reason", "")}
@@ -551,13 +551,103 @@ class App:
                                  model, speed, cred=cred, opts=opts, only=only,
                                  job_id=jid, voice_label=voice_label)
                 if sale and res_id:
-                    rep = speech.report({"chars_actual": est, "cred": cred, "job_id": jid})
+                    # The plugin reports the real count. A failed run leaves the
+                    # job's done_chars short of the estimate, so a partial render
+                    # is charged only for what was actually voiced.
+                    jr = jobs.job(c, jid)
+                    done = (jr or {}).get("done_chars")
+                    rep = speech.report({"chars_actual": (done if done else est),
+                                         "cred": cred, "job_id": jid, "sale": True})
                     accounting.settle(c, res_id, rep)
             finally:
                 c.close()
 
         threading.Thread(target=_work, daemon=True).start()
         return 200, {"job_id": jid, "total": len(todo)}
+
+    # ---- credits (resold speech capacity, counted in characters) -------------
+    # The sale connection's plugin is the authority on the rate and on how many
+    # characters a payment buys; the host only holds the per-user character
+    # balance and moves it. A metered run holds its estimate, the plugin reports
+    # the real count, the host settles. Nothing here knows what a character costs.
+
+    def _sale_connection(self, uid):
+        """(provider, speech plugin, stored cred) for the designated sale
+        connection. Pricing reads the connection's STORED data, never a user's
+        override: a buyer must not be able to edit the rate they are charged."""
+        spec = self.sale_connection or {}
+        c = None
+        cid = spec.get("connection_id")
+        if cid:
+            c = connections.get(self.conn, cid)
+        elif spec.get("provider"):
+            for cand in connections.list_for(self.conn, uid):
+                if cand["provider"] == spec["provider"]:
+                    c = cand
+                    break
+        if not c:
+            return None, None, None
+        p = self.host.speech.get(c["provider"])
+        if p is None:
+            return None, None, None
+        return c["provider"], p.obj, dict(c["data"])
+
+    def credits(self, q, body):
+        """The signed-in user's character balance, plus what a sale connection
+        would charge. Read-only: buying happens at /credits/purchase."""
+        uid = self._uid(q, body)
+        out = {
+            "balance": accounting.balance(self.conn, uid),
+            "reserved": accounting.reserved_total(self.conn, uid),
+            "available": accounting.available(self.conn, uid),
+            "unit": "chars",
+            "payments_configured": payments.configured(),
+            "sale": None,
+        }
+        provider, speech, cred = self._sale_connection(uid)
+        if speech is not None:
+            rate_fn = getattr(speech, "sale_rate_per_1m", None)
+            bundles_fn = getattr(speech, "bundles", None)
+            out["sale"] = {
+                "provider": provider,
+                "rate_per_1m_chars": rate_fn(cred) if callable(rate_fn) else None,
+                "currency": "USD",
+                "bundles": bundles_fn(cred) if callable(bundles_fn) else [],
+            }
+        return 200, out
+
+    def credits_purchase(self, q, body):
+        """Buy character capacity. Held until a payment provider is configured.
+        The plugin sets how many characters a dollar amount buys (rounded down),
+        and the host credits exactly that many, never more."""
+        uid = self._uid(q, body)
+        if not uid:
+            return 401, {"error": "auth required"}
+        provider, speech, cred = self._sale_connection(uid)
+        if speech is None:
+            return 400, {"error": "no sale connection configured"}
+        try:
+            usd = float((body or {}).get("usd") or 0)
+        except (TypeError, ValueError):
+            return 400, {"error": "bad amount"}
+        if usd <= 0:
+            return 400, {"error": "amount must be greater than zero"}
+        pp = payments.get()
+        if pp is None:
+            return 503, {"error": "payments not configured",
+                         "detail": "purchases are held until a payment provider lands"}
+        to_chars = getattr(speech, "chars_for_payment", None)
+        chars = int(to_chars(usd, cred)) if callable(to_chars) else 0
+        if chars <= 0:
+            return 400, {"error": "amount too small to buy characters"}
+        receipt = pp.charge(usd, {"user": uid, "provider": provider, "chars": chars})
+        if not receipt.ok:
+            return 402, {"error": "payment refused", "detail": receipt.detail}
+        total = accounting.topup(self.conn, uid, chars, currency="chars",
+                                 note="purchase %.2f USD -> %d chars (%s)"
+                                      % (usd, chars, receipt.reference))
+        return 200, {"ok": True, "chars": chars, "balance": total,
+                     "reference": receipt.reference}
 
     def job(self, q, body):
         j = jobs.job(self.conn, q.get("id", ""))
@@ -934,7 +1024,7 @@ GET_ROUTES = {
     "/connections": "connections_list", "/source-creds": "source_creds",
     "/cover": "cover_get",
     "/auth/providers": "auth_providers", "/me": "me", "/auth/policy": "auth_policy",
-    "/auth/users": "auth_users",
+    "/auth/users": "auth_users", "/credits": "credits",
 }
 POST_ROUTES = {
     "/import": "import_book", "/render": "render", "/voices": "voices",
@@ -947,7 +1037,7 @@ POST_ROUTES = {
     "/connections": "connection_save", "/connections/delete": "connection_delete",
     "/source-creds": "source_cred_save", "/source-creds/delete": "source_cred_delete",
     "/connections/override": "connection_override", "/prefs": "prefs_set",
-    "/pron": "pron_set",
+    "/pron": "pron_set", "/credits/purchase": "credits_purchase",
 }
 
 # reachable without a session even when auth is required: the page, its health,

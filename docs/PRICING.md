@@ -55,3 +55,27 @@ fee, which we do not hide behind a fake "credit" abstraction.
 - Local/open-source engines. If a self-hosted TTS engine is wired in as a
   provider, its rate is 0 and it can be the sale connection at 0 + fee; that is
   the real supply lever against Azure's commitment-tier wall.
+
+## Mechanics: the character ledger (2026-10-20)
+
+The unit of the credit ledger is the character, and the plugin is the authority
+on it, so the host stays dumb:
+
+- The sale connection's plugin reports `sale_rate_per_1m` = (provider rate +
+  per-1M-chars infra fee) * markup. Both the infra fee and the markup are fields
+  on the plugin's own config screen; the host never computes a price.
+- A payment of `payment` USD buys `characters = floor(payment / rate * 1_000_000)`
+  and the balance becomes characters. The rounding is floored, so the fraction
+  the money cannot fund lands on us, not the buyer.
+- A metered run holds its estimated characters before it starts (the host holds
+  `Quote.price` in `Quote.currency`), the plugin reports the real count after,
+  and a run the balance cannot cover is refused up front. An `unknown` report
+  stays held and visibly pending, never guessed.
+
+Payments sit behind `host/payments.py`: no provider ships, so the purchase route
+refuses ("purchases are held until a payment provider lands") until an operator
+registers one. `GET /credits` is read-only (balance, rate, bundles);
+`POST /credits/purchase` is the only route that turns a payment into characters.
+
+Still to build: the platform+storage monthly tier (a recurring subscription
+separate from character capacity), and the Stripe provider once it is registered.
