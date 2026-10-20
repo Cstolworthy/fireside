@@ -47,7 +47,7 @@ HOST_VERSION = "2.0"
 
 
 class App:
-    def __init__(self, plugins_root=None, db_path=None, storage_id="local",
+    def __init__(self, plugins_root=None, db_path=None, storage_id=None,
                  sale_connection=None, rate_limiter=None, hosted=False,
                  require_auth=False):
         self.host = Host(plugins_root)
@@ -55,7 +55,17 @@ class App:
         self.conn = db.connect(db_path)
         library.backfill_renditions(self.conn)   # a book voiced before renditions still lists its voice
         jobs.sweep_stale(self.conn)              # a fresh boot has no live renderer
-        self.storage_id = storage_id
+        # Backend selection: an explicit id, else $FIRESIDE_STORAGE, else local.
+        # An unknown or unconfigured backend falls back to local so the box still
+        # comes up; local is the reference and the default everywhere.
+        want = storage_id or os.environ.get("FIRESIDE_STORAGE") or "local"
+        if want not in self.host.storage:
+            want = "local"
+        elif want != "local":
+            obj = self.host.storage[want].obj
+            if hasattr(obj, "configured") and not obj.configured:
+                want = "local"
+        self.storage_id = want
         self.sale_connection = sale_connection
         self.rate_limiter = rate_limiter
         self.hosted = hosted
@@ -1503,6 +1513,8 @@ if __name__ == "__main__":
     ap.add_argument("--host", default="127.0.0.1",
                     help="127.0.0.1 for this machine; 0.0.0.0 to share on the LAN")
     ap.add_argument("--plugins", default=None)
+    ap.add_argument("--storage", default=None,
+                    help="storage backend id (default $FIRESIDE_STORAGE, else local)")
     ap.add_argument("--data", default=None,
                     help="data dir for the DB and blobs (default: $FIRESIDE_DATA)")
     ap.add_argument("--hosted", action="store_true")
@@ -1520,8 +1532,9 @@ if __name__ == "__main__":
         require = True
     if _truthy(os.environ.get("FIRESIDE_OPEN")):
         require = False
-    app, httpd = serve(App(plugins_root=args.plugins, hosted=args.hosted,
-                           require_auth=require), args.port, args.host)
+    app, httpd = serve(App(plugins_root=args.plugins, storage_id=args.storage,
+                           hosted=args.hosted, require_auth=require),
+                       args.port, args.host)
     print("fireside v2 host on http://%s:%d" % (args.host, httpd.server_address[1]))
     try:
         httpd.serve_forever()

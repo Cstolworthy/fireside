@@ -65,3 +65,18 @@ map is a hint, never a permission.
 Backends are discovered the same way readers and speech engines are: a directory
 with a `plugin.json`, discovered by the host and ordered. `local` ships in the
 core and is always available as the fallback.
+
+### Selecting a backend
+
+The default is `local`, so a plain checkout stores under `FIRESIDE_DATA` and
+needs nothing else. To move blobs to Azure, set:
+
+    FIRESIDE_STORAGE=azure
+    FIRESIDE_AZURE_STORAGE_CONN=DefaultEndpointsProtocol=https;AccountName=..;AccountKey=..;EndpointSuffix=core.windows.net
+    FIRESIDE_AZURE_CONTAINER=fireside
+
+`FIRESIDE_AZURE_ACCOUNT` + `FIRESIDE_AZURE_KEY`, or a container `FIRESIDE_AZURE_SAS`,
+are accepted instead of the connection string. A named backend that is missing or
+not configured falls back to `local` at startup rather than failing the boot, so
+the same image runs on a laptop and on Azure. `/health` reports the active
+backend as `storage_backend`.
