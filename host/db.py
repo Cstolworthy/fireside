@@ -172,6 +172,30 @@ def db_url():
     return "sqlite://" + conn
 
 
+def mysql_ssl_kwargs():
+    """Extra pymysql.connect kwargs that put a MySQL connection on TLS.
+
+    Empty unless FIRESIDE_DB_SSL is set, so a LAN self-host that speaks to a
+    plaintext MySQL is unchanged. A server with `require_secure_transport=ON`
+    (Azure Database for MySQL) refuses a plaintext connection outright, and
+    pymysql only negotiates TLS when handed an SSL context - so a hosted
+    deployment opts in here.
+
+    Values: `1`/`verify`/`require` verify the server certificate against the
+    system trust store; `noverify`/`insecure`/`encrypt` still encrypt the
+    channel but skip verification.
+    """
+    mode = _env("FIRESIDE_DB_SSL").lower()
+    if not mode:
+        return {}
+    import ssl
+    ctx = ssl.create_default_context()
+    if mode in ("noverify", "insecure", "encrypt"):
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return {"ssl": ctx}
+
+
 def backend_name(url=None):
     if url is None:
         return db_type()
@@ -324,6 +348,7 @@ class MySQLConnection:
             charset="utf8mb4",
             autocommit=True,
             cursorclass=pymysql.cursors.DictCursor,
+            **mysql_ssl_kwargs(),
         )
         boot = pymysql.connect(**base)          # the database may not exist yet
         try:
