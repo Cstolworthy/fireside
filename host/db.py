@@ -209,6 +209,11 @@ _ADDED_COLUMNS = [
     ("books", "description", "TEXT"),
     ("user_prefs", "pron", "TEXT"),
     ("renditions", "pron", "VARCHAR(16) DEFAULT ''"),
+    # device tracking on a session: a public id to name it, and what it is.
+    ("sessions", "sid", "VARCHAR(32) DEFAULT ''"),
+    ("sessions", "user_agent", "TEXT"),
+    ("sessions", "ip", "VARCHAR(64) DEFAULT ''"),
+    ("sessions", "last_seen", "BIGINT DEFAULT 0"),
 ]
 
 

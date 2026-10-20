@@ -451,6 +451,22 @@
     <h3 style="margin-top:30px">Connected accounts</h3>
     <p class="sub">Sign in with Google, GitHub, Microsoft or SimpleLogin instead of a password. Link one here while you are signed in.</p>
     <div id="oauthrows"></div>
+    <h3 style="margin-top:30px">Devices &amp; sessions</h3>
+    <p class="sub">Everywhere this account is signed in. Log out a device you do not recognise.</p>
+    <div id="sessionrows"></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn quiet" id="sessothers" type="button">Log out other devices</button>
+      <button class="btn" id="sessall" type="button">Log out everywhere</button>
+    </div>
+    <div id="sessmsg" class="sub" style="margin-top:8px"></div>
+    <div id="adminwrap" style="display:none">
+      <h3 style="margin-top:30px">All sessions (admin)</h3>
+      <p class="sub">Every device signed in to this server. You can boot any of them.</p>
+      <div id="adminsessions"></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn" id="sessallusers" type="button">Sign out everyone</button>
+      </div>
+    </div>
   </section>
 
   <div class="err" id="err"></div>
@@ -671,7 +687,7 @@ function needUser() { if (!USER) { fail('set your name first (top right)'); thro
 function show(v) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
-  if (v === 'set') { loadPron(); loadLinked(); }
+  if (v === 'set') { loadPron(); loadLinked(); loadSessions(); }
 }
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.dataset.v));
 
@@ -931,6 +947,103 @@ async function loadLinked() {
     row.append(name, b); box.append(row);
   });
 }
+// --- devices & sessions: see where you're signed in, end any of them -------
+// A session row is addressed by its public id, never by the cookie token, so
+// the list can show it and a revoke button can name it without leaking a secret.
+function _agoUnix(sec) {
+  if (!sec) return 'never';
+  const s = Math.round(Date.now() / 1000 - sec);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+async function loadSessions() {
+  const box = $('#sessionrows'); if (!box) return;
+  box.innerHTML = '';
+  let list = [], data = {};
+  try { data = await api('/sessions') || {}; list = data.sessions || []; } catch (_) { data = {}; list = []; }
+  if (!list.length) {
+    const p = document.createElement('p'); p.className = 'small';
+    p.textContent = 'No active sessions.'; box.append(p);
+  }
+  list.forEach(s => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:10px;margin-top:8px';
+    const name = document.createElement('div'); name.style.flex = '1 1 0';
+    const t1 = document.createElement('div'); t1.textContent = s.label || 'Device';
+    const t2 = document.createElement('div'); t2.className = 'small';
+    t2.textContent = 'last used ' + _agoUnix(s.last_seen)
+      + (s.provider ? ' · signed in with ' + s.provider : '') + (s.ip ? ' · ' + s.ip : '');
+    name.append(t1, t2);
+    row.append(name);
+    if (s.current) {
+      const tag = document.createElement('span'); tag.className = 'small';
+      tag.textContent = 'this device';
+      row.append(tag);
+    } else {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'btn quiet';
+      b.textContent = 'Log out';
+      b.onclick = async () => {
+        try { await jpost('/sessions/revoke', { id: s.id });
+              $('#sessmsg').textContent = 'Signed that device out.'; loadSessions(); }
+        catch (e) { $('#sessmsg').textContent = e.message || 'could not sign it out'; }
+      };
+      row.append(b);
+    }
+    box.append(row);
+  });
+  // admin: every session on the server, bootable from here
+  const wrap = $('#adminwrap'), abox = $('#adminsessions');
+  if (wrap && abox) {
+    abox.innerHTML = '';
+    const all = data.all || [];
+    wrap.style.display = data.admin ? '' : 'none';
+    if (data.admin) all.forEach(s => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;margin-top:8px';
+      const name = document.createElement('div'); name.style.flex = '1 1 0';
+      const t1 = document.createElement('div'); t1.textContent = (s.user || 'unknown') + ' · ' + (s.label || 'Device');
+      const t2 = document.createElement('div'); t2.className = 'small';
+      t2.textContent = 'last used ' + _agoUnix(s.last_seen) + (s.ip ? ' · ' + s.ip : '');
+      name.append(t1, t2);
+      row.append(name);
+      if (s.current) {
+        const tag = document.createElement('span'); tag.className = 'small'; tag.textContent = 'this device';
+        row.append(tag);
+      } else {
+        const b = document.createElement('button'); b.type = 'button'; b.className = 'btn quiet';
+        b.textContent = 'Boot';
+        b.onclick = async () => {
+          try { await jpost('/sessions/revoke', { id: s.id });
+                $('#sessmsg').textContent = 'Booted ' + (s.user || 'that session') + '.'; loadSessions(); }
+          catch (e) { $('#sessmsg').textContent = e.message || 'could not boot it'; }
+        };
+        row.append(b);
+      }
+      abox.append(row);
+    });
+  }
+}
+async function revokeSessions(others, allUsers) {
+  try {
+    const body = { others: others }; if (allUsers) body.all_users = true;
+    const d = await jpost('/sessions/revoke_all', body);
+    $('#sessmsg').textContent = allUsers
+      ? ('Booted ' + (d.revoked || 0) + ' session(s) across the server.')
+      : (others ? ('Signed out ' + (d.revoked || 0) + ' other device(s).')
+                : 'Signed out of every device. Please sign in again.');
+    if (!others && !allUsers) { setTimeout(() => location.reload(), 900); return; }
+    loadSessions();
+  } catch (e) { $('#sessmsg').textContent = e.message || 'could not sign out'; }
+}
+if ($('#sessothers')) $('#sessothers').onclick = () => revokeSessions(true);
+if ($('#sessall')) $('#sessall').onclick = () => {
+  if (confirm('Log out of every device, including this one?')) revokeSessions(false);
+};
+if ($('#sessallusers')) $('#sessallusers').onclick = () => {
+  if (confirm('Boot every session on the server, except this one?')) revokeSessions(true, true);
+};
 // --- the door: the whole app is behind a session ---------------------------
 let AUTH = { user: '', admin: false, hasAccounts: false, registrationOpen: true,
              providers: [], mode: 'sign' };

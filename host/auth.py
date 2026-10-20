@@ -11,6 +11,9 @@ Contract:
   authorize_url(pid, redirect, s) -> the URL to send the browser to
   login(pid, code, redirect)      -> (user_id, session_token) after a callback
   session_user(token)             -> user_id or None (expiry enforced)
+  list_sessions(user_id, tok)     -> a user's named live sessions, current flagged
+  revoke_session(user_id, sid)    -> log out one session by its public id
+  revoke_sessions(user_id, keep)  -> log out the rest, or all when keep is empty
 """
 
 import hashlib
@@ -228,33 +231,190 @@ def _now():
 
 # ---- sessions (rows in sqlite; the cookie only carries the token) -------------
 
-def create_session(conn, user_id, provider, ttl=SESSION_TTL):
+def _touch_after():
+    return 300            # refresh last_seen at most this often, per token
+
+
+def device_label(user_agent):
+    """A short human name for a device, from its User-Agent string.
+
+    Best-effort, never trusted for security: it only decides what the sessions
+    list says beside a row. An empty UA (curl, an old client) reads as such.
+    """
+    ua = user_agent or ""
+    low = ua.lower()
+    if not ua.strip():
+        return "Unknown device"
+    browser = ""
+    for token, name in (("edg/", "Edge"), ("opr/", "Opera"), ("firefox/", "Firefox"),
+                        ("crios/", "Chrome"), ("chrome/", "Chrome"),
+                        ("safari/", "Safari")):
+        if token in low:
+            browser = name
+            break
+    if not browser:
+        browser = "Browser"
+    kind = ""
+    if "android" in low:
+        kind = "Android"
+    elif "iphone" in low or "ipad" in low or "ipod" in low:
+        kind = "iOS"
+    elif "windows" in low:
+        kind = "Windows"
+    elif "mac os x" in low or "macintosh" in low:
+        kind = "macOS"
+    elif "linux" in low:
+        kind = "Linux"
+    return "%s on %s" % (browser, kind) if kind else browser
+
+
+def create_session(conn, user_id, provider, ttl=SESSION_TTL, ua="", ip=""):
     tok = secrets.token_urlsafe(32)
+    sid = secrets.token_hex(8)          # a public handle, safe to show and revoke by
     now = int(time.time())
-    conn.execute("INSERT INTO sessions(token,user_id,provider,created_at,expires_at)"
-                 " VALUES(?,?,?,?,?)", (tok, user_id, provider, now, now + ttl))
+    conn.execute("INSERT INTO sessions"
+                 "(token,user_id,provider,created_at,expires_at,sid,user_agent,ip,last_seen)"
+                 " VALUES(?,?,?,?,?,?,?,?,?)",
+                 (tok, user_id, provider, now, now + ttl, sid, ua or "", ip or "", now))
     conn.commit()
     return tok
 
 
-def session_user(conn, token):
+def session_row(conn, token):
+    """The live session row for a token, or None. Expiry deletes it; last_seen
+    is refreshed but not on every request."""
     if not token:
         return None
-    row = conn.execute("SELECT user_id, expires_at FROM sessions WHERE token=?",
-                       (token,)).fetchone()
+    row = conn.execute("SELECT * FROM sessions WHERE token=?", (token,)).fetchone()
     if row is None:
         return None
-    if int(row["expires_at"]) < int(time.time()):
+    now = int(time.time())
+    if int(row["expires_at"] or 0) < now:
         conn.execute("DELETE FROM sessions WHERE token=?", (token,))
         conn.commit()
         return None
-    return row["user_id"]
+    if now - int(row["last_seen"] or 0) > _touch_after():
+        conn.execute("UPDATE sessions SET last_seen=? WHERE token=?", (now, token))
+        conn.commit()
+    return row
+
+
+def session_user(conn, token):
+    row = session_row(conn, token)
+    return row["user_id"] if row is not None else None
 
 
 def delete_session(conn, token):
     if token:
         conn.execute("DELETE FROM sessions WHERE token=?", (token,))
         conn.commit()
+
+
+def list_sessions(conn, user_id, current_token=""):
+    """A user's live sessions, newest activity first, each named by its device.
+
+    The token never leaves the server; a row is addressed by its `sid`, and the
+    one the caller is using now is flagged so the UI can say 'this device'.
+    """
+    if not user_id:
+        return []
+    now = int(time.time())
+    rows = conn.execute(
+        "SELECT token,sid,provider,created_at,expires_at,user_agent,ip,last_seen"
+        " FROM sessions WHERE user_id=?"
+        " ORDER BY last_seen DESC, created_at DESC", (user_id,)).fetchall()
+    out = []
+    for r in rows:
+        if int(r["expires_at"] or 0) < now:
+            continue
+        out.append({
+            "id": r["sid"] or "",
+            "provider": r["provider"] or "",
+            "label": device_label(r["user_agent"]),
+            "user_agent": r["user_agent"] or "",
+            "ip": r["ip"] or "",
+            "created_at": int(r["created_at"] or 0),
+            "last_seen": int(r["last_seen"] or 0),
+            "current": bool(current_token) and r["token"] == current_token,
+        })
+    return out
+
+
+def revoke_session(conn, user_id, sid):
+    """Log out ONE session of `user_id`, named by its public id. Scoped by user
+    so one account can never revoke another's. Returns True if a row went."""
+    if not user_id or not sid:
+        return False
+    cur = conn.execute("DELETE FROM sessions WHERE user_id=? AND sid=?", (user_id, sid))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def revoke_sessions(conn, user_id, keep_token=""):
+    """Log out a user's sessions. Keep the one token when given (log out
+    everywhere else); with no token, every session of the user goes.
+    Returns how many were removed."""
+    if not user_id:
+        return 0
+    cur = conn.execute("DELETE FROM sessions WHERE user_id=? AND token<>?",
+                       (user_id, keep_token or "")) if keep_token else \
+        conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+    conn.commit()
+    return cur.rowcount
+
+
+def list_all_sessions(conn, current_token=""):
+    """Every live session, across every account, newest activity first.
+
+    The admin view: each row carries the `user` it belongs to, so an admin can
+    see the whole server and end any of them. The token still never leaves.
+    """
+    now = int(time.time())
+    rows = conn.execute(
+        "SELECT token,sid,user_id,provider,created_at,expires_at,user_agent,ip,last_seen"
+        " FROM sessions ORDER BY last_seen DESC, created_at DESC").fetchall()
+    out = []
+    for r in rows:
+        if int(r["expires_at"] or 0) < now:
+            continue
+        out.append({
+            "id": r["sid"] or "",
+            "user": r["user_id"] or "",
+            "provider": r["provider"] or "",
+            "label": device_label(r["user_agent"]),
+            "user_agent": r["user_agent"] or "",
+            "ip": r["ip"] or "",
+            "created_at": int(r["created_at"] or 0),
+            "last_seen": int(r["last_seen"] or 0),
+            "current": bool(current_token) and r["token"] == current_token,
+        })
+    return out
+
+
+def revoke_any(conn, sid):
+    """Admin: end ANY session by its public id, whoever owns it.
+
+    Returns the user id it belonged to, or None when no such session exists.
+    """
+    if not sid:
+        return None
+    row = conn.execute("SELECT user_id FROM sessions WHERE sid=?", (sid,)).fetchone()
+    if row is None:
+        return None
+    conn.execute("DELETE FROM sessions WHERE sid=?", (sid,))
+    conn.commit()
+    return row["user_id"]
+
+
+def revoke_all_sessions(conn, keep_token=""):
+    """Admin: end every session on the server, keeping one token when given so
+    the button does not sign the admin out of the page they are on."""
+    if keep_token:
+        cur = conn.execute("DELETE FROM sessions WHERE token<>?", (keep_token,))
+    else:
+        cur = conn.execute("DELETE FROM sessions")
+    conn.commit()
+    return cur.rowcount
 
 
 def account_for_verified_email(conn, email):
@@ -542,7 +702,7 @@ class Auth:
             raise AuthError("provider %s returned no subject" % pid)
         return ident
 
-    def login(self, pid, code, redirect_uri):
+    def login(self, pid, code, redirect_uri, ua="", ip=""):
         if pid not in self.table:
             raise AuthError("unknown provider %s" % pid)
         access = self._exchange(pid, code, redirect_uri)
@@ -550,7 +710,7 @@ class Auth:
         if not ident["subject"]:
             raise AuthError("provider %s returned no subject" % pid)
         uid = upsert_user(self.conn, pid, ident)
-        return uid, create_session(self.conn, uid, pid)
+        return uid, create_session(self.conn, uid, pid, ua=ua, ip=ip)
 
     def link(self, pid, code, redirect_uri, user_id):
         """Finish a link flow: attach this provider to an existing user."""

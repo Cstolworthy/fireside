@@ -1017,6 +1017,61 @@ class App:
             return 401, {"error": "auth required"}
         return 200, {"linked": auth.linked_providers(self.conn, uid)}
 
+    # ---- devices and sessions (see and end a session anywhere) ---------------
+
+    def _session_state(self, q, uid):
+        """The caller's own sessions, plus (for an admin) every session on the
+        server, so the same panel can boot a device anywhere."""
+        tok = (q or {}).get("_token") or ""
+        out = {"sessions": auth.list_sessions(self.conn, uid, tok)}
+        if auth.is_admin(self.conn, uid):
+            out["admin"] = True
+            out["all"] = auth.list_all_sessions(self.conn, tok)
+        return out
+
+    def sessions_list(self, q, body):
+        """Every live session of the signed-in user, the current one flagged.
+        An admin also gets every session on the server."""
+        uid = (q or {}).get("_user") or ""
+        if not uid:
+            return 401, {"error": "auth required"}
+        return 200, self._session_state(q, uid)
+
+    def session_revoke(self, q, body):
+        """Log out one session by its id. A user may end any of their own; an
+        admin may end any session on the server. A stale id is not found."""
+        uid = (q or {}).get("_user") or ""
+        if not uid:
+            return 401, {"error": "auth required"}
+        sid = ((body or {}).get("id") or "").strip()
+        ok = auth.revoke_session(self.conn, uid, sid)
+        if not ok and auth.is_admin(self.conn, uid):
+            ok = auth.revoke_any(self.conn, sid) is not None
+        out = self._session_state(q, uid)
+        out["ok"] = ok
+        return (200 if ok else 404), out
+
+    def sessions_revoke_all(self, q, body):
+        """Log out: the caller's own sessions (default), or, for an admin with
+        {all_users: true}, every session on the server. Either way keep the one
+        calling, so the button does not sign you out of the page you are on."""
+        uid = (q or {}).get("_user") or ""
+        if not uid:
+            return 401, {"error": "auth required"}
+        others = (body or {}).get("others")
+        keep_current = others is None or _truthy(others)
+        keep = ((q or {}).get("_token") or "") if keep_current else ""
+        if _truthy((body or {}).get("all_users")):
+            if not auth.is_admin(self.conn, uid):
+                return 403, {"error": "admin only"}
+            n = auth.revoke_all_sessions(self.conn, keep)
+        else:
+            n = auth.revoke_sessions(self.conn, uid, keep)
+        out = self._session_state(q, uid)
+        out["ok"] = True
+        out["revoked"] = n
+        return 200, out
+
 
 GET_ROUTES = {
     "/": "ui", "/index.html": "ui", "/favicon.ico": "favicon",
@@ -1032,6 +1087,7 @@ GET_ROUTES = {
     "/cover": "cover_get",
     "/auth/providers": "auth_providers", "/me": "me", "/auth/policy": "auth_policy",
     "/auth/linked": "auth_linked",
+    "/sessions": "sessions_list",
     "/auth/users": "auth_users", "/credits": "credits",
 }
 POST_ROUTES = {
@@ -1046,6 +1102,8 @@ POST_ROUTES = {
     "/source-creds": "source_cred_save", "/source-creds/delete": "source_cred_delete",
     "/connections/override": "connection_override", "/prefs": "prefs_set",
     "/pron": "pron_set", "/credits/purchase": "credits_purchase",
+    "/sessions/revoke": "session_revoke",
+    "/sessions/revoke_all": "sessions_revoke_all",
 }
 
 # reachable without a session even when auth is required: the page, its health,
@@ -1106,6 +1164,14 @@ def make_handler(app):
                     tok = authz[7:]
             return tok
 
+        def _ua(self):
+            return (self.headers.get("User-Agent") or "")[:400]
+
+        def _ip(self):
+            # behind the tunnel the peer address is the proxy; trust only the
+            # socket peer, and say so plainly rather than trust an XFF header.
+            return (self.client_address[0] if self.client_address else "")[:64]
+
         def _auth_route(self, parts, parsed):
             from urllib.parse import parse_qs
             q = {k: v[0] for k, v in parse_qs(parsed.query).items()}
@@ -1162,10 +1228,12 @@ def make_handler(app):
                                 "/?claim=%s&claimerr=%s" % (
                                     urllib.parse.quote(claim_tok),
                                     urllib.parse.quote(str(e))), clear)
-                        token = auth.create_session(app.conn, uid, "link")
+                        token = auth.create_session(app.conn, uid, "link",
+                                                    ua=self._ua(), ip=self._ip())
                         return self._redirect("/", clear + [self._cookie_str(
                             auth.SESSION_COOKIE, token, max_age=auth.SESSION_TTL)])
-                    uid, token = app.auth.login(pid, q.get("code", ""), redirect_uri)
+                    uid, token = app.auth.login(pid, q.get("code", ""), redirect_uri,
+                                                ua=self._ua(), ip=self._ip())
                     return self._redirect("/", clear + [self._cookie_str(
                         auth.SESSION_COOKIE, token, max_age=auth.SESSION_TTL)])
             except auth.AccountExistsError as e:
@@ -1205,7 +1273,8 @@ def make_handler(app):
                                                body.get("password", ""))
                 except auth.AuthError as e:
                     return self._json(401, {"error": str(e)})
-                token = auth.create_session(app.conn, uid, "local")
+                token = auth.create_session(app.conn, uid, "local",
+                                            ua=self._ua(), ip=self._ip())
                 return self._json(200, {"ok": True, "user": uid,
                                         "admin": auth.is_admin(app.conn, uid)},
                                   cookie=self._cookie_str(
@@ -1241,7 +1310,8 @@ def make_handler(app):
                                               body.get("password", ""))
                 except auth.AuthError as e:
                     return self._json(401, {"error": str(e)})
-                token = auth.create_session(app.conn, uid, "link")
+                token = auth.create_session(app.conn, uid, "link",
+                                            ua=self._ua(), ip=self._ip())
                 return self._json(200, {"ok": True, "user": uid},
                                   cookie=self._cookie_str(
                                       auth.SESSION_COOKIE, token,
@@ -1259,6 +1329,7 @@ def make_handler(app):
                     except ValueError:
                         return self.send_error(400)
             q["_user"] = auth.session_user(app.conn, self._token()) or ""
+            q["_token"] = self._token()
             if app.require_auth and path not in PUBLIC_ROUTES and not q["_user"]:
                 return self._json(401, {"error": "auth required"})
             try:
