@@ -253,6 +253,21 @@
   .smeta .row{margin:4px 0}
   .smeta .desc{white-space:pre-wrap;margin-top:8px}
 </style>
+<script>
+/* Fireside native bridge hook. In the Android shell, window.NativeMedia raises a
+   foreground media service so playback survives screen lock / backgrounding.
+   Absent in a plain browser, so this is a harmless no-op there. */
+(function () {
+  if (window.__fsNativeMediaHooked) return;
+  window.__fsNativeMediaHooked = true;
+  function nm(name) { try { if (window.NativeMedia && window.NativeMedia[name]) window.NativeMedia[name](); } catch (e) {} }
+  if (!window.HTMLMediaElement) return;
+  var proto = HTMLMediaElement.prototype;
+  var _play = proto.play, _pause = proto.pause;
+  proto.play = function () { nm('start'); return _play.apply(this, arguments); };
+  proto.pause = function () { nm('stop'); return _pause.apply(this, arguments); };
+})();
+</script>
 </head>
 <body>
 <div class="lock" id="lock" hidden>
