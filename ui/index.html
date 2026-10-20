@@ -289,7 +289,7 @@
         <div class="who" id="auth"></div>
         <div class="stats" id="stats" hidden></div>
         <button id="menuset" type="button">Settings</button>
-        <button id="menuinstall" type="button" hidden>Install app</button>
+        <button id="menuinstall" type="button">Install app</button>
         <button id="signout" type="button">Sign out</button>
       </div>
       <div class="menu" id="alertmenu" hidden></div>
@@ -1988,13 +1988,27 @@ window.addEventListener('beforeinstallprompt', e => {
 window.addEventListener('appinstalled', () => {
   INSTALL = null; const b = $('#menuinstall'); if (b) b.hidden = true;
 });
+// The button is always offered, because the browsers that need the most help
+// installing (iOS Safari, Firefox) never fire beforeinstallprompt. When Chrome
+// has a prompt ready we use it; otherwise we name the two taps the person's
+// own browser wants.
+function installHint() {
+  const ua = navigator.userAgent || '';
+  const iOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (iOS) return 'Tap Share (the square with the up arrow), then Add to Home Screen.';
+  if (/Firefox\//.test(ua)) return 'Open the browser menu, then Add to home screen.';
+  return 'Open the browser menu, then Install app or Add to Home screen.';
+}
 {
   const b = $('#menuinstall');
-  if (b && window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) b.hidden = true;
+  const installed = () => (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+  if (b && installed()) b.hidden = true;
   if (b) b.onclick = async () => {
-    if (!INSTALL) { toast('ok', 'Use your browser menu: Install app, or Add to Home screen.'); return; }
-    INSTALL.prompt(); try { await INSTALL.userChoice; } catch (_) {}
-    INSTALL = null; b.hidden = true;
+    if (INSTALL) {
+      INSTALL.prompt(); try { await INSTALL.userChoice; } catch (_) {}
+      INSTALL = null; b.hidden = true; return;
+    }
+    toast('ok', 'Add fireside to your home screen. ' + installHint());
   };
 }
 // The system player (lockscreen, notification shade, headset buttons) reads this.
