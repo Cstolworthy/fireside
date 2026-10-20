@@ -94,6 +94,11 @@ CREATE TABLE IF NOT EXISTS identities (
     provider VARCHAR(64), subject VARCHAR(191), user_id VARCHAR(128),
     email VARCHAR(255) DEFAULT '', email_verified INT DEFAULT 0,
     created_at VARCHAR(32), PRIMARY KEY (provider, subject));
+CREATE TABLE IF NOT EXISTS login_claims (
+    token VARCHAR(191) PRIMARY KEY, provider VARCHAR(64), subject VARCHAR(191),
+    name VARCHAR(255) DEFAULT '', email VARCHAR(255) DEFAULT '',
+    email_verified INT DEFAULT 0, user_id VARCHAR(128),
+    created_at BIGINT, expires_at BIGINT);
 CREATE TABLE IF NOT EXISTS admins (
     user_id VARCHAR(128) PRIMARY KEY, created_at VARCHAR(32));
 CREATE TABLE IF NOT EXISTS settings (

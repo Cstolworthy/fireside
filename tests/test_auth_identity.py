@@ -36,11 +36,15 @@ class TestIdentityLinking(unittest.TestCase):
         b = self._login("google", "abc", "a@example.com", True)
         self.assertEqual(a, b)
 
-    def test_a_second_provider_joins_on_a_verified_email(self):
-        # the whole point: github login on an address google already owns
+    def test_a_second_provider_cannot_take_an_existing_email(self):
+        # a verified email proves the mailbox, not the account: a second
+        # provider does NOT silently join the account that owns the address.
         first = self._login("google", "abc", "a@example.com", True)
-        second = self._login("github", "99", "a@example.com", True)
-        self.assertEqual(second, first)
+        with self.assertRaises(auth.AccountExistsError) as cm:
+            self._login("github", "99", "a@example.com", True)
+        self.assertEqual(cm.exception.user_id, first)
+        # nothing was attached, and no second user appeared
+        self.assertIsNone(auth.identity_user(self.conn, "github", "99"))
         self.assertEqual(
             self.conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"], 1)
 
@@ -56,10 +60,10 @@ class TestIdentityLinking(unittest.TestCase):
         second = self._login("microsoft", "99", "", True)
         self.assertNotEqual(second, first)
 
-    def test_email_match_is_case_insensitive(self):
-        first = self._login("google", "abc", "A@Example.com", True)
-        second = self._login("github", "99", "a@example.com", True)
-        self.assertEqual(second, first)
+    def test_email_match_is_case_insensitive_and_still_refused(self):
+        self._login("google", "abc", "A@Example.com", True)
+        with self.assertRaises(auth.AccountExistsError):
+            self._login("github", "99", "a@example.com", True)
 
 
 class TestExplicitLink(unittest.TestCase):
@@ -103,6 +107,78 @@ class TestExplicitLink(unittest.TestCase):
         auth.link_identity(self.conn, "google", self._ident("g1"), "local:chris")
         uid = auth.upsert_user(self.conn, "google", self._ident("g1"))
         self.assertEqual(uid, "local:chris")
+
+
+class TestClaimProof(unittest.TestCase):
+    """A colliding social login links only after the account is proven."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.conn = db.connect(os.path.join(self.tmp, "db.sqlite"))
+        self.uid = auth.local_register(self.conn, "chris", "hunter2hunter2")
+
+    def _ident(self, subject, email="chris@example.com", verified=True):
+        return {"subject": subject, "name": "Chris", "email": email,
+                "email_verified": verified}
+
+    def _collide(self, provider="microsoft", subject="m1"):
+        """Seed the account's email, then attempt a second provider login."""
+        auth.link_identity(self.conn, "google", self._ident("g1"), self.uid)
+        try:
+            auth.upsert_user(self.conn, provider, self._ident(subject))
+        except auth.AccountExistsError as e:
+            return auth.create_claim(self.conn, e.provider, e.ident, e.user_id)
+        raise AssertionError("collision should have raised AccountExistsError")
+
+    def test_collision_attaches_nothing(self):
+        auth.link_identity(self.conn, "google", self._ident("g1"), self.uid)
+        with self.assertRaises(auth.AccountExistsError):
+            auth.upsert_user(self.conn, "microsoft", self._ident("m1"))
+        self.assertIsNone(auth.identity_user(self.conn, "microsoft", "m1"))
+
+    def test_right_password_links_the_identity(self):
+        token = self._collide()
+        got = auth.complete_claim(self.conn, token, "hunter2hunter2")
+        self.assertEqual(got, self.uid)
+        self.assertEqual(auth.identity_user(self.conn, "microsoft", "m1"), self.uid)
+        # the claim is consumed
+        with self.assertRaises(auth.AuthError):
+            auth.take_claim(self.conn, token)
+
+    def test_wrong_password_links_nothing(self):
+        token = self._collide()
+        with self.assertRaises(auth.AuthError):
+            auth.complete_claim(self.conn, token, "not-the-password")
+        self.assertIsNone(auth.identity_user(self.conn, "microsoft", "m1"))
+
+    def test_expired_claim_is_refused(self):
+        token = self._collide()
+        self.conn.execute("UPDATE login_claims SET expires_at=0 WHERE token=?", (token,))
+        self.conn.commit()
+        with self.assertRaises(auth.AuthError):
+            auth.complete_claim(self.conn, token, "hunter2hunter2")
+        self.assertIsNone(auth.identity_user(self.conn, "microsoft", "m1"))
+
+    def test_passwordless_account_cannot_be_confirmed_here(self):
+        # a social-only account owns the email; there is no password to prove
+        # with, so the door is to sign in the way it already does
+        self.conn.execute("DELETE FROM local_accounts")
+        self.conn.execute("DELETE FROM users")
+        self.conn.commit()
+        owner = auth.upsert_user(self.conn, "google", self._ident("g1"))
+        try:
+            auth.upsert_user(self.conn, "microsoft", self._ident("m1"))
+        except auth.AccountExistsError as e:
+            token = auth.create_claim(self.conn, e.provider, e.ident, e.user_id)
+        self.assertFalse(auth.has_local_account(self.conn, owner))
+        with self.assertRaises(auth.AuthError):
+            auth.complete_claim(self.conn, token, "hunter2hunter2")
+
+    def test_login_after_linking_lands_on_the_account(self):
+        token = self._collide()
+        auth.complete_claim(self.conn, token, "hunter2hunter2")
+        uid = auth.upsert_user(self.conn, "microsoft", self._ident("m1"))
+        self.assertEqual(uid, self.uid)
 
 
 class TestProviderIdentity(unittest.TestCase):

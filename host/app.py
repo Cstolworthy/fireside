@@ -1057,7 +1057,7 @@ PUBLIC_ROUTES = {"/", "/index.html", "/favicon.ico", "/health", "/auth/providers
 # auth sub-routes the handler serves directly (they set cookies / redirect),
 # so they are not in the GET/POST dispatch tables above. Declared here so the
 # browser client's served-route guard can see them too.
-AUTH_ROUTES = {"/auth/logout"}
+AUTH_ROUTES = {"/auth/logout", "/auth/claim", "/auth/claim/confirm"}
 
 
 def _truthy(v):
@@ -1144,6 +1144,12 @@ def make_handler(app):
                     uid, token = app.auth.login(pid, q.get("code", ""), redirect_uri)
                     return self._redirect("/", clear + [self._cookie_str(
                         auth.SESSION_COOKIE, token, max_age=auth.SESSION_TTL)])
+            except auth.AccountExistsError as e:
+                # The provider proved the mailbox, not the account. Do not drop
+                # them into it; hold the identity and ask for the account's own
+                # login. Never mint a session on a collision.
+                claim = auth.create_claim(app.conn, e.provider, e.ident, e.user_id)
+                return self._redirect("/?claim=%s" % claim, clear)
             except auth.AuthError as e:
                 return self._json(401, {"error": str(e)})
             return self.send_error(404)
@@ -1178,6 +1184,35 @@ def make_handler(app):
                 token = auth.create_session(app.conn, uid, "local")
                 return self._json(200, {"ok": True, "user": uid,
                                         "admin": auth.is_admin(app.conn, uid)},
+                                  cookie=self._cookie_str(
+                                      auth.SESSION_COOKIE, token,
+                                      max_age=auth.SESSION_TTL))
+            # Proving ownership of an account a social login collided with.
+            # Both are public by construction: the claim token IS the capability.
+            if path == "/auth/claim" and self.command == "GET":
+                cq = {k: v[0] for k, v in parse_qs(u.query).items()}
+                try:
+                    c = auth.take_claim(app.conn, cq.get("token", ""))
+                except auth.AuthError as e:
+                    return self._json(410, {"error": str(e)})
+                return self._json(200, {
+                    "provider": c["provider"], "email": c["email"],
+                    "provider_label": (app.auth.table.get(c["provider"], {})
+                                       .get("label", c["provider"])),
+                    "has_password": auth.has_local_account(app.conn, c["user_id"])})
+            if path == "/auth/claim/confirm" and self.command == "POST":
+                n = int(self.headers.get("Content-Length") or 0)
+                try:
+                    body = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+                except ValueError:
+                    return self.send_error(400)
+                try:
+                    uid = auth.complete_claim(app.conn, body.get("claim", ""),
+                                              body.get("password", ""))
+                except auth.AuthError as e:
+                    return self._json(401, {"error": str(e)})
+                token = auth.create_session(app.conn, uid, "link")
+                return self._json(200, {"ok": True, "user": uid},
                                   cookie=self._cookie_str(
                                       auth.SESSION_COOKIE, token,
                                       max_age=auth.SESSION_TTL))

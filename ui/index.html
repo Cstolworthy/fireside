@@ -940,6 +940,8 @@ function authMsg(t) { $('#autherr').textContent = t || ''; }
 function renderAuth() {
   const create = AUTH.mode === 'create';
   const closed = !create && AUTH.hasAccounts && !AUTH.registrationOpen;
+  $('#lockuser').closest('.field').hidden = false;   // claim mode hides it
+  $('#lockpass').disabled = false; $('#lockgo').disabled = false;
   $('#locktitle').textContent = create ? 'set up fireside' : 'sign in';
   $('#locksub').textContent = create
     ? (AUTH.hasAccounts
@@ -967,6 +969,7 @@ function renderAuth() {
 async function authSubmit() {
   const u = $('#lockuser').value.trim(), p = $('#lockpass').value;
   const create = AUTH.mode === 'create';
+  if (AUTH.mode === 'claim') return claimSubmit();
   if (!u) return authMsg('enter a username');
   if (create) {
     // same rules the server enforces, said before the round trip
@@ -1014,9 +1017,67 @@ async function requireSession() {
   AUTH.mode = AUTH.hasAccounts ? 'sign' : 'create';
   document.body.classList.add('locked');
   $('#lock').hidden = false;        // reveal the door; body.locked hid the app
+  let claim = '';
+  try { claim = new URLSearchParams(location.search).get('claim') || ''; } catch (_) {}
+  if (claim) {                      // a social login collided; prove the account
+    AUTH.mode = 'claim'; AUTH.claim = claim;
+    await renderClaim();
+    return false;
+  }
   renderAuth();
   $('#lockuser').focus();
   return false;
+}
+
+// A social login whose verified email already belongs to an account does not
+// open that account - it has to be proven. We ask for the account's password
+// and only then attach the identity.
+async function renderClaim() {
+  $('#locktitle').textContent = 'confirm this account';
+  $('#lockuser').closest('.field').hidden = true;
+  $('#lockconfirm').hidden = true;
+  $('#lockpass').value = '';
+  $('#lockpass').setAttribute('autocomplete', 'current-password');
+  $('#lockgo').textContent = 'Confirm and link';
+  $('#locktoggle').hidden = true;
+  authMsg('');
+  $('#lockproviders').innerHTML = '';
+  const provs = $('#lockproviders'); provs.innerHTML = '';
+  const who = (label) => ('An account already uses ' +
+    (AUTH.claimInfo && AUTH.claimInfo.email ? AUTH.claimInfo.email : 'this email') +
+    '. ' + label);
+  try {
+    const d = await api('/auth/claim?token=' + encodeURIComponent(AUTH.claim));
+    AUTH.claimInfo = d;
+    const label = d.provider_label || d.provider;
+    if (d.has_password) {
+      $('#locksub').textContent = who('Enter that account\'s password to link your ' + label + ' login to it.');
+    } else {
+      $('#locksub').textContent = who('It has no password to confirm with. Sign in the way you already do, then link this login from Settings.');
+      $('#lockpass').disabled = true; $('#lockgo').disabled = true;
+    }
+    $('#lockpass').focus();
+  } catch (e) {
+    $('#locksub').textContent = 'This sign-in has expired. Go back and start again.';
+    authMsg(e.message || '');
+    $('#lockpass').disabled = true; $('#lockgo').disabled = true;
+  }
+}
+
+async function claimSubmit() {
+  const p = $('#lockpass').value;
+  if (!p) return authMsg('enter the password for that account');
+  authMsg(''); $('#lockgo').disabled = true;
+  try {
+    await api('/auth/claim/confirm', { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ claim: AUTH.claim, password: p }) });
+    history.replaceState({}, '', location.pathname);   // drop ?claim= on reload
+    location.reload();
+  } catch (e) {
+    authMsg(e.message || 'that password did not match the existing account');
+    $('#lockgo').disabled = false;
+  }
 }
 
 $('#lockform').onsubmit = (e) => { e.preventDefault(); authSubmit(); };

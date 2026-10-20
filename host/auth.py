@@ -179,6 +179,21 @@ class AuthError(Exception):
     pass
 
 
+class AccountExistsError(AuthError):
+    """A new social identity collided with an existing account's verified email.
+
+    Carries what the caller needs to ask for proof: the account already in the
+    way, the provider, and the pending identity (linked once ownership is
+    proven). A verified email is not proof of owning the account.
+    """
+
+    def __init__(self, user_id, provider, ident):
+        super().__init__("an account with this email already exists")
+        self.user_id = user_id
+        self.provider = provider
+        self.ident = ident
+
+
 def _default_fetch(req, timeout=20):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
@@ -241,14 +256,36 @@ def delete_session(conn, token):
         conn.commit()
 
 
-def upsert_user(conn, provider, ident):
-    """Resolve a provider identity to one user id, linking by verified email.
+def account_for_verified_email(conn, email):
+    """The user that already owns a VERIFIED email, or None.
 
-    An identity seen before keeps its user. A new identity claims an existing
-    user only when the provider reports a VERIFIED email that user already
-    owns - so a Google login onto a mailbox that already has an account lands
-    in that account instead of opening a second empty one. No verified email,
-    no link: we never join accounts on a name or an unverified address.
+    Only identities whose provider marked the address verified count here; an
+    unverified address never claims a match.
+    """
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    row = conn.execute(
+        "SELECT user_id FROM identities WHERE email=? AND email_verified=1"
+        " ORDER BY created_at LIMIT 1", (email,)).fetchone()
+    return row["user_id"] if row is not None else None
+
+
+def upsert_user(conn, provider, ident):
+    """Resolve a provider identity to one user id.
+
+    An identity seen before keeps its user. A NEW identity is attached to the
+    account it logs into, and never to an account just because the provider
+    reports an email that account happens to own.
+
+    A verified email proves control of the mailbox, not of the account: a
+    local account's email was never verified, so matching on it would be a
+    takeover door - anyone could register victim@x, then the real owner's
+    Google login would land in the seeded account. So when a new identity's
+    verified email already belongs to a user, we refuse and raise
+    AccountExistsError; the caller must ask for that account's own login
+    (auth.complete_claim) before we attach. No verified email at all makes a
+    fresh account, as before.
     """
     subject = ident["subject"]
     email = (ident.get("email") or "").strip().lower()
@@ -258,23 +295,97 @@ def upsert_user(conn, provider, ident):
     if row is not None:
         uid = row["user_id"]
     else:
-        uid = None
         if verified and email:
-            prev = conn.execute(
-                "SELECT user_id FROM identities WHERE email=? AND email_verified=1"
-                " ORDER BY created_at LIMIT 1", (email,)).fetchone()
-            if prev is not None:
-                uid = prev["user_id"]
-        if uid is None:
-            uid = "%s:%s" % (provider, subject)
-            conn.execute("INSERT OR IGNORE INTO users(id,name,created_at) VALUES(?,?,?)",
-                         (uid, ident.get("name", ""), _now()))
+            owner = account_for_verified_email(conn, email)
+            if owner is not None:
+                raise AccountExistsError(owner, provider, ident)
+        uid = "%s:%s" % (provider, subject)
+        conn.execute("INSERT OR IGNORE INTO users(id,name,created_at) VALUES(?,?,?)",
+                     (uid, ident.get("name", ""), _now()))
     conn.execute("INSERT OR REPLACE INTO identities"
                  "(provider,subject,user_id,email,email_verified,created_at)"
                  " VALUES(?,?,?,?,?,?)",
                  (provider, subject, uid, email, verified, _now()))
     conn.commit()
     return uid
+
+
+# --- proving you own an existing account -----------------------------------
+#
+# When a social login's verified email already belongs to an account, we do not
+# merge. We hold the pending identity in a login_claims row, keyed by an opaque
+# token, and only attach it once the user proves ownership of the existing
+# account - for a local account, by entering its password.
+
+CLAIM_TTL = 900        # seconds; long enough to type a password, no longer
+
+
+def create_claim(conn, provider, ident, user_id):
+    """Stash a social identity that collided with an existing account."""
+    token = secrets.token_urlsafe(24)
+    now = int(time.time())
+    conn.execute(
+        "INSERT INTO login_claims"
+        "(token,provider,subject,name,email,email_verified,user_id,created_at,expires_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?)",
+        (token, provider, ident["subject"], ident.get("name", ""),
+         (ident.get("email") or "").strip().lower(),
+         1 if ident.get("email_verified") else 0, user_id, now, now + CLAIM_TTL))
+    conn.commit()
+    return token
+
+
+def take_claim(conn, token):
+    """Read a pending claim, refusing one that has expired or was consumed."""
+    row = conn.execute("SELECT * FROM login_claims WHERE token=?", (token,)).fetchone()
+    if row is None:
+        raise AuthError("this sign-in has expired; start again")
+    if int(row["expires_at"] or 0) < int(time.time()):
+        conn.execute("DELETE FROM login_claims WHERE token=?", (token,))
+        conn.commit()
+        raise AuthError("this sign-in has expired; start again")
+    return row
+
+
+def local_password_proof(conn, user_id, password):
+    """True when `password` is the local account password for `user_id`.
+
+    Constant-time compare; a user with no local account always fails here,
+    because a social-only account cannot be proven by a password it never had.
+    """
+    row = conn.execute("SELECT digest,salt FROM local_accounts WHERE user_id=?",
+                       (user_id,)).fetchone()
+    if row is None:
+        return False
+    return secrets.compare_digest(_digest(password or "", row["salt"]), row["digest"])
+
+
+def has_local_account(conn, user_id):
+    return conn.execute("SELECT 1 FROM local_accounts WHERE user_id=?",
+                        (user_id,)).fetchone() is not None
+
+
+def complete_claim(conn, token, password):
+    """Attach a pending social identity once the account's password is proven.
+
+    Returns the user id on success. Raises AuthError when the password is wrong
+    or the existing account has no password to prove with - in that case the
+    only door is to sign in the way the account already does, then link from
+    Settings.
+    """
+    claim = take_claim(conn, token)
+    if not has_local_account(conn, claim["user_id"]):
+        raise AuthError("that account has no password to confirm with; sign in "
+                        "the way you already do, then link this login from Settings")
+    if not local_password_proof(conn, claim["user_id"], password):
+        raise AuthError("that password does not match the existing account")
+    ident = {"subject": claim["subject"], "name": claim["name"],
+             "email": claim["email"],
+             "email_verified": bool(claim["email_verified"])}
+    link_identity(conn, claim["provider"], ident, claim["user_id"])
+    conn.execute("DELETE FROM login_claims WHERE token=?", (token,))
+    conn.commit()
+    return claim["user_id"]
 
 
 def identity_user(conn, provider, subject):
