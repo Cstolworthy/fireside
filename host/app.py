@@ -37,7 +37,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
-from host import accounting, auth, billing, connections, credentials, db, jobs, library, payments, playback, pron, quota, stats
+from host import accounting, auth, billing, connections, credentials, db, grants, jobs, library, payments, playback, pron, quota, stats
 from sources._fetch import fetch as _fetch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -227,7 +227,9 @@ class App:
 
     def _storage_ok(self, user_id, nbytes):
         """True when `nbytes` of new storage fits this user's plan. Reads only;
-        the caller refuses the write."""
+        the caller refuses the write. An admin grant lifts the check entirely."""
+        if grants.storage_unlimited(self.conn, user_id):
+            return True
         return quota.check_room(self.conn, self.storage, user_id,
                                 self._plan(user_id), nbytes)
 
@@ -581,7 +583,7 @@ class App:
                                    "your plan has no room for it" % est_bytes}
         sale = accounting.sale_connection_matches(self.sale_connection, provider, voice, model)
         res_id = None
-        if sale:
+        if sale and not grants.credits_unlimited(self.conn, user):
             quote = speech.quote({"chars_est": est, "cred": cred, "sale": True})
             if not getattr(quote, "eligible", True):
                 return 402, {"error": "not eligible",
@@ -1134,7 +1136,34 @@ class App:
             return 403, {"error": "admin only"}
         return 200, {"users": auth.local_accounts(self.conn),
                      "registration_open": auth.registration_open(self.conn),
+                     "grants": grants.list_all(self.conn),
                      "you": uid}
+
+    def grants_list(self, q, body):
+        """Admin: every account and its lifted-limit grants."""
+        uid = (q or {}).get("_user") or ""
+        if not auth.is_admin(self.conn, uid):
+            return 403, {"error": "admin only"}
+        return 200, {"users": auth.local_accounts(self.conn),
+                     "grants": grants.list_all(self.conn)}
+
+    def grants_set(self, q, body):
+        """Admin: lift or restore the storage and/or credit check for a user.
+        The account's own usage and charges are untouched."""
+        uid = (q or {}).get("_user") or ""
+        if not auth.is_admin(self.conn, uid):
+            return 403, {"error": "admin only"}
+        target = (body or {}).get("user") or ""
+        if not target:
+            return 400, {"error": "user required"}
+        body = body or {}
+        out = grants.set_grants(
+            self.conn, target,
+            storage=(bool(body.get("storage_unlimited"))
+                     if "storage_unlimited" in body else None),
+            credits=(bool(body.get("credits_unlimited"))
+                     if "credits_unlimited" in body else None))
+        return 200, {"ok": True, "user": target, "grants": out}
 
     def set_registration(self, q, body):
         uid = (q or {}).get("_user") or ""
@@ -1228,6 +1257,7 @@ GET_ROUTES = {
     "/auth/linked": "auth_linked",
     "/sessions": "sessions_list",
     "/auth/users": "auth_users", "/credits": "credits",
+    "/grants": "grants_list",
     "/billing": "billing_get",
     "/storage": "storage_get",
 }
@@ -1243,6 +1273,7 @@ POST_ROUTES = {
     "/source-creds": "source_cred_save", "/source-creds/delete": "source_cred_delete",
     "/connections/override": "connection_override", "/prefs": "prefs_set",
     "/pron": "pron_set", "/credits/purchase": "credits_purchase",
+    "/grants": "grants_set",
     "/billing/checkout": "billing_checkout", "/billing/confirm": "billing_confirm",
     "/sessions/revoke": "session_revoke",
     "/sessions/revoke_all": "sessions_revoke_all",
