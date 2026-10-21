@@ -44,3 +44,11 @@ def user_stats(conn, user_id):
             "chars_by_provider": by_provider,
             "books_listened": int(t["b"] or 0),
             "listen_seconds": float(t["s"] or 0.0)}
+
+
+def discard_book(conn, user_id, book_id):
+    """Forget the listen log for this user and book, so a deleted book stops
+    counting toward books listened and time heard."""
+    conn.execute("DELETE FROM listens WHERE user_id=? AND book_id=?",
+                 (user_id, book_id))
+    conn.commit()

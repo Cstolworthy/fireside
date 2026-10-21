@@ -195,3 +195,126 @@ def backfill_renditions(conn):
              "", r["model"] or "", float(r["speed"] or 1.0), r["audio_ref"],
              r["audio_bytes"], r["duration_s"], now()))
     conn.commit()
+
+
+# ---- removing what you hold: a voice, every voice, or the book -------------
+# Deleting is per shelf. A blob is content-addressed, so the same book held by
+# two people shares one physical copy, and the shared render cache keeps the
+# audio of a voice that has been removed so re-voicing it stays free. A blob any
+# row still names is never taken off disk. What deleting frees is THIS user's
+# storage - the bytes their own shelf names - and their own copy of the book.
+
+_REF_QUERIES = (
+    ("chapters", "text_ref"),
+    ("chapters", "audio_ref"),
+    ("renditions", "audio_ref"),
+    ("books", "cover_ref"),
+    ("render_cache", "audio_ref"),
+)
+
+
+def ref_in_use(conn, ref):
+    """True when any row anywhere still names this blob. The render cache
+    counts: a cached voice is kept, so re-voicing it costs no new synth."""
+    if not ref:
+        return False
+    for table, col in _REF_QUERIES:
+        row = conn.execute("SELECT 1 FROM %s WHERE %s=? LIMIT 1" % (table, col),
+                           (ref,)).fetchone()
+        if row:
+            return True
+    return False
+
+
+def gc_blobs(conn, storage, refs):
+    """Delete from the backend every blob no row names any more. Returns how
+    many left the disk. Housekeeping, not billing: the shelf is already freed by
+    the row delete, and a shared blob survives because a row still names it."""
+    freed = 0
+    for ref in {r for r in refs if r}:
+        if ref_in_use(conn, ref):
+            continue
+        try:
+            storage.delete(ref)
+            freed += 1
+        except Exception:
+            pass
+    return freed
+
+
+def _newest_rendition(conn, book_id, idx):
+    """The newest voiced copy of one chapter, or None. Rows come ordered by
+    created_at ascending, so the last match is the newest."""
+    got = None
+    for r in renditions(conn, book_id):
+        if r["idx"] == idx and r["audio_ref"]:
+            got = r
+    return got
+
+
+def _resync_chapter(conn, book_id, idx):
+    """Point a chapter row at a voice it still has, or clear it. The chapter
+    row is the 'newest voice' shortcut for a client that names none, so after a
+    voice is removed it must not point at audio that is gone."""
+    r = _newest_rendition(conn, book_id, idx)
+    if r:
+        conn.execute(
+            "UPDATE chapters SET audio_ref=?,audio_bytes=?,duration_s=?,provider=?,"
+            "voice=?,model=?,speed=? WHERE book_id=? AND idx=?",
+            (r["audio_ref"], r["audio_bytes"], r["duration_s"], r["provider"],
+             r["voice"], r["model"], r["speed"], book_id, idx))
+    else:
+        conn.execute(
+            "UPDATE chapters SET audio_ref=NULL,audio_bytes=NULL,duration_s=NULL,"
+            "provider=NULL,voice=NULL,model=NULL,speed=NULL WHERE book_id=? AND idx=?",
+            (book_id, idx))
+
+
+def remove_renditions(conn, storage, book_id, provider="", voice="", model=""):
+    """Remove voiced copies of a book: one named voice, or (no voice given)
+    every voice it has. The book and its chapter text stay. Returns
+    {removed, freed}. A blob another shelf or the shared render cache still
+    names stays on disk - that is exactly the shared case."""
+    refs = []
+    removed = 0
+    for r in renditions(conn, book_id):
+        if voice and r["voice"] != voice:
+            continue
+        if provider and r["provider"] != provider:
+            continue
+        if model and r["model"] != model:
+            continue
+        conn.execute("DELETE FROM renditions WHERE rk=?", (r["rk"],))
+        if r["audio_ref"]:
+            refs.append(r["audio_ref"])
+        removed += 1
+    for c in chapters(conn, book_id):
+        _resync_chapter(conn, book_id, c["idx"])
+    conn.commit()
+    freed = gc_blobs(conn, storage, refs)
+    return {"removed": removed, "freed": freed}
+
+
+def delete_book(conn, storage, book_id):
+    """Remove a book from its shelf entirely: its rows gone, then every blob
+    left unnamed by every shelf taken off disk. Positions, device stops and
+    listen rows belong to playback/stats and are the caller's to clear. Returns
+    {freed}."""
+    refs = []
+    for c in chapters(conn, book_id):
+        if c["text_ref"]:
+            refs.append(c["text_ref"])
+        if c["audio_ref"]:
+            refs.append(c["audio_ref"])
+    for r in renditions(conn, book_id):
+        if r["audio_ref"]:
+            refs.append(r["audio_ref"])
+    b = conn.execute("SELECT cover_ref FROM books WHERE id=?", (book_id,)).fetchone()
+    if b and b["cover_ref"]:
+        refs.append(b["cover_ref"])
+    conn.execute("DELETE FROM renditions WHERE book_id=?", (book_id,))
+    conn.execute("DELETE FROM chapters WHERE book_id=?", (book_id,))
+    conn.execute("DELETE FROM books WHERE id=?", (book_id,))
+    conn.commit()
+    freed = gc_blobs(conn, storage, refs)
+    return {"freed": freed}

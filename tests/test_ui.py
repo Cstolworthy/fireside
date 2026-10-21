@@ -414,6 +414,16 @@ class TestBookPageConvert(unittest.TestCase):
         self.assertIn("coverURL", html)
         self.assertIn("/book/details", html)          # ISBN -> metadata lookup
 
+    def test_book_settings_can_remove_voices_and_the_book(self):
+        # removing is per shelf: a voice, every voice, or the book, all from the
+        # settings panel, with the routes the host actually serves.
+        html = self._html()
+        for anchor in ('id="scopies"', 'id="scopiesnote"', 'id="srmallbtn"',
+                       'id="sdelbookbtn"', 'function renderCopies'):
+            self.assertIn(anchor, html)
+        self.assertIn("/book/renditions/delete", html)
+        self.assertIn("/book/delete", html)
+
 
 class TestVoiceOrdering(unittest.TestCase):
     """English voices sort to the top of every voice list (US, then UK) and the
