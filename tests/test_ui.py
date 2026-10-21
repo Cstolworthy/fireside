@@ -195,6 +195,20 @@ class TestBootSafetyNet(unittest.TestCase):
         self.assertIn("$('#lock').hidden = true", html)    # signed in
         self.assertIn("$('#lock').hidden = false", html)   # signed out
 
+    def test_library_legend_waits_for_a_book(self):
+        # the five-tag legend explains states of a library; on an empty one it
+        # teaches nothing and eats the top of the screen, so it starts hidden
+        # and is revealed with the shelf.
+        html = self._html()
+        self.assertIn('id="legend" style="display:none"', html)
+        self.assertIn("$('#legend').style.display = books.length ? 'flex' : 'none'", html)
+
+    def test_first_run_names_the_product(self):
+        # a first-run user must be told what fireside is on the door, not only
+        # in a manifest no user reads.
+        html = self._html()
+        self.assertIn('<p class="tag">Books and web stories, voiced.</p>', html)
+
     def test_signin_errors_are_generic(self):
         # the brief's rule: never say which half was wrong
         html = self._html()

@@ -92,6 +92,15 @@ class TestPwa(unittest.TestCase):
             self.assertEqual(ct, "image/png", path)
             self.assertTrue(body.startswith(b"\x89PNG"), path)
 
+    def test_master_icon_is_a_real_png(self):
+        # assets/icon.png is the master every exported icon traces back to. It
+        # must not be a JPEG wearing a .png name, or the flame's edges arrive at
+        # 16px already chroma-damaged. On disk, not served.
+        from host.app import ASSETS_DIR
+        with open(os.path.join(ASSETS_DIR, "icon.png"), "rb") as f:
+            head = f.read(8)
+        self.assertEqual(head, b"\x89PNG\r\n\x1a\n")
+
 
 if __name__ == "__main__":
     unittest.main()
