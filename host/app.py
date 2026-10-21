@@ -37,7 +37,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
-from host import accounting, auth, billing, connections, credentials, db, grants, jobs, library, payments, playback, plans, pron, quota, stats
+from host import accounting, auth, billing, connections, credentials, db, grants, jobs, library, mailer, payments, playback, plans, pron, quota, stats
 from sources._fetch import fetch as _fetch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1426,13 +1426,16 @@ POST_ROUTES = {
 # reachable without a session even when auth is required: the page, its health,
 # the sign-in surface, and the browser's cache of who it is.
 PUBLIC_ROUTES = {"/", "/index.html", "/favicon.ico", "/health", "/auth/providers",
-                 "/auth/policy", "/me", "/plans", "/manifest.webmanifest", "/sw.js",
+                 "/auth/policy", "/auth/forgot", "/auth/reset", "/me", "/plans",
+                 "/manifest.webmanifest", "/sw.js",
                  "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"}
 
 # auth sub-routes the handler serves directly (they set cookies / redirect),
 # so they are not in the GET/POST dispatch tables above. Declared here so the
 # browser client's served-route guard can see them too.
-AUTH_ROUTES = {"/auth/logout", "/auth/claim", "/auth/claim/confirm"}
+AUTH_ROUTES = {"/auth/logout", "/auth/claim", "/auth/claim/confirm",
+               "/auth/local/register", "/auth/local/login",
+               "/auth/forgot", "/auth/reset"}
 
 
 def _truthy(v):
@@ -1629,6 +1632,48 @@ def make_handler(app):
                 except auth.AuthError as e:
                     return self._json(401, {"error": str(e)})
                 token = auth.create_session(app.conn, uid, "link",
+                                            ua=self._ua(), ip=self._ip())
+                return self._json(200, {"ok": True, "user": uid},
+                                  cookie=self._cookie_str(
+                                      auth.SESSION_COOKIE, token,
+                                      max_age=auth.SESSION_TTL))
+            # Forgot password: ask for an address, mail a one-time link. The
+            # answer is the same whether or not an account matched - telling the
+            # two apart would turn this door into "who has an account here?".
+            if path == "/auth/forgot" and self.command == "POST":
+                from urllib.parse import quote
+                n = int(self.headers.get("Content-Length") or 0)
+                try:
+                    body = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+                except ValueError:
+                    return self.send_error(400)
+                email = (body.get("email") or "").strip().lower()
+                res = auth.request_password_reset(app.conn, email)
+                if res:
+                    tok, username = res
+                    link = self._base_url() + "/?reset=" + quote(tok)
+                    mailer.send(
+                        email, "Reset your fireside password",
+                        "Hi %s,\n\nSomeone asked to reset the password for your "
+                        "fireside account. If it was you, open this link within "
+                        "the hour to set a new one:\n\n%s\n\nIf it was not you, "
+                        "ignore this mail - nothing changes.\n\n- fireside\n"
+                        % (username, link))
+                return self._json(200, {"ok": True, "mail": mailer.configured()})
+            # Consume the link: set a new password and sign in with it. The
+            # token IS the capability, so no session is needed to reach this.
+            if path == "/auth/reset" and self.command == "POST":
+                n = int(self.headers.get("Content-Length") or 0)
+                try:
+                    body = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
+                except ValueError:
+                    return self.send_error(400)
+                try:
+                    uid = auth.reset_password(app.conn, body.get("token", ""),
+                                              body.get("password", ""))
+                except auth.AuthError as e:
+                    return self._json(401, {"error": str(e)})
+                token = auth.create_session(app.conn, uid, "reset",
                                             ua=self._ua(), ip=self._ip())
                 return self._json(200, {"ok": True, "user": uid},
                                   cookie=self._cookie_str(

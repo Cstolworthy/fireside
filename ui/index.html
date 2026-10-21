@@ -300,6 +300,7 @@
     </div>
     <button class="btn" id="lockgo" type="submit">Sign in</button>
     <p class="err" id="autherr" role="alert" aria-live="polite"></p>
+    <button class="toggle" id="lockforgot" type="button" hidden>Forgot password?</button>
     <button class="toggle" id="locktoggle" type="button" hidden></button>
     <button class="toggle" id="lockplans" type="button">See plans &amp; pricing →</button>
     <div id="lockproviders" class="sso"></div>
@@ -1590,33 +1591,44 @@ if ($('#sessallusers')) $('#sessallusers').onclick = () => {
 };
 // --- the door: the whole app is behind a session ---------------------------
 let AUTH = { user: '', admin: false, hasAccounts: false, registrationOpen: true,
-             providers: [], mode: 'sign' };
+             providers: [], mode: 'sign', resetToken: '' };
 
 function authMsg(t) { $('#autherr').textContent = t || ''; }
 
 function renderAuth() {
   const create = AUTH.mode === 'create';
-  const closed = !create && AUTH.hasAccounts && !AUTH.registrationOpen;
-  $('#lockuser').closest('.field').hidden = false;   // claim mode hides it
-  $('#lockpass').disabled = false; $('#lockgo').disabled = false;
-  $('#locktitle').textContent = create ? 'set up fireside' : 'sign in';
-  $('#locksub').textContent = create
-    ? (AUTH.hasAccounts
-        ? 'make another account on this server.'
-        : 'create the first account. it will be the admin.')
-    : (closed ? 'accounts are made by the admin.'
-              : 'your books, your place in them, kept on this server.');
-  $('#lockgo').textContent = create ? 'Create account' : 'Sign in';
-  $('#lockpass').setAttribute('autocomplete', create ? 'new-password' : 'current-password');
-  $('#lockconfirm').hidden = !create;            // double entry only when creating
-  $('#lockemailwrap').hidden = !create;          // the address is a sign-up fact
+  const forgot = AUTH.mode === 'forgot';
+  const reset = AUTH.mode === 'reset';
+  const closed = !create && !forgot && !reset && AUTH.hasAccounts && !AUTH.registrationOpen;
+  $('#lockuser').closest('.field').hidden = forgot || reset;  // claim mode hides it
+  $('#lockpass').disabled = false; $('#lockgo').disabled = false; $('#lockgo').hidden = false;
+  $('#locktitle').textContent = reset ? 'set a new password'
+    : (forgot ? 'reset your password' : (create ? 'set up fireside' : 'sign in'));
+  $('#locksub').textContent = reset
+    ? 'this signs out every other device.'
+    : (forgot ? "we'll email a link if that address has an account."
+    : (create
+        ? (AUTH.hasAccounts
+            ? 'make another account on this server.'
+            : 'create the first account. it will be the admin.')
+        : (closed ? 'accounts are made by the admin.'
+                  : 'your books, your place in them, kept on this server.')));
+  $('#lockgo').textContent = reset ? 'Set new password'
+    : (forgot ? 'Send reset link' : (create ? 'Create account' : 'Sign in'));
+  $('#lockpass').setAttribute('autocomplete',
+    (create || reset) ? 'new-password' : 'current-password');
+  $('#lockconfirm').hidden = !(create || reset);   // double entry when setting one
+  $('#lockemailwrap').hidden = !(create || forgot); // the address is a sign-up fact
   $('#lockpass2').value = '';
   $('#lockemail').value = '';
   const canToggle = !closed;
   $('#locktoggle').hidden = !canToggle;
-  $('#locktoggle').textContent = create ? 'I already have an account' : 'Create a new account';
+  $('#locktoggle').textContent = (forgot || reset) ? 'Back to sign in'
+                               : (create ? 'I already have an account' : 'Create a new account');
+  $('#lockforgot').hidden = create || forgot || reset;   // only on the sign-in door
   authMsg('');
   const provs = $('#lockproviders'); provs.innerHTML = '';
+  if (forgot || reset) return;                  // no social buttons while resetting
   AUTH.providers.filter(p => p.kind !== 'local' && p.start).forEach(p => {
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'btn ghost'; b.textContent = 'Continue with ' + p.label;
@@ -1630,6 +1642,41 @@ async function authSubmit() {
   const em = $('#lockemail').value.trim();
   const create = AUTH.mode === 'create';
   if (AUTH.mode === 'claim') return claimSubmit();
+
+  if (AUTH.mode === 'forgot') {
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) return authMsg('enter your email address');
+    authMsg(''); $('#lockgo').disabled = true;
+    try {
+      const r = await api('/auth/forgot', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: em }) });
+      // same line either way: whether an account matched is not ours to tell
+      authMsg(r && r.mail === false
+        ? 'this server has no mail sender yet.'
+        : 'if that address has an account, the link is on its way (one hour).');
+      $('#lockgo').disabled = false;
+    } catch (e) {
+      authMsg(e.message || 'could not send that just now.');
+      $('#lockgo').disabled = false;
+    }
+    return;
+  }
+
+  if (AUTH.mode === 'reset') {
+    if (p.length < 8) return authMsg('password must be at least 8 characters');
+    if (p !== $('#lockpass2').value) return authMsg('passwords do not match');
+    authMsg(''); $('#lockgo').disabled = true;
+    try {
+      await api('/auth/reset', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: AUTH.resetToken || '', password: p }) });
+      location.reload();                    // signed in on the new password
+    } catch (e) {
+      authMsg(e.message || 'that reset link is no longer valid.');
+      $('#lockgo').disabled = false;
+    }
+    return;
+  }
+
   if (!u) return authMsg('enter a username');
   if (create) {
     // same rules the server enforces, said before the round trip
@@ -1682,8 +1729,18 @@ async function requireSession() {
   // A stranger sees the sales page and nothing else; the other tabs are the
   // signed-in app. The Plans tab is public, so it stays.
   document.querySelectorAll('#tabs button').forEach(b => { b.hidden = (b.dataset.v !== 'plans'); });
-  let claim = '';
-  try { claim = new URLSearchParams(location.search).get('claim') || ''; } catch (_) {}
+  let claim = '', reset = '';
+  try {
+    const sp = new URLSearchParams(location.search);
+    claim = sp.get('claim') || '';
+    reset = sp.get('reset') || '';
+  } catch (_) {}
+  if (reset) {                      // a reset link in the URL: set a new password
+    AUTH.mode = 'reset'; AUTH.resetToken = reset;
+    renderAuth();
+    $('#lockpass').focus();
+    return false;
+  }
   if (claim) {                      // a social login collided; prove the account
     AUTH.mode = 'claim'; AUTH.claim = claim;
     await renderClaim();
@@ -1760,11 +1817,14 @@ async function claimSubmit() {
 }
 
 $('#lockform').onsubmit = (e) => { e.preventDefault(); authSubmit(); };
-['#lockuser', '#lockpass', '#lockpass2'].forEach(sel => $(sel).addEventListener('input', () => authMsg('')));
+['#lockuser', '#lockpass', '#lockpass2', '#lockemail'].forEach(sel => $(sel).addEventListener('input', () => authMsg('')));
 $('#locktoggle').onclick = () => {
-  AUTH.mode = AUTH.mode === 'create' ? 'sign' : 'create';
+  AUTH.mode = (AUTH.mode === 'create') ? 'sign'
+            : (AUTH.mode === 'forgot' || AUTH.mode === 'reset') ? 'sign' : 'create';
+  AUTH.resetToken = '';
   renderAuth();
 };
+$('#lockforgot').onclick = () => { AUTH.mode = 'forgot'; AUTH.resetToken = ''; renderAuth(); };
 
 // --- voices ----------------------------------------------------------------
 // English (US first, then UK) then everything else: nobody should scroll past
