@@ -661,7 +661,8 @@ class App:
             return 507, {"error": "not enough storage",
                          "detail": "this render needs about %d bytes of audio and "
                                    "your plan has no room for it" % est_bytes}
-        sale = accounting.sale_connection_matches(self.sale_connection, provider, voice, model)
+        sale = accounting.sale_connection_matches(self.sale_connection, provider, voice,
+                                                  model, cid)
         # What this run actually has to synthesise: a chapter already voiced in
         # this exact voice (and rules) is a cache hit and costs the buyer
         # nothing. The whole-book estimate is the storage question, not the

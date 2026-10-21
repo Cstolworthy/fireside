@@ -23,10 +23,20 @@ class Insufficient(Exception):
     """The reservation would overdraw the user's Fireside balance."""
 
 
-def sale_connection_matches(spec, provider, voice, model):
-    """True if this connection is the ONE designated sale connection."""
+def sale_connection_matches(spec, provider, voice, model, connection_id=None):
+    """True if this render goes through the ONE designated sale connection.
+
+    When the switch names a connection id, that id is the whole test: every
+    voice on the sale connection is resold, and a render through any other
+    connection (a BYO key, the local engine) is never metered even if it names
+    the same voice. Without an id (the shorthand spec) it falls back to the
+    (provider, voice, model) triple.
+    """
     if not spec:
         return False
+    scid = spec.get("connection_id")
+    if scid:
+        return scid == (connection_id or "")
     if spec.get("provider") != provider:
         return False
     if spec.get("voice") != voice:
