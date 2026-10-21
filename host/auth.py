@@ -149,8 +149,14 @@ def _start_on_free_tier(conn, uid):
         (uid, "free", "active", "", "", 0, _now(), _now()))
 
 
-def local_register(conn, username, password):
+def local_register(conn, username, password, email=""):
     """Create a local account. Raises AuthError if the name is taken or weak.
+
+    `email` is optional for callers that predate it, but a server that wants the
+    social door to spot an existing account should collect it: a password
+    account's address is the only join key a social sign-in has. The address is
+    stored unverified - nothing here proves the registrant can read that inbox -
+    so it may only ever route a social login to the prove-it door, never merge.
 
     The first account on a fresh server is always allowed and becomes admin;
     every later account needs registration to be open.
@@ -160,6 +166,11 @@ def local_register(conn, username, password):
         raise AuthError("username must be 3-64 characters")
     if not re.match(r"^[a-z0-9._-]+$", name):
         raise AuthError("username may use letters, digits, dot, dash, underscore")
+    email = (email or "").strip().lower()
+    if email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise AuthError("that email address does not look right")
+    if len(email) > 255:
+        raise AuthError("that email address is too long")
     if len(password or "") < 8:
         raise AuthError("password must be at least 8 characters")
     first = account_count(conn) == 0
@@ -172,9 +183,9 @@ def local_register(conn, username, password):
     conn.execute("INSERT OR IGNORE INTO users(id,name,created_at) VALUES(?,?,?)",
                  (uid, name, _now()))
     _start_on_free_tier(conn, uid)
-    conn.execute("INSERT INTO local_accounts(username,user_id,digest,salt,created_at)"
-                 " VALUES(?,?,?,?,?)",
-                 (name, uid, _digest(password, salt), salt, _now()))
+    conn.execute("INSERT INTO local_accounts(username,user_id,digest,salt,email,created_at)"
+                 " VALUES(?,?,?,?,?,?)",
+                 (name, uid, _digest(password, salt), salt, email, _now()))
     if first:
         conn.execute("INSERT OR IGNORE INTO admins(user_id,created_at) VALUES(?,?)",
                      (uid, _now()))
@@ -444,6 +455,30 @@ def account_for_verified_email(conn, email):
         return None
     row = conn.execute(
         "SELECT user_id FROM identities WHERE email=? AND email_verified=1"
+        " ORDER BY created_at LIMIT 1", (email,)).fetchone()
+    return row["user_id"] if row is not None else None
+
+
+def account_for_email(conn, email):
+    """Any account that carries this address, verified or not, or None.
+
+    Wider than account_for_verified_email on purpose: it is the "does this
+    person already have an account?" question, not the "may I merge?" one. A
+    hit here only ever sends a social login to the prove-it door; the address
+    is untrusted, so it can never justify an automatic merge. Checks password
+    accounts first (their address is collected at sign-up), then any social
+    identity.
+    """
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    row = conn.execute(
+        "SELECT user_id FROM local_accounts WHERE email=? AND email<>''"
+        " ORDER BY created_at LIMIT 1", (email,)).fetchone()
+    if row is not None:
+        return row["user_id"]
+    row = conn.execute(
+        "SELECT user_id FROM identities WHERE email=?"
         " ORDER BY created_at LIMIT 1", (email,)).fetchone()
     return row["user_id"] if row is not None else None
 
