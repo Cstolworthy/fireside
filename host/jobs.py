@@ -32,6 +32,77 @@ PROVIDER_CHARS_PER_SEC = {
 _RENDER_LOCK = threading.Lock()
 
 
+# ---- retry: one dropped request is not a dead book ------------------------
+# A speech server can drop a single request (a 429, a reset socket, a cold
+# GPU). That is transient, so a chunk is retried with backoff before it counts
+# as a failure, and one failed chapter no longer aborts the rest of the book.
+SYNTH_ATTEMPTS = int(os.environ.get("FIRESIDE_SYNTH_ATTEMPTS", "4") or 4)
+SYNTH_BACKOFF = float(os.environ.get("FIRESIDE_SYNTH_BACKOFF", "1.5") or 1.5)
+
+
+class Cancelled(Exception):
+    """The user asked this render to stop; the worker unwinds quietly."""
+
+
+# A running render parks a threading.Event under its job id, so a cancel that
+# arrives on the request thread reaches the worker without a DB round trip on
+# every chunk. The registry is process-local: a restart clears it, and any job
+# still marked active at boot is swept to stalled and resumed by hand.
+_CANCELS = {}
+_CANCELS_LOCK = threading.Lock()
+
+
+def cancel_token(job_id):
+    with _CANCELS_LOCK:
+        ev = _CANCELS.get(job_id)
+        if ev is None:
+            ev = threading.Event()
+            _CANCELS[job_id] = ev
+        return ev
+
+
+def request_cancel(job_id):
+    """Mark a job for cancellation. The worker stops before its next chunk."""
+    cancel_token(job_id).set()
+
+
+def is_cancelled(job_id):
+    with _CANCELS_LOCK:
+        ev = _CANCELS.get(job_id)
+    return bool(ev is not None and ev.is_set())
+
+
+def release_cancel(job_id):
+    with _CANCELS_LOCK:
+        _CANCELS.pop(job_id, None)
+
+
+def _synth(speech, text, voice, opts, cred, attempts=None, backoff=None,
+           should_stop=None, sleep=time.sleep):
+    """Speak one chunk, retrying a dropped request with exponential backoff.
+
+    `should_stop` is polled between attempts so a cancel ends the loop instead
+    of waiting out the backoff. On the last failure the original exception is
+    re-raised, and the caller decides whether to skip the chapter or stop.
+    """
+    attempts = SYNTH_ATTEMPTS if attempts is None else attempts
+    backoff = SYNTH_BACKOFF if backoff is None else backoff
+    attempts = max(1, int(attempts))
+    last = None
+    for n in range(attempts):
+        if should_stop and should_stop():
+            raise Cancelled()
+        try:
+            return speech.synth(text, voice, opts, cred)
+        except Exception as e:
+            last = e
+            if n < attempts - 1:
+                if should_stop and should_stop():
+                    raise Cancelled()
+                sleep(max(0.0, backoff) * (2 ** n))
+    raise last
+
+
 def synth_rate(provider):
     return PROVIDER_CHARS_PER_SEC.get(provider or "", DEFAULT_CHARS_PER_SEC)
 
@@ -62,12 +133,13 @@ def sweep_stale(conn, stale_seconds=0):
         cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ",
                                time.gmtime(time.time() - stale_seconds))
         cur = conn.execute(
-            "UPDATE jobs SET status='stalled', error=?, updated_at=?"
-            " WHERE status='running' AND updated_at < ?", (msg, ts, cutoff))
+            "UPDATE jobs SET status='stalled',error=?,updated_at=?"
+            " WHERE status IN ('running','queued') AND updated_at < ?",
+            (msg, ts, cutoff))
     else:
         cur = conn.execute(
-            "UPDATE jobs SET status='stalled', error=?, updated_at=?"
-            " WHERE status='running'", (msg, ts))
+            "UPDATE jobs SET status='stalled',error=?,updated_at=?"
+            " WHERE status IN ('running','queued')", (msg, ts))
     conn.commit()
     return getattr(cur, "rowcount", 0) or 0
 
@@ -85,7 +157,7 @@ def _chapter_row(conn, book_id, idx):
 
 
 def render_chapter(conn, storage, speech, book_id, idx, voice="", model="", speed=1.0,
-                   cred=None, opts=None, voice_label="", pron_rules=None):
+                   cred=None, opts=None, voice_label="", pron_rules=None, job_id=None):
     """Render one chapter. Returns "cached" or "rendered".
 
     Pronunciation fixes are applied to the text here, before the engine sees
@@ -113,14 +185,17 @@ def render_chapter(conn, storage, speech, book_id, idx, voice="", model="", spee
     o.setdefault("speed", speed)
     o.setdefault("model", model)
     buf = bytearray()
+    stop = (lambda: is_cancelled(job_id)) if job_id else None
     for ch in chunks.split(speech, text):
+        if stop and stop():
+            raise Cancelled()
         ctag = pron.token_for(ch, rules)
         ckey = chunks.cache_key(chunks.cid(ch), speech.id, voice, model, speed, ctag)
         hit = conn.execute("SELECT * FROM render_cache WHERE `key`=?", (ckey,)).fetchone()
         if hit:
             buf += storage.get(hit["audio_ref"])
             continue
-        audio = speech.synth(pron.apply(ch, rules), voice, o, cred)
+        audio = _synth(speech, pron.apply(ch, rules), voice, o, cred, should_stop=stop)
         ref = storage.put(audio.data)
         conn.execute(
             "INSERT OR REPLACE INTO render_cache"
@@ -175,13 +250,14 @@ def _write_chapter_audio(conn, book_id, idx, entry, provider, voice, model, spee
                           voice_label=voice_label, pron=pron_tag)
 
 
-def start_job(conn, user_id, book_id, provider, voice="", model="", total=0, kind="render"):
+def start_job(conn, user_id, book_id, provider, voice="", model="", total=0, kind="render",
+              status="running"):
     job_id = uuid.uuid4().hex
     conn.execute(
         "INSERT INTO jobs(id,user_id,book_id,kind,provider,voice,model,status,"
         "total,current,error,created_at,updated_at)"
         " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (job_id, user_id, book_id, kind, provider, voice, model, "running",
+        (job_id, user_id, book_id, kind, provider, voice, model, status,
          total, 0, "", now(), now()))
     conn.commit()
     return job_id
@@ -244,24 +320,44 @@ def render_book(conn, storage, speech, user_id, book_id, voice="", model="",
     todo = [i for i in idxs if i not in already]
     if job_id is None:
         job_id = start_job(conn, user_id, book_id, speech.id, voice, model, len(idxs))
+    if (job(conn, job_id) or {}).get("status") == "cancelled" or is_cancelled(job_id):
+        release_cancel(job_id)
+        return job_id
     done = len(already)
     conn.execute("UPDATE jobs SET current=?,done_chars=?,updated_at=? WHERE id=?",
                  (done, done_chars, now(), job_id))
     conn.commit()
     with _RENDER_LOCK:
+        # A cancel can land while this job waits its turn for the lock, so the
+        # status is read again here: a job told to stop never starts.
+        if (job(conn, job_id) or {}).get("status") == "cancelled" or is_cancelled(job_id):
+            release_cancel(job_id)
+            return job_id
         try:
             if os.nice(0) < 10:            # stay a guest on the box, but never
                 os.nice(10 - os.nice(0))    # drift past nice 10 across renders
         except Exception:
             pass
+        failed = []
+        cancelled = False
         try:
             conn.execute("UPDATE jobs SET status='running',updated_at=? WHERE id=?",
                          (now(), job_id))
             conn.commit()
             for i in todo:
-                render_chapter(conn, storage, speech, book_id, i, voice, model, speed,
-                               cred=cred, opts=opts, voice_label=voice_label,
-                               pron_rules=rules)
+                if is_cancelled(job_id):
+                    cancelled = True
+                    break
+                try:
+                    render_chapter(conn, storage, speech, book_id, i, voice, model, speed,
+                                   cred=cred, opts=opts, voice_label=voice_label,
+                                   pron_rules=rules, job_id=job_id)
+                except Cancelled:
+                    cancelled = True
+                    break
+                except Exception as e:              # one bad chapter is not the book
+                    failed.append((i, "%s: %s" % (type(e).__name__, e)))
+                    continue
                 done += 1
                 cr = conn.execute("SELECT chars FROM chapters WHERE book_id=? AND idx=?",
                                   (book_id, i)).fetchone()
@@ -269,13 +365,35 @@ def render_book(conn, storage, speech, user_id, book_id, voice="", model="",
                 conn.execute("UPDATE jobs SET current=?,done_chars=?,updated_at=? WHERE id=?",
                              (done, done_chars, now(), job_id))
                 conn.commit()
-            conn.execute("UPDATE jobs SET status='done',current=?,updated_at=? WHERE id=?",
-                         (done, now(), job_id))
+            if cancelled:
+                conn.execute("UPDATE jobs SET status='cancelled',error=?,updated_at=?"
+                             " WHERE id=?", ("cancelled by user", now(), job_id))
+            elif failed:
+                chs = ", ".join(str(i + 1) for i, _ in failed)
+                why = "; ".join(msg for _, msg in failed)
+                conn.execute("UPDATE jobs SET status='error',error=?,updated_at=? WHERE id=?",
+                             ("%d chapter(s) failed after retries (ch %s): %s. "
+                              "Convert again to resume; the finished chapters are kept."
+                              % (len(failed), chs, why), now(), job_id))
+            else:
+                conn.execute("UPDATE jobs SET status='done',current=?,updated_at=? WHERE id=?",
+                             (done, now(), job_id))
         except Exception as e:                      # a failed run must say so, not lie
             conn.execute("UPDATE jobs SET status='error',error=?,updated_at=? WHERE id=?",
                          ("%s: %s" % (type(e).__name__, e), now(), job_id))
+        finally:
+            release_cancel(job_id)
         conn.commit()
     return job_id
+
+
+def list_for(conn, user_id, limit=20):
+    """Recent jobs for one user, newest first. The client shows the active
+    ones (queued or running) so a conversion the page forgot is cancellable."""
+    rows = conn.execute(
+        "SELECT * FROM jobs WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT ?",
+        (user_id, int(limit))).fetchall()
+    return [dict(r) for r in rows]
 
 
 def job(conn, job_id):

@@ -255,6 +255,25 @@ class TestApp(unittest.TestCase):
             urllib.request.urlopen(req)
         self.assertEqual(cm.exception.code, 400)
 
+    def test_jobs_list_and_cancel_finished(self):
+        s, imp = self._post("/import", {"user": "u1", "kind": "upload"})
+        bid = imp["book_id"]
+        _, r = self._post("/render", {"user": "u1", "book": bid,
+                                      "provider": "fake", "voice": "v"})
+        s, jl = self._jget("/jobs?user=u1")
+        self.assertEqual(s, 200)
+        self.assertIn(r["job_id"], [j["id"] for j in jl["jobs"]])
+        job = self._wait_job(r["job_id"])
+        self.assertEqual(job["status"], "done")
+        s, c = self._post("/cancel", {"user": "u1", "job": r["job_id"]})
+        self.assertEqual(s, 200)
+        self.assertFalse(c["cancel"])
+        self.assertEqual(c["reason"], "done")
+        import urllib.error
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._post("/cancel", {"user": "u2", "job": r["job_id"]})
+        self.assertEqual(cm.exception.code, 403)
+
     def test_stats_and_listen_over_http(self):
         # chars come from finished render jobs; listen time is an append-only
         # log written by the play heartbeat.
