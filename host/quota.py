@@ -19,13 +19,25 @@ book does, and that is handled by the library, not by a background pass.
 """
 
 # ---- policy constants ------------------------------------------------------
-# The platform tier's included allowance. Blocks (buy more storage, monthly) are
-# not wired yet - the block size is pending; when it lands, allowance adds
-# blocks * STORAGE_BLOCK_BYTES and this stays the only place that knows.
+# Two tiers and one add-on, all named here and nowhere else.
+#
+#   free      500 MB, no charge       the account you get by signing up
+#   platform  2 GB, monthly           the tier that pays for the server
+#   storage   +5 GB per block, monthly, as many blocks as you buy
+#
+# An add-on adds its bytes on top of whatever tier the account is on. Prices are
+# not here on purpose - the payment provider is the authority on what a tier or a
+# block costs; this module only knows what it includes.
+FREE_PLAN = "free"
+PLATFORM_PLAN = "platform"
+STORAGE_ADDON = "storage"
+
+FREE_ALLOWANCE_BYTES = 500 * 1000 ** 2          # 500 MB free, the sign-up default
 PLATFORM_ALLOWANCE_BYTES = 2 * 1000 ** 3        # 2 GB included with the tier
-STORAGE_BLOCK_BYTES = 0                          # pending: size of a storage block
-DEFAULT_PLAN = "platform"
-PLAN_ALLOWANCE = {DEFAULT_PLAN: PLATFORM_ALLOWANCE_BYTES}
+STORAGE_BLOCK_BYTES = 5 * 1000 ** 3             # bytes added per storage block
+PLAN_ALLOWANCE = {FREE_PLAN: FREE_ALLOWANCE_BYTES,
+                  PLATFORM_PLAN: PLATFORM_ALLOWANCE_BYTES}
+DEFAULT_PLAN = PLATFORM_PLAN                    # an unknown plan fails open to this
 
 
 def _shelf_refs(conn, user_id):
@@ -103,19 +115,26 @@ def usage(conn, storage, user_id):
             "blobs": len(refs)}
 
 
-def allowance_bytes(plan):
-    """Included bytes for a plan name.
+def allowance_bytes(plan, blocks=0):
+    """Included bytes for a plan name plus any storage blocks bought.
 
-    An absent or unknown plan gets the platform allowance, not zero: the
-    platform tier is where the included storage lives, payments are held for
-    launch so every account is on it, and a plan name we do not recognise must
-    fail open (generous) rather than lock a user out of their own library.
+    A known tier gives its own allowance; an absent or unknown plan fails open
+    to the platform allowance, never to zero - a plan name we do not recognise
+    (an account created before the free tier existed, or a typo) must not lock a
+    user out of their own library. `blocks` is how many paid storage blocks the
+    account holds; each adds STORAGE_BLOCK_BYTES.
     """
-    p = (plan or "").strip().lower() or DEFAULT_PLAN
-    return PLAN_ALLOWANCE.get(p, PLAN_ALLOWANCE[DEFAULT_PLAN])
+    p = (plan or "").strip().lower()
+    base = PLAN_ALLOWANCE.get(p, PLAN_ALLOWANCE.get(DEFAULT_PLAN,
+                                                   PLATFORM_ALLOWANCE_BYTES))
+    try:
+        n = max(0, int(blocks or 0))
+    except (TypeError, ValueError):
+        n = 0
+    return base + n * STORAGE_BLOCK_BYTES
 
 
-def check_room(conn, storage, user_id, plan, incoming_bytes):
+def check_room(conn, storage, user_id, plan, incoming_bytes, blocks=0):
     """True when adding `incoming_bytes` of storage stays within allowance.
 
     Read-only: it decides, the caller refuses the write. `incoming_bytes` is the
@@ -124,6 +143,6 @@ def check_room(conn, storage, user_id, plan, incoming_bytes):
     passes the full size - so it may refuse a write that would in fact fit. A
     false "no room" is recoverable; a false "room" overspends the box.
     """
-    allowed = allowance_bytes(plan)
+    allowed = allowance_bytes(plan, blocks)
     used = usage(conn, storage, user_id)["own_bytes"]
     return (used + int(incoming_bytes or 0)) <= allowed

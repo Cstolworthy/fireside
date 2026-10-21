@@ -450,6 +450,13 @@
       <button class="btn" id="pronsave" type="button">Save</button>
     </div>
     <div id="pronmsg" class="sub" style="margin-top:8px"></div>
+    <h3 style="margin-top:30px">Plan &amp; storage</h3>
+    <p class="sub">Your tier sets how much you can keep. Storage counts once per book you hold; delete a book and its bytes come back.</p>
+    <div id="planusage" class="small" style="margin-top:8px">loading…</div>
+    <div class="prog" id="planbar" style="margin-top:6px;display:none"><i id="planbarfill"></i></div>
+    <div id="plancards" style="margin-top:14px;display:flex;gap:12px;flex-wrap:wrap"></div>
+    <div id="planblocks" style="margin-top:14px"></div>
+    <div id="planmsg" class="sub" style="margin-top:8px"></div>
     <h3 style="margin-top:30px">Connected accounts</h3>
     <p class="sub">Sign in with Google, GitHub, Microsoft or SimpleLogin instead of a password. Link one here while you are signed in.</p>
     <div id="oauthrows"></div>
@@ -472,6 +479,10 @@
       <p class="sub">Lift the storage or character check for one account. Usage is still counted and shown; this only stops the refusal.</p>
       <div id="admingrants"></div>
       <div id="grantmsg" class="sub" style="margin-top:8px"></div>
+      <h3 style="margin-top:30px">Plans (admin)</h3>
+      <p class="sub">Set an account's tier without a payment (a comp for family or a tester). Allowance and usage follow the tier.</p>
+      <div id="adminplans"></div>
+      <div id="planadminmsg" class="sub" style="margin-top:8px"></div>
     </div>
   </section>
 
@@ -705,7 +716,7 @@ function needUser() { if (!USER) { fail('set your name first (top right)'); thro
 function show(v) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
-  if (v === 'set') { loadPron(); loadLinked(); loadSessions(); }
+  if (v === 'set') { loadPron(); loadLinked(); loadSessions(); loadPlan(); }
 }
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.dataset.v));
 
@@ -1095,6 +1106,7 @@ async function loadSessions() {
     const all = data.all || [];
     wrap.style.display = data.admin ? '' : 'none';
     if (data.admin) loadGrants();
+    if (data.admin) loadAdminPlans();
     if (data.admin) all.forEach(s => {
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:10px;margin-top:8px';
@@ -1152,6 +1164,114 @@ async function loadGrants() {
     };
     row.append(mk('unlimited storage', 'storage_unlimited'));
     row.append(mk('unlimited chars', 'credits_unlimited'));
+    box.append(row);
+  });
+}
+// --- plan & storage --------------------------------------------------------
+function fmtBytes(n) { n = n || 0;
+  if (n >= 1e9) { const g = n / 1e9; return (g % 1 ? g.toFixed(1) : g) + ' GB'; }
+  if (n >= 1e6) return Math.round(n / 1e6) + ' MB';
+  if (n >= 1e3) return Math.round(n / 1e3) + ' KB';
+  return n + ' B'; }
+function usd(c) { return c == null ? '\u2014' : '$' + (c / 100).toFixed(2); }
+let PLAN_CAT = null;
+async function loadPlan() {
+  const usage = $('#planusage'); if (!usage) return;
+  let s = {}, cat = null, bill = null;
+  try { s = await api('/storage') || {}; } catch (e) {}
+  try { cat = await api('/plans'); } catch (e) {}
+  try { bill = await api('/billing'); } catch (e) {}
+  PLAN_CAT = cat;
+  const plan = s.plan || 'platform';
+  usage.textContent = fmtBytes(s.own_bytes) + ' of ' + fmtBytes(s.allowance_bytes) + ' used'
+    + (s.storage_blocks ? ' \u00b7 ' + s.storage_blocks + ' storage block' + (s.storage_blocks > 1 ? 's' : '') : '')
+    + (s.blobs ? ' \u00b7 ' + s.blobs + ' item' + (s.blobs > 1 ? 's' : '') : '');
+  const pct = s.allowance_bytes ? Math.min(100, Math.round(100 * (s.own_bytes || 0) / s.allowance_bytes)) : 0;
+  const bar = $('#planbar');
+  if (bar) { bar.style.display = ''; $('#planbarfill').style.width = pct + '%'; }
+  const cards = $('#plancards');
+  if (cards) {
+    cards.innerHTML = '';
+    ((cat && cat.tiers) || []).forEach(t => {
+      const card = document.createElement('div');
+      card.className = 'addpanel'; card.style.cssText = 'flex:1 1 200px;margin:0';
+      const h = document.createElement('div'); h.style.fontWeight = '600';
+      h.textContent = t.label + ' \u00b7 ' + (t.id === plan ? 'current'
+        : (t.amount_cents ? usd(t.amount_cents) + '/' + (t.interval || 'mo') : 'free'));
+      const p = document.createElement('p'); p.className = 'small'; p.style.margin = '6px 0';
+      p.textContent = fmtBytes(t.included_bytes) + ' included. ' + (t.description || '');
+      card.append(h, p);
+      if (t.id !== plan && t.id !== 'free') {
+        const b = document.createElement('button'); b.className = 'btn'; b.type = 'button';
+        b.textContent = (cat && cat.payments_configured && t.amount_cents != null)
+          ? ('Upgrade to ' + t.label) : 'Price not set yet';
+        b.disabled = !(cat && cat.payments_configured && t.amount_cents != null);
+        b.onclick = () => startCheckout({ plan: t.id });
+        card.append(b);
+      }
+      cards.append(card);
+    });
+  }
+  const blocks = $('#planblocks');
+  if (blocks) {
+    blocks.innerHTML = '';
+    const st = cat && cat.storage;
+    if (st) {
+      const p = document.createElement('p'); p.className = 'sub'; p.style.margin = '0 0 8px';
+      p.textContent = 'Storage blocks: ' + fmtBytes(st.block_bytes) + ' each'
+        + (st.amount_cents != null ? ', ' + usd(st.amount_cents) + '/' + (st.interval || 'mo') : ', price not set yet')
+        + '. You have ' + (s.storage_blocks || 0) + '.';
+      const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:8px;align-items:center';
+      const inp = document.createElement('input'); inp.type = 'number'; inp.min = '1'; inp.value = '1';
+      inp.style.maxWidth = '90px';
+      const b = document.createElement('button'); b.className = 'btn'; b.type = 'button'; b.textContent = 'Buy blocks';
+      b.disabled = !(cat && cat.payments_configured && st.amount_cents != null);
+      b.onclick = () => startCheckout({ plan: st.addon, quantity: Math.max(1, parseInt(inp.value || '1', 10)) });
+      row.append(inp, b); blocks.append(p, row);
+    }
+  }
+  $('#planmsg').textContent = (bill && bill.payments_configured) ? ''
+    : 'Payments are not configured on this server yet, so buying is off. The tiers and prices show the real shape.';
+}
+async function startCheckout(body) {
+  const msg = $('#planmsg');
+  try {
+    body.return_url = location.origin + location.pathname;
+    const d = await jpost('/billing/checkout', body);
+    if (d.url) { location.href = d.url; return; }
+    msg.textContent = d.detail || 'checkout did not return a page';
+  } catch (e) { msg.textContent = e.message || 'could not start checkout'; }
+}
+async function confirmCheckout(ref) {
+  try {
+    const d = await jpost('/billing/confirm', { reference: ref });
+    if (d.subscription) idle('You are on the ' + d.subscription.plan + ' plan.');
+    else if (d.addon) idle('Storage updated. You now have ' + d.addon.quantity + ' block(s).');
+  } catch (e) { fail(e); }
+}
+async function loadAdminPlans() {
+  const box = $('#adminplans'); if (!box) return;
+  let d;
+  try { d = await api('/admin/plans'); } catch (e) { return; }
+  box.innerHTML = '';
+  (d.users || []).forEach(u => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:14px;margin-top:8px';
+    const name = document.createElement('div'); name.style.flex = '1 1 0';
+    name.textContent = u.username + (u.admin ? ' (admin)' : '')
+      + (u.plan ? ' \u00b7 ' + u.plan + (u.plan_provider ? ' (' + u.plan_provider + ')' : '') : '');
+    row.append(name);
+    const sel = document.createElement('select');
+    (d.tiers || []).forEach(t => {
+      const o = document.createElement('option'); o.value = t; o.textContent = t;
+      o.selected = (t === u.plan); sel.append(o);
+    });
+    sel.onchange = async () => {
+      try { await jpost('/admin/plan', { user: u.user_id, plan: sel.value });
+            $('#planadminmsg').textContent = 'Set ' + u.username + ' to ' + sel.value + '.'; loadAdminPlans(); }
+      catch (e) { $('#planadminmsg').textContent = e.message || 'could not save'; }
+    };
+    row.append(sel);
     box.append(row);
   });
 }
@@ -2436,6 +2556,11 @@ window.addEventListener('load', async () => {
     if (lp.get('linked')) {
       idle('Linked with ' + lp.get('linked') + '. You can sign in that way from now on.');
       history.replaceState({}, '', location.pathname);
+    }
+    if (lp.get('checkout')) {
+      const ref = lp.get('checkout');
+      history.replaceState({}, '', location.pathname);
+      confirmCheckout(ref);
     }
   } catch (_) {}
 });

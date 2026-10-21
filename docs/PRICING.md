@@ -77,8 +77,53 @@ refuses ("purchases are held until a payment provider lands") until an operator
 registers one. `GET /credits` is read-only (balance, rate, bundles);
 `POST /credits/purchase` is the only route that turns a payment into characters.
 
-Still to build: the platform+storage monthly tier (a recurring subscription
-separate from character capacity), and the Stripe provider once it is registered.
+Still to build: the payment provider once it is registered (the tier and storage
+screens ship first, priced from the provider when one exists).
+
+## The plan model (2026-10-21)
+
+Two tiers and one add-on, named in `host/quota.py` and priced by the provider:
+
+| plan | included | price |
+|------|----------|-------|
+| free | 500 MB | none; the sign-up default |
+| platform | 2 GB | provider's monthly price |
+| storage | +5 GB per block | provider's monthly price per block |
+
+An account on **free** is put there when its user row is first created
+(`auth._start_on_free_tier`). An account with **no plan row at all** (created
+before the free tier existed) fails open to the platform allowance rather than
+being cut to 500 MB - a plan name we do not recognise must never lock a user out
+of their own library.
+
+**Storage blocks are an add-on, not a tier.** They live in their own table and
+add bytes on top of whatever tier you are on; buying blocks never moves you off
+platform/free. `GET /plans` returns the tiers and the block for the screen;
+`GET /storage` reports `storage_blocks` and the summed `allowance_bytes`.
+
+**A comp is a plan row with `provider='admin'`.** An admin sets an account's tier
+from the plans screen (`POST /admin/plan`); nothing downstream can tell a comped
+row from a paid one except that field.
+
+### Does the monthly cover the cost of hosting a user?
+
+The marginal cost of one user is small; the fixed cost of the box is not, so the
+tier must be read against how many people are on it.
+
+- Blob storage: ~$0.018/GB/mo (hot LRS, US). 2 GB stored is ~4c/mo.
+- Egress: $0.087/GB after the first 100 GB/mo. A heavy listener (a few hours a
+day) is maybe 20-30c/mo.
+- Per-user marginal, all in: **roughly $0.15-0.35/mo.**
+- Fixed: one always-on Container App replica + a small MySQL Flexible Server is
+  on the order of **$55-60/mo** together, shared across everyone.
+
+So at the $3/mo platform tier a user's own cost is covered with room to spare,
+but the fixed cost is carried by the crowd: **~20 subs break even on the box,
+~50 leave a real margin.** A 5 GB storage block costs us ~9c/mo and sells for
+$1/mo. These fixed figures are list-price estimates from the Azure calculator,
+not a measured bill; the honest next step is to check them against the live
+invoice once there are users. The egress figure is the one to watch, since
+streaming scales with listening, not with storage.
 
 ## Storage: a held book bills its own bytes
 
@@ -91,9 +136,9 @@ its renditions, its cover - counts against that user's plan, once per blob.
   never per copy. This was a deliberate simplification: the refcount/auto-release
   model was more code and more ways to be wrong, and it charged nobody for the
   common case.
-- **The allowance is the platform tier's** (2 GB at launch). Bytes above it bill.
-  An account with no plan is on the platform tier (payments are held for launch),
-  so it is never locked out of its own library.
+- **The allowance is the account's plan plus any storage blocks** (free 500 MB,
+  platform 2 GB, +5 GB per block). An account with no plan row fails open to the
+  platform tier, so it is never locked out of its own library.
 - **A write that would cross the allowance is refused up front** (import, cover,
   render). Existing bytes are never silently removed to make room.
 - **Promote-to-shared is parked.** Handing a book to the shared catalog so it

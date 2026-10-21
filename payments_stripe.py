@@ -76,12 +76,16 @@ def _http_get(url, params=None, auth=None, timeout=None):
 
 # The plans this provider can sell. The provider is the sole authority on price.
 # The platform tier is the recurring one; character capacity is not a plan - it is
-# bought one-shot through charge(). Storage add-on blocks are not sold yet, because
-# we do not enforce a storage quota until that is decided.
+# bought one-shot through charge(). The storage add-on is the second recurring
+# plan: a monthly block you buy N of, which the host records as an add-on rather
+# than a tier. Its byte size lives in host/quota.py (STORAGE_BLOCK_BYTES).
 DEFAULT_PLANS = [
     Plan(id="platform", label="fireside platform", amount_cents=300,
          currency="usd", interval="month",
          description="Server, updates, and 2GB storage. The platform only."),
+    Plan(id="storage", label="fireside storage +5 GB", amount_cents=100,
+         currency="usd", interval="month",
+         description="Add 5 GB of storage, monthly. Buy as many blocks as you need."),
 ]
 
 
@@ -189,11 +193,16 @@ class StripeProvider:
         return None
 
     def checkout(self, plan_id, meta=None):
-        """Create a Stripe-hosted Checkout Session for a plan, return its URL."""
+        """Create a Stripe-hosted Checkout Session for a plan, return its URL.
+        `meta['quantity']` buys more than one of a plan (storage blocks)."""
         meta = meta or {}
         plan = self._plan(plan_id)
         if plan is None:
             return Checkout(False, detail="unknown plan %r" % plan_id)
+        try:
+            quantity = max(1, int(meta.get("quantity") or 1))
+        except (TypeError, ValueError):
+            quantity = 1
         return_url = (meta.get("return_url") or "").strip()
         if return_url:
             sep = "&" if "?" in return_url else "?"
@@ -202,12 +211,13 @@ class StripeProvider:
             success_url = ""
         data = {
             "mode": "subscription" if plan.interval else "payment",
-            "line_items[0][quantity]": "1",
+            "line_items[0][quantity]": str(quantity),
             "line_items[0][price_data][currency]": plan.currency,
             "line_items[0][price_data][unit_amount]": str(plan.amount_cents),
             "line_items[0][price_data][product_data][name]": plan.label or plan.id,
             "metadata[user]": str(meta.get("user", "")),
             "metadata[plan]": plan.id,
+            "metadata[quantity]": str(quantity),
         }
         if plan.interval:
             data["line_items[0][price_data][recurring][interval]"] = plan.interval
@@ -246,6 +256,10 @@ class StripeProvider:
         md = j.get("metadata") or {}
         plan = md.get("plan", "")
         user = md.get("user", "")
+        try:
+            quantity = int(md.get("quantity") or 0)
+        except (TypeError, ValueError):
+            quantity = 0
         complete = j.get("status") == "complete"
         paid = j.get("payment_status") in ("paid", "no_payment_required")
         sub = j.get("subscription") or {}
@@ -261,7 +275,7 @@ class StripeProvider:
                                 reference=ref, detail="not paid")
         return Subscription(True, user=user, plan=plan, status=status or "active",
                             current_period_end=period_end, reference=ref,
-                            detail="ok")
+                            detail="ok", quantity=quantity)
 
 
 def from_env():
