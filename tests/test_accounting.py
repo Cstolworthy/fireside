@@ -73,6 +73,15 @@ class TestAccounting(unittest.TestCase):
         pinned = {"provider": "openai", "voice": "af_heart", "model": "kokoro"}
         self.assertFalse(acc.sale_connection_matches(pinned, "openai", "af_heart", "other"))
 
+    def test_a_named_sale_connection_matches_by_id(self):
+        spec = {"connection_id": "c1", "provider": "azure", "voice": "en-US-Ava"}
+        # the id decides, so every voice on that connection is resold
+        self.assertTrue(acc.sale_connection_matches(spec, "azure", "en-US-Ava", "", "c1"))
+        self.assertTrue(acc.sale_connection_matches(spec, "azure", "en-US-Other", "", "c1"))
+        # a render through any other connection is never metered, even the same voice
+        self.assertFalse(acc.sale_connection_matches(spec, "azure", "en-US-Ava", "", "c2"))
+        self.assertFalse(acc.sale_connection_matches(spec, "azure", "en-US-Ava", "", ""))
+
 
 if __name__ == "__main__":
     unittest.main()
