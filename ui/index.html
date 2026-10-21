@@ -318,6 +318,7 @@
     <button data-v="lib" class="on">Library</button>
     <button data-v="play">Now playing</button>
     <button data-v="sand">Try a voice</button>
+    <button data-v="plans">Plans</button>
   </nav>
 </header>
 <main>
@@ -474,6 +475,7 @@
       <div id="plancards" style="margin-top:14px;display:flex;gap:12px;flex-wrap:wrap"></div>
       <div id="planblocks" style="margin-top:14px"></div>
       <div id="planmsg" class="sub" style="margin-top:8px"></div>
+      <div style="margin-top:14px"><button class="btn" id="gotoplans" type="button">Compare plans and buy →</button></div>
     </div>
 
     <div class="setpanel" data-p="account">
@@ -508,6 +510,36 @@
         <div id="planadminmsg" class="sub" style="margin-top:8px"></div>
       </div>
     </div>
+  </section>
+
+  <!-- plans: a page for buying the platform, said plainly -------------------- -->
+  <section class="view" id="v-plans">
+    <h2>Get fireside</h2>
+    <p class="sub">The reader is free to try. A plan buys the platform, and the platform is only half the story.</p>
+
+    <div class="addpanel" style="margin-top:16px;border-color:var(--flame)">
+      <div style="font-weight:600">Read this before you buy</div>
+      <p class="sub" style="margin:8px 0 0">A subscription buys <b>the platform</b>: this server, the reader app, your storage, and updates. It does <b>not</b> include a voice.</p>
+      <p class="sub" style="margin:8px 0 0">The voice is what actually reads to you, and it comes from a speech provider you connect yourself (your own Azure Speech key, or a server a friend shares with you). <b>Without a voice provider the platform has nothing to read with</b>, so a subscription on its own is close to worthless.</p>
+      <p class="sub" style="margin:8px 0 0">Buy the platform only if you already have a voice provider, or you are about to add one. If you have neither, stay on the free plan and connect a voice first.</p>
+    </div>
+
+    <h3 style="margin-top:28px">The plans</h3>
+    <div id="pageplans" style="margin-top:14px;display:flex;gap:14px;flex-wrap:wrap"></div>
+    <p class="sub" style="margin-top:12px">No plan includes a voice provider. That part is always yours to plug in.</p>
+
+    <h3 style="margin-top:28px">What every plan includes</h3>
+    <ul style="margin:10px 0 0;padding-left:20px;line-height:1.9">
+      <li>The reader: add EPUBs or story links, chapters, resume, and a play queue.</li>
+      <li>Bring your own voice provider: your key sits on the server, never in this browser.</li>
+      <li>Per-book voices, and a pronunciation list for the words a voice gets wrong.</li>
+      <li>Install to your home screen; playback keeps going with the screen locked.</li>
+    </ul>
+
+    <h3 style="margin-top:28px">Storage blocks</h3>
+    <div id="pageblocks" style="margin-top:12px"></div>
+
+    <p class="sub" id="pageplanmsg" style="margin-top:16px"></p>
   </section>
 
   <div class="err" id="err"></div>
@@ -742,6 +774,7 @@ function show(v) {
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
   if (v === 'set') { loadPron(); loadLinked(); loadSessions(); loadPlan();
     setSetTab(localStorage.getItem(SETTAB_KEY)); }
+  if (v === 'plans') loadPlansPage();
 }
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.dataset.v));
 
@@ -1274,8 +1307,8 @@ async function loadPlan() {
   $('#planmsg').textContent = (bill && bill.payments_configured) ? ''
     : 'Payments are not configured on this server yet, so buying is off. The tiers and prices show the real shape.';
 }
-async function startCheckout(body) {
-  const msg = $('#planmsg');
+async function startCheckout(body, msgEl) {
+  const msg = msgEl || $('#planmsg');
   try {
     body.return_url = location.origin + location.pathname;
     const d = await jpost('/billing/checkout', body);
@@ -1290,6 +1323,81 @@ async function confirmCheckout(ref) {
     else if (d.addon) idle('Storage updated. You now have ' + d.addon.quantity + ' block(s).');
   } catch (e) { fail(e); }
 }
+// --- plans page: the offering, rendered for the buy page --------------------
+// Same catalog the settings tab reads, laid out as a sales page: what each tier
+// is, what it includes, and the one thing it does not (a voice).
+const PLAN_BULLETS = {
+  free: ['The reader and this server', 'Add books by EPUB or link',
+         'Voices: only the ones you connect yourself'],
+  platform: ['Everything in the free plan', 'The server, the app, and updates',
+             'More storage for your shelf',
+             'Voices: still not included, still yours to connect'],
+};
+function planCard(t, plan, cat) {
+  const on = t.id === plan;
+  const card = document.createElement('div');
+  card.className = 'addpanel';
+  card.style.cssText = 'flex:1 1 240px;margin:0' + (on ? ';border-color:var(--flame)' : '');
+  const h = document.createElement('div'); h.style.cssText = 'font-weight:600;font-size:17px';
+  h.textContent = t.label || t.id; card.append(h);
+  const price = document.createElement('div'); price.style.cssText = 'margin-top:6px;font-size:22px;font-weight:600';
+  price.textContent = t.amount_cents == null ? 'price not set'
+    : (t.amount_cents ? usd(t.amount_cents) + '/' + (t.interval || 'mo') : 'free');
+  card.append(price);
+  const sub = document.createElement('p'); sub.className = 'sub'; sub.style.margin = '8px 0 0';
+  sub.textContent = fmtBytes(t.included_bytes) + ' of storage included.';
+  card.append(sub);
+  const ul = document.createElement('ul');
+  ul.style.cssText = 'margin:12px 0 0;padding-left:20px;line-height:1.8';
+  (PLAN_BULLETS[t.id] || []).forEach(x => { const li = document.createElement('li'); li.textContent = x; ul.append(li); });
+  card.append(ul);
+  if (on) {
+    const tag = document.createElement('p'); tag.className = 'sub'; tag.style.margin = '12px 0 0';
+    tag.textContent = 'This is your current plan.'; card.append(tag);
+  } else if (t.id !== 'free') {
+    const b = document.createElement('button'); b.className = 'btn'; b.type = 'button';
+    b.style.marginTop = '12px';
+    const buyable = cat && cat.payments_configured && t.amount_cents != null;
+    b.textContent = buyable ? ('Buy ' + (t.label || t.id)) : 'Not for sale yet';
+    b.disabled = !buyable;
+    b.onclick = () => startCheckout({ plan: t.id }, $('#pageplanmsg'));
+    card.append(b);
+  }
+  return card;
+}
+async function loadPlansPage() {
+  const box = $('#pageplans'); if (!box) return;
+  let s = {}, cat = null;
+  try { s = await api('/storage') || {}; } catch (e) {}
+  try { cat = await api('/plans'); } catch (e) {}
+  if (cat) PLAN_CAT = cat;
+  const plan = s.plan || 'platform';
+  box.innerHTML = '';
+  ((cat && cat.tiers) || []).forEach(t => box.append(planCard(t, plan, cat)));
+  if (!cat || !cat.tiers) box.textContent = 'Could not load the plans just now.';
+  const blocks = $('#pageblocks');
+  if (blocks) {
+    blocks.innerHTML = '';
+    const st = cat && cat.storage;
+    if (st) {
+      const p = document.createElement('p'); p.className = 'sub'; p.style.margin = '0 0 8px';
+      p.textContent = 'Storage blocks: ' + fmtBytes(st.block_bytes) + ' each'
+        + (st.amount_cents != null ? ', ' + usd(st.amount_cents) + '/' + (st.interval || 'mo') : ', price not set yet')
+        + '. You have ' + (s.storage_blocks || 0) + '.';
+      const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:8px;align-items:center';
+      const inp = document.createElement('input'); inp.type = 'number'; inp.min = '1'; inp.value = '1';
+      inp.style.maxWidth = '90px';
+      const b = document.createElement('button'); b.className = 'btn'; b.type = 'button'; b.textContent = 'Buy blocks';
+      b.disabled = !(cat && cat.payments_configured && st.amount_cents != null);
+      b.onclick = () => startCheckout({ plan: st.addon, quantity: Math.max(1, parseInt(inp.value || '1', 10)) }, $('#pageplanmsg'));
+      row.append(inp, b); blocks.append(p, row);
+    }
+  }
+  const msg = $('#pageplanmsg');
+  msg.textContent = (cat && cat.payments_configured) ? ''
+    : 'Payments are not switched on yet, so the buy buttons are off. The plans and what they include are the real shape.';
+}
+if ($('#gotoplans')) $('#gotoplans').onclick = () => show('plans');
 async function loadAdminPlans() {
   const box = $('#adminplans'); if (!box) return;
   let d;
