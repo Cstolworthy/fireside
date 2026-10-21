@@ -37,8 +37,15 @@ class OpenAICompat:
         return (cred.get("base_url") or DEFAULT_BASE).rstrip("/")
 
     def list_voices(self, cred):
+        hdr = {}
+        if cred.get("key"):
+            # a gated server (our tower) needs the token to answer the list too,
+            # not just synth; without it the menu silently falls back to one voice
+            hdr["Authorization"] = "Bearer " + cred["key"]
         try:
-            with urllib.request.urlopen(self._base(cred) + "/v1/audio/voices", timeout=15) as r:
+            req = urllib.request.Request(self._base(cred) + "/v1/audio/voices",
+                                         headers=hdr)
+            with urllib.request.urlopen(req, timeout=15) as r:
                 data = json.loads(r.read().decode())
         except Exception:
             # voices are a convenience; a working server with no list still speaks
