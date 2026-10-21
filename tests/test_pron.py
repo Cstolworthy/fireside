@@ -154,6 +154,78 @@ class TestPronImpact(unittest.TestCase):
         self.assertEqual(sorted(c["idx"] for c in im["books"][0]["chapters"]), [0, 2])
 
 
+class ChunkedSpeech:
+    """A provider that speaks one paragraph per request, like the real ones do
+    every CHUNK_TARGET characters."""
+    id = "chunked"
+    ext = "mp3"
+    mime = "audio/mpeg"
+    needs_key = False
+
+    def __init__(self):
+        self.calls = 0
+        self.texts = []
+
+    def synth(self, text, voice, opts, cred):
+        self.calls += 1
+        self.texts.append(text)
+        return Audio(data=text.encode(), ext="mp3", mime="audio/mpeg")
+
+    def split(self, text):
+        return text.split("\n\n")
+
+    def list_voices(self, cred):
+        return []
+
+
+class TestChunkRerender(unittest.TestCase):
+    """A word change is the re-render unit: only the chunk holding the word is
+    synthesised again, not the whole chapter."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="fireside-chunk-")
+        self.storage = LocalBackend(self.tmp + "/blobs")
+        self.conn = connect(":memory:")
+        library.create_user(self.conn, "u1")
+        book = Book(title="B", chapters=[
+            Chapter("c0", "plain paragraph.\n\nanother plain one."),
+            Chapter("c1", "first half.\n\nQui-Gon spoke."),
+        ])
+        self.bid = library.add_book(self.conn, self.storage, "u1", book)
+        self.speech = ChunkedSpeech()
+
+    def test_word_change_reencodes_one_chunk_not_the_chapter(self):
+        jobs.render_book(self.conn, self.storage, self.speech, "u1", self.bid, voice="v1")
+        self.assertEqual(self.speech.calls, 4)  # 2 chapters x 2 chunks
+        self.speech.calls = 0
+        self.speech.texts = []
+        pron.save(self.conn, "u1", [{"from": "Qui-Gon", "to": "Kwai-Gon"}])
+        jobs.render_book(self.conn, self.storage, self.speech, "u1", self.bid, voice="v1")
+        self.assertEqual(self.speech.calls, 1, "only the chunk holding the word re-synths")
+        self.assertEqual(self.speech.texts, ["Kwai-Gon spoke."])
+
+    def test_impact_reports_new_audio_estimate(self):
+        jobs.render_book(self.conn, self.storage, self.speech, "u1", self.bid, voice="v1")
+        pron.save(self.conn, "u1", [{"from": "Qui-Gon", "to": "Kwai-Gon"}])
+        im = pron.impact(self.conn, self.storage, "u1",
+                         split_for=lambda p: self.speech.split)
+        self.assertEqual(im["chapters_affected"], 1)
+        self.assertEqual(im["chars_to_synth"], len("Qui-Gon spoke."))
+        self.assertGreater(im["est_seconds"], 0)
+        # without a split function, the whole chapter is the safe upper bound
+        im2 = pron.impact(self.conn, self.storage, "u1")
+        self.assertGreater(im2["chars_to_synth"], im["chars_to_synth"])
+
+    def test_impact_clears_after_the_reencode(self):
+        jobs.render_book(self.conn, self.storage, self.speech, "u1", self.bid, voice="v1")
+        pron.save(self.conn, "u1", [{"from": "Qui-Gon", "to": "Kwai-Gon"}])
+        jobs.render_book(self.conn, self.storage, self.speech, "u1", self.bid,
+                         voice="v1", only=[1])
+        self.assertEqual(
+            pron.impact(self.conn, self.storage, "u1",
+                        split_for=lambda p: self.speech.split)["chapters_affected"], 0)
+
+
 class TestPronRoutes(unittest.TestCase):
     def test_set_then_get_over_the_app(self):
         from host.app import App

@@ -23,6 +23,9 @@ class Local:
     def chunks(self, text):
         return 1
 
+    def split(self, text):
+        return [text]
+
     def cost_per_1m_chars(self, cred):
         return 0.0
 

@@ -947,19 +947,28 @@ async function showPronImpact() {
   PRONIMPACT = im;
   if (!im || !im.chapters_affected) return;
   const n = im.chapters_affected, m = im.books_affected;
+  const secs = im.est_seconds || 0;
+  const t = secs < 1 ? 'under a second'
+    : secs < 90 ? (Math.max(1, Math.round(secs)) + 's')
+    : (Math.round(secs / 60) + ' min');
   $('#pimsg').textContent = n + ' chapter' + (n === 1 ? '' : 's')
     + ' in ' + m + ' book' + (m === 1 ? '' : 's')
-    + ' already have audio this change makes wrong. Re-encode only those?';
+    + ' already have audio this change makes wrong. Only the affected chunks'
+    + ' re-encode, about ' + t + ' of new audio. Re-encode those?';
   const box = $('#pilist'); box.innerHTML = '';
   let any = false;
   im.books.forEach(b => b.renditions.forEach(r => {
     const conn = findConnFor(r.provider);
     if (conn) any = true;
+    const est = (r.est_seconds || 0);
+    const estTxt = est < 90 ? (Math.max(1, Math.round(est)) + 's')
+      : (Math.round(est / 60) + ' min');
     const row = document.createElement('div');
     row.className = 'small';
     row.textContent = b.title + ' - ' + r.chapters.length + ' chapter'
       + (r.chapters.length === 1 ? '' : 's')
       + (r.voice ? (' in "' + (r.voice_label || r.voice) + '"') : '')
+      + '  (~' + estTxt + ' to make)'
       + (conn ? '' : '  (no live connection for ' + (r.provider || 'this server')
                    + ' - open the book to convert)');
     box.append(row);

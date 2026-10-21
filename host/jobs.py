@@ -6,13 +6,12 @@ same voice is one render no matter which user or which book asked for it. The
 job row carries progress; the client knows nothing about the pipeline.
 """
 
-import hashlib
 import os
 import threading
 import time
 import uuid
 
-from host import library, pron
+from host import chunks, library, pron
 from host.db import now
 
 
@@ -74,10 +73,7 @@ def sweep_stale(conn, stale_seconds=0):
 
 
 def render_key(text_ref, provider, voice, model, speed, extra=""):
-    raw = "|".join([text_ref or "", provider or "", voice or "",
-                    model or "", "%.3f" % float(speed if speed is not None else 1.0),
-                    extra or ""])
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return chunks.cache_key(text_ref, provider, voice, model, speed, extra)
 
 
 def _chapter_row(conn, book_id, idx):
@@ -94,8 +90,13 @@ def render_chapter(conn, storage, speech, book_id, idx, voice="", model="", spee
 
     Pronunciation fixes are applied to the text here, before the engine sees
     it, so every engine gets them (including the local one that cannot take
-    phonemes). The cache key carries a tag for only the rules that match this
-    chapter, so adding a rule elsewhere leaves this chapter's audio alone.
+    phonemes). The chapter cache key carries a tag for only the rules that
+    match this chapter, so a rule elsewhere leaves this chapter's audio alone.
+
+    When the chapter has to be built, it is built from the provider's request
+    chunks and each chunk is cached on its own key. A word change that lands in
+    one chunk re-synthesises just that chunk and reuses the rest, so the user
+    waits for a fraction of the audio, not the whole chapter.
     """
     row = _chapter_row(conn, book_id, idx)
     text = storage.get(row["text_ref"]).decode("utf-8")
@@ -108,22 +109,56 @@ def render_chapter(conn, storage, speech, book_id, idx, voice="", model="", spee
                              voice_label=voice_label, pron_tag=extra)
         conn.commit()
         return "cached"
-    text = pron.apply(text, rules)
     o = dict(opts or {})
     o.setdefault("speed", speed)
     o.setdefault("model", model)
-    audio = speech.synth(text, voice, o, cred)
-    ref = storage.put(audio.data)
+    buf = bytearray()
+    for ch in chunks.split(speech, text):
+        ctag = pron.token_for(ch, rules)
+        ckey = chunks.cache_key(chunks.cid(ch), speech.id, voice, model, speed, ctag)
+        hit = conn.execute("SELECT * FROM render_cache WHERE `key`=?", (ckey,)).fetchone()
+        if hit:
+            buf += storage.get(hit["audio_ref"])
+            continue
+        audio = speech.synth(pron.apply(ch, rules), voice, o, cred)
+        ref = storage.put(audio.data)
+        conn.execute(
+            "INSERT OR REPLACE INTO render_cache"
+            "(`key`,audio_ref,audio_bytes,duration_s,provider,voice,model,created_at)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (ckey, ref, len(audio.data), None, speech.id, voice, model, now()))
+        buf += audio.data
+    data = bytes(buf)
+    ref = storage.put(data)
     conn.execute(
         "INSERT OR REPLACE INTO render_cache"
         "(`key`,audio_ref,audio_bytes,duration_s,provider,voice,model,created_at)"
         " VALUES(?,?,?,?,?,?,?,?)",
-        (key, ref, len(audio.data), None, speech.id, voice, model, now()))
-    entry = {"audio_ref": ref, "audio_bytes": len(audio.data), "duration_s": None}
+        (key, ref, len(data), None, speech.id, voice, model, now()))
+    entry = {"audio_ref": ref, "audio_bytes": len(data), "duration_s": None}
     _write_chapter_audio(conn, book_id, idx, entry, speech.id, voice, model, speed,
                          voice_label=voice_label, pron_tag=extra)
     conn.commit()
     return "rendered"
+
+
+def stale_chars(conn, storage, text, rules, split, provider, voice, model, speed):
+    """How many characters a re-render actually has to synthesise.
+
+    Walks the same chunks the renderer would, and counts only those with no
+    cached audio for the current rules. `split` is the provider's chunk
+    function; without one, the text is a single unit and the whole thing counts.
+    """
+    if not callable(split):
+        return len(text or "")
+    stale = 0
+    for ch in split(text):
+        ctag = pron.token_for(ch, rules)
+        ckey = chunks.cache_key(chunks.cid(ch), provider, voice, model, speed, ctag)
+        if conn.execute("SELECT 1 FROM render_cache WHERE `key`=?", (ckey,)).fetchone():
+            continue
+        stale += len(ch)
+    return stale
 
 
 def _write_chapter_audio(conn, book_id, idx, entry, provider, voice, model, speed,

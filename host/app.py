@@ -1106,7 +1106,14 @@ class App:
         if not uid:
             return 401, {"error": "auth required"}
         return 200, pron.impact(self.conn, self.storage, uid,
-                                q.get("book") or None)
+                                q.get("book") or None,
+                                split_for=self._speech_split)
+
+    def _speech_split(self, provider):
+        """A provider's chunk function, or None. Lets the impact report measure
+        the truly new audio instead of assuming a whole chapter re-renders."""
+        p = self.host.speech.get(provider)
+        return getattr(p.obj, "split", None) if p else None
 
     # ---- auth (social sign-in; the session lives in sqlite) ------------------
 
