@@ -678,3 +678,33 @@ class TestSelectToPlay(unittest.TestCase):
         self.assertIn("seekFraction", html)
         self.assertIn("$a.currentTime", html)
         self.assertIn("$('#selplay').onclick = playFromSelection", html)
+
+
+class TestGetStarted(unittest.TestCase):
+    """A new account lands on an empty library with no idea the shape is
+    book -> voice -> listen, and the voice step is invisible until it blocks
+    them. The first-run card lives on that screen, ticks each step from live
+    state, and gets out of the way once a chapter is voiced (or dismissed)."""
+
+    def _html(self):
+        with open(os.path.join(UI_DIR, "index.html"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_card_is_on_the_library_screen(self):
+        html = self._html()
+        lib = html.split('id="v-lib"')[1].split("</section>")[0]
+        for anchor in ('id="welcome"', 'id="wsteps"', 'id="wdismiss"'):
+            self.assertIn(anchor, lib)
+
+    def test_steps_come_from_live_state(self):
+        html = self._html()
+        for anchor in ("function renderWelcome", "welcomeHidden", "WELCOME_KEY",
+                       "renderWelcome();"):
+            self.assertIn(anchor, html)
+        self.assertIn("b.rendered > 0", html)          # voiced = a chapter exists
+        self.assertIn("c.enabled !== false", html)     # a real connected voice
+
+    def test_it_steps_aside_after_a_voiced_chapter_or_dismiss(self):
+        html = self._html()
+        self.assertIn("voiced) { el.hidden = true; return; }", html)
+        self.assertIn("localStorage.setItem(WELCOME_KEY, USER)", html)

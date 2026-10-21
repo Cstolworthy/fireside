@@ -199,6 +199,21 @@
   /* add belongs on the library screen */
   .addpanel{margin-top:16px;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--surface)}
   .addpanel[hidden]{display:none}
+  /* get started: the first-run guide, on an empty or unvoiced library */
+  .welcome{margin-top:24px;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--surface)}
+  .welcome[hidden]{display:none}
+  .welcome .whead{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .welcome h2{margin:0;font-size:18px}
+  .wsteps{list-style:none;padding:0;margin:14px 0 0;display:flex;flex-direction:column;gap:12px}
+  .wsteps li{display:flex;align-items:flex-start;gap:12px}
+  .wsteps .wmark{flex:0 0 22px;width:22px;height:22px;border-radius:50%;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font:600 12px/1 var(--sans,inherit);color:var(--soft)}
+  .wsteps li.done .wmark{border-color:var(--flame);color:var(--flame)}
+  .wsteps li.locked{opacity:.5}
+  .wsteps .wbody{flex:1;min-width:0}
+  .wsteps .wlabel{font-weight:600;font-size:14px}
+  .wsteps li.done .wlabel{color:var(--soft);text-decoration:line-through}
+  .wsteps .whint{color:var(--faint);font-size:13px;margin-top:2px}
+  .wsteps .wgo{flex:0 0 auto;align-self:flex-start}
   /* settings: one card per voice server */
   .conncard{border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:12px 0;background:var(--surface)}
   .connhead{display:flex;align-items:center;gap:10px;margin-bottom:6px}
@@ -335,6 +350,14 @@
   <section class="view on" id="v-lib">
     <div id="resume" class="resume"></div>
     <div id="convjobs" class="convjobs" hidden></div>
+    <div id="welcome" class="welcome" hidden>
+      <div class="whead">
+        <h2>Get started</h2>
+        <button class="btn quiet" id="wdismiss" type="button">Dismiss</button>
+      </div>
+      <p class="sub">Fireside reads a book with a voice you control. Three steps.</p>
+      <ol class="wsteps" id="wsteps"></ol>
+    </div>
     <div style="margin-top:28px"><button class="btn" id="addbtn" type="button">＋ Add a book</button></div>
     <div class="addpanel" id="addpanel" hidden>
       <p class="sub">Drop an EPUB or paste a story link. Fireside reads it, breaks it into chapters, and voices each one.</p>
@@ -860,6 +883,7 @@ function connById(id) { return CONNS.find(c => c.id === id); }
 async function loadConnections() {
   try { const d = await api('/connections'); CONNS = d.connections || []; PREFS = d; }
   catch (_) { CONNS = []; }
+  renderWelcome();
   renderConns(); renderDefaultPicker(); renderSandboxPicker();
 }
 
@@ -1920,8 +1944,53 @@ async function loadLibrary() {
       cell.append(cover, t, sp, s); shelf.append(cell);
     });
     renderResume();
+    renderWelcome();
   } catch (e) { /* library is optional until a name is set */ }
 }
+// --- get started: the first-run guide --------------------------------------
+// A new account lands on an empty library with no idea the shape is
+// book -> voice -> listen, and the voice step is invisible until it blocks
+// them. This card leads them through it, ticks each step from live state, and
+// steps out of the way once a chapter has been heard (or on dismiss).
+const WELCOME_KEY = 'fireside.welcome';
+function welcomeHidden() { try { return localStorage.getItem(WELCOME_KEY) === USER; } catch (_) { return false; } }
+function renderWelcome() {
+  const el = $('#welcome'); if (!el) return;
+  const haveBook = (books || []).length > 0;
+  const haveVoice = (CONNS || []).some(c => c.enabled !== false);
+  const voiced = (books || []).some(b => b.rendered > 0);
+  if (!USER || welcomeHidden() || voiced) { el.hidden = true; return; }
+  el.hidden = false;
+  const steps = [
+    { done: haveBook, label: 'Add a book',
+      hint: 'An EPUB, or a story link. Fireside breaks it into chapters.',
+      go: 'Add a book', run: () => { show('lib'); const p = $('#addpanel');
+        p.hidden = false; $('#drop').scrollIntoView({ behavior: 'smooth', block: 'center' }); } },
+    { done: haveVoice, label: 'Connect a voice',
+      hint: 'Fireside reads with a voice server you control, yours or a shared one. Without a voice it has nothing to read with.',
+      go: 'Open voice settings', run: () => { show('set'); setSetTab('voice'); } },
+    { done: voiced, label: 'Voice your first chapter',
+      hint: 'Converting spends reading characters from your plan.',
+      go: 'Open your book', run: () => { const b = (books || [])[0]; if (b) { openBook(b.id); show('play'); } } },
+  ];
+  const box = $('#wsteps'); box.innerHTML = '';
+  steps.forEach((s, i) => {
+    const li = document.createElement('li');
+    const ready = i === 0 || steps.slice(0, i).every(x => x.done);
+    if (s.done) li.className = 'done';
+    else if (!ready) li.className = 'locked';   // only lead the next undone step
+    const mark = document.createElement('div'); mark.className = 'wmark';
+    mark.textContent = s.done ? '✓' : String(i + 1);
+    const body = document.createElement('div'); body.className = 'wbody';
+    const lab = document.createElement('div'); lab.className = 'wlabel'; lab.textContent = s.label;
+    const hint = document.createElement('div'); hint.className = 'whint'; hint.textContent = s.hint;
+    body.append(lab, hint); li.append(mark, body);
+    if (!s.done && ready) { const b = document.createElement('button');
+      b.type = 'button'; b.className = 'btn quiet wgo'; b.textContent = s.go; b.onclick = s.run; li.append(b); }
+    box.append(li);
+  });
+}
+if ($('#wdismiss')) $('#wdismiss').onclick = () => { try { localStorage.setItem(WELCOME_KEY, USER); } catch (_) {} renderWelcome(); };
 function bookById(id) { return books.find(b => b.id === id); }
 function coverURL(id, ref) { return '/cover?book=' + encodeURIComponent(id) + (ref ? '&v=' + encodeURIComponent(ref) : ''); }
 function fillCover(el, id, title, ref) {
