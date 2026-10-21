@@ -31,7 +31,9 @@ First run: open the WebUI, add a speech engine on the Settings page, drop in a b
   <DonateLink/>
   <Requires/>
   <Config Name="WebUI Port" Target="8788" Default="8788" Mode="tcp" Description="Port for the fireside WebUI and API." Type="Port" Display="always" Required="true" Mask="false">8788</Config>
-  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/fireside/data" Mode="rw" Description="Library metadata and content-addressed audio blobs. Point this at appdata so your library survives container updates." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/fireside/data</Config>
+  <Config Name="Data" Target="/data" Default="/mnt/user/appdata/fireside/data" Mode="rw" Description="Library metadata and content-addressed audio blobs. Point this at appdata so your library survives container updates.
+
+Ownership is handled for you: the container makes this directory writable by its app user on start, so a root-owned appdata path will not stop it from booting. Set PUID/PGID below if you want the files owned by a specific user instead." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/fireside/data</Config>
   <Config Name="Data Dir" Target="FIRESIDE_DATA" Default="/data" Mode="" Description="Where the host keeps its state inside the container. Leave as /data unless you changed the path above." Type="Variable" Display="advanced" Required="false" Mask="false">/data</Config>
   <Config Name="Database Engine" Target="FIRESIDE_DB_TYPE" Default="sqlite" Mode="" Description="sqlite (default, zero setup) or mysql.
 
@@ -50,4 +52,6 @@ The database and user must exist first. In the MySQL server run:
 
 Fireside creates its own tables on first start." Type="Variable" Display="always" Required="false" Mask="true"></Config>
   <Config Name="Plugins Root" Target="FIRESIDE_PLUGINS_ROOT" Default="plugins" Mode="" Description="Directory the host scans for reader/speech/storage plugins. Leave default unless you mount a custom plugin set." Type="Variable" Display="advanced" Required="false" Mask="false">plugins</Config>
+  <Config Name="PUID" Target="PUID" Default="10001" Mode="" Description="Owner of the files fireside writes under the Data path. Leave default unless you want them owned by a specific user; the container applies this on start." Type="Variable" Display="advanced" Required="false" Mask="false">10001</Config>
+  <Config Name="PGID" Target="PGID" Default="10001" Mode="" Description="Group of the files fireside writes under the Data path. Leave default unless you want them owned by a specific group; the container applies this on start." Type="Variable" Display="advanced" Required="false" Mask="false">10001</Config>
 </Container>

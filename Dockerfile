@@ -9,7 +9,10 @@ ENV PYTHONUNBUFFERED=1 \
 # run as a non-root user; the app only ever writes under /data
 RUN useradd -r -u 10001 -m fireside \
  && mkdir -p /data && chown -R fireside:fireside /app /data
-USER fireside
+# Start as root only long enough to make the /data mount writable by the app
+# user (a host bind mount is often owned by root), then drop to fireside for
+# real. See docker-entrypoint.py; the app process itself stays unprivileged.
+ENTRYPOINT ["python3", "/app/docker-entrypoint.py"]
 EXPOSE 8788
 VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \

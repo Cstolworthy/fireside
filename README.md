@@ -167,6 +167,15 @@ On unraid, the simplest path is the Compose Manager plugin: add this repo as a
 stack, set the host port to 8788, and point the `data` mount at a share under
 `/mnt/user/appdata/fireside`.
 
+The Community Applications template is at `templates/fireside.xml`. Its default
+host path is `/mnt/user/appdata/fireside/data`. Unraid creates that directory as
+root, and fireside runs as uid 10001, so on first start the app cannot create
+its SQLite file. The container entrypoint handles that for you: it starts as
+root only long enough to make the data directory writable by the app user, then
+drops to the unprivileged user before the server runs. Nothing to chown by hand.
+If you would rather own the files yourself, set `PUID`/`PGID` (the Unraid
+convention) and the entrypoint uses those instead of 10001.
+
 
 ## Backends and accounts
 
