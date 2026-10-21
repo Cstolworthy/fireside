@@ -1096,6 +1096,18 @@ class App:
         return 200, {"ok": True,
                      "rules": pron.save(self.conn, uid, body.get("rules"))}
 
+    def pron_impact(self, q, body):
+        """Which already-voiced chapters a rule change makes out of date.
+
+        Read-only: it names the work (per book, voice and chapter) so the UI can
+        offer to re-encode just that, instead of a whole-book convert.
+        """
+        uid = self._uid(q, body)
+        if not uid:
+            return 401, {"error": "auth required"}
+        return 200, pron.impact(self.conn, self.storage, uid,
+                                q.get("book") or None)
+
     # ---- auth (social sign-in; the session lives in sqlite) ------------------
 
     def auth_providers(self, q, body):
@@ -1202,6 +1214,7 @@ GET_ROUTES = {
     "/estimate": "estimate",
     "/position": "get_position", "/last": "last_position", "/stop": "stop", "/text": "text",
     "/stats": "stats_get", "/pron": "pron_get",
+    "/pron/impact": "pron_impact",
     "/connections": "connections_list", "/source-creds": "source_creds",
     "/cover": "cover_get",
     "/auth/providers": "auth_providers", "/me": "me", "/auth/policy": "auth_policy",

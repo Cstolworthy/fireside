@@ -109,3 +109,77 @@ def token_for(text, rules):
     raw = "|".join("%s>%s" % (r["from"].lower(), r["to"])
                    for r in sorted(use, key=lambda r: r["from"].lower()))
     return "p" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:6]
+
+
+def impact(conn, storage, user_id, book_id=None):
+    """Chapters already voiced that the current rules make out of date.
+
+    For every book the user owns, look at each rendition - one voiced copy of a
+    chapter, one voice. A rendition is stale when the pronunciation tag it was
+    made with no longer matches the tag the rules produce for that chapter's
+    text. That is the exact test the renderer uses to decide what to redo, so
+    this list is what a convert would actually re-synthesise: change one word
+    and only the chapters holding it come back here, not the whole book.
+
+    Grouped by book and by (provider, voice, model, speed) so the caller can
+    re-encode each voice with a real render call, scoped to just these chapters.
+    """
+    from host import library
+
+    rules = load(conn, user_id)
+    q = "SELECT id,title FROM books WHERE user_id=?"
+    args = [user_id]
+    if book_id:
+        q += " AND id=?"
+        args.append(book_id)
+    books = []
+    chapters_affected = 0
+    for b in conn.execute(q, tuple(args)).fetchall():
+        chapters = library.chapters(conn, b["id"])
+        by_idx = {c["idx"]: c for c in chapters}
+        rends = {}
+        for r in library.renditions(conn, b["id"]):
+            rends.setdefault(r["idx"], []).append(r)
+        stale = set()
+        groups = {}
+        for c in chapters:
+            has_default = bool(c.get("audio_ref"))
+            rs = rends.get(c["idx"], [])
+            if not rs and not has_default:
+                continue  # never voiced: nothing to redo
+            try:
+                text = storage.get(c["text_ref"]).decode("utf-8")
+            except Exception:
+                text = ""
+            tag = token_for(text, rules)
+            if not rs and has_default:
+                # legacy row with audio but no rendition entry; treat the
+                # chapter's own columns as the one voiced copy.
+                rs = [{"provider": c.get("provider") or "",
+                       "voice": c.get("voice") or "", "voice_label": "",
+                       "model": c.get("model") or "",
+                       "speed": c.get("speed") or 1.0,
+                       "pron": c.get("pron") or ""}]
+            for r in rs:
+                if (r.get("pron") or "") == tag:
+                    continue
+                key = (r.get("provider") or "", r.get("voice") or "",
+                       r.get("model") or "", float(r.get("speed") or 1.0),
+                       r.get("voice_label") or "")
+                groups.setdefault(key, []).append(c["idx"])
+                stale.add(c["idx"])
+        if not stale:
+            continue
+        books.append({
+            "id": b["id"], "title": b["title"],
+            "chapters": [{"idx": i,
+                          "title": (by_idx.get(i) or {}).get("title") or ""}
+                         for i in sorted(stale)],
+            "renditions": [
+                {"provider": k[0], "voice": k[1], "model": k[2],
+                 "speed": k[3], "voice_label": k[4], "chapters": sorted(v)}
+                for k, v in groups.items()],
+        })
+        chapters_affected += len(stale)
+    return {"books": books, "books_affected": len(books),
+            "chapters_affected": chapters_affected}
