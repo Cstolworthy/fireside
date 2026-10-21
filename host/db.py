@@ -118,6 +118,10 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     user_id VARCHAR(128) PRIMARY KEY, plan VARCHAR(64), status VARCHAR(32),
     provider VARCHAR(32), reference VARCHAR(191), current_period_end BIGINT DEFAULT 0,
     updated_at VARCHAR(32), created_at VARCHAR(32));
+CREATE TABLE IF NOT EXISTS user_grants (
+    user_id VARCHAR(128) PRIMARY KEY,
+    storage_unlimited INT DEFAULT 0, credits_unlimited INT DEFAULT 0,
+    updated_at VARCHAR(32));
 """
 
 
