@@ -29,6 +29,9 @@ class MiniMax:
     def chunks(self, text):
         return len(chunk_text(text))
 
+    def split(self, text):
+        return chunk_text(text)
+
     def cost_per_1m_chars(self, cred):
         return None  # per model, unverified -> unpriced, not free
 

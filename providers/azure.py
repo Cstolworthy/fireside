@@ -31,6 +31,9 @@ class Azure:
     def chunks(self, text):
         return len(chunk_text(text))
 
+    def split(self, text):
+        return chunk_text(text)
+
     def cost_per_1m_chars(self, cred):
         return PRICE_PER_1M_USD
 

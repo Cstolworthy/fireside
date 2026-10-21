@@ -519,6 +519,18 @@
   </div>
 </div>
 
+<div class="modal" id="pronimpactdlg" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-label="Pronunciation changes need new audio">
+    <h3>Some audio now needs re-encoding</h3>
+    <p class="sub" id="pimsg" style="margin-top:6px"></p>
+    <div id="pilist" style="margin-top:8px;display:flex;flex-direction:column;gap:6px"></div>
+    <div class="connrow">
+      <button class="btn quiet" id="pilater" type="button">Later</button>
+      <button class="btn" id="pigo" type="button">Re-encode only these</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="settingsdlg" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-label="Book settings">
     <h3>Book settings</h3>
@@ -904,7 +916,8 @@ async function savePron() {
   try {
     const d = await jpost('/pron', { rules: PRON });
     PRON = d.rules || PRON; showPron(PRON);
-    $('#pronmsg').textContent = PRON.length + ' word(s) set. A chapter re-renders the next time it is converted.';
+    $('#pronmsg').textContent = PRON.length + ' word(s) set.';
+    await showPronImpact();
   } catch (e) { fail(e); }
 }
 async function testPron(text) {
@@ -923,6 +936,82 @@ async function testPron(text) {
 }
 $('#pronadd').onclick = () => pronRow('', '');
 $('#pronsave').onclick = savePron;
+
+// --- pronunciation impact: a rule change only re-encodes what it touches ---
+// Saving a word does not re-encode anything by itself. This asks the server
+// which already-voiced chapters the change actually makes wrong, names them, and
+// offers to re-encode just those - never the whole book.
+let PRONIMPACT = null;
+function findConnFor(provider) {
+  return CONNS.find(c => c.enabled !== false && c.provider === provider) || null;
+}
+async function showPronImpact() {
+  let im = null;
+  try { im = await api('/pron/impact'); } catch (e) { return; }
+  PRONIMPACT = im;
+  if (!im || !im.chapters_affected) return;
+  const n = im.chapters_affected, m = im.books_affected;
+  const secs = im.est_seconds || 0;
+  const t = secs < 1 ? 'under a second'
+    : secs < 90 ? (Math.max(1, Math.round(secs)) + 's')
+    : (Math.round(secs / 60) + ' min');
+  $('#pimsg').textContent = n + ' chapter' + (n === 1 ? '' : 's')
+    + ' in ' + m + ' book' + (m === 1 ? '' : 's')
+    + ' already have audio this change makes wrong. Only the affected chunks'
+    + ' re-encode, about ' + t + ' of new audio. Re-encode those?';
+  const box = $('#pilist'); box.innerHTML = '';
+  let any = false;
+  im.books.forEach(b => b.renditions.forEach(r => {
+    const conn = findConnFor(r.provider);
+    if (conn) any = true;
+    const est = (r.est_seconds || 0);
+    const estTxt = est < 90 ? (Math.max(1, Math.round(est)) + 's')
+      : (Math.round(est / 60) + ' min');
+    const row = document.createElement('div');
+    row.className = 'small';
+    row.textContent = b.title + ' - ' + r.chapters.length + ' chapter'
+      + (r.chapters.length === 1 ? '' : 's')
+      + (r.voice ? (' in "' + (r.voice_label || r.voice) + '"') : '')
+      + '  (~' + estTxt + ' to make)'
+      + (conn ? '' : '  (no live connection for ' + (r.provider || 'this server')
+                   + ' - open the book to convert)');
+    box.append(row);
+  }));
+  $('#pigo').disabled = !any;
+  $('#pronimpactdlg').hidden = false;
+}
+$('#pilater').onclick = () => { $('#pronimpactdlg').hidden = true; };
+$('#pigo').onclick = reencodePronImpact;
+async function reencodePronImpact() {
+  const im = PRONIMPACT;
+  $('#pronimpactdlg').hidden = true;
+  if (!im) return;
+  let done = 0, failed = 0;
+  for (const b of im.books) {
+    for (const r of b.renditions) {
+      const conn = findConnFor(r.provider);
+      if (!conn) { failed++; continue; }
+      const body = { user: USER, book: b.id, connection_id: conn.id,
+        voice: r.voice, voice_label: r.voice_label, model: r.model, speed: r.speed,
+        chapters: r.chapters };
+      try {
+        busy('Re-encoding ' + b.title + ' - ' + r.chapters.length + ' chapter(s)...');
+        const res = await jpost('/render', body);
+        while (true) {
+          await new Promise(x => setTimeout(x, 1000));
+          const j = await api('/job?id=' + encodeURIComponent(res.job_id));
+          if (j.status === 'error') { failed++; break; }
+          if (j.status === 'done') { done += r.chapters.length; break; }
+          progress('Re-encoding - ' + b.title + ' - ch ' + j.current + '/' + j.total);
+        }
+      } catch (e) { failed++; }
+    }
+  }
+  idle('Re-encoded ' + done + ' chapter' + (done === 1 ? '' : 's')
+    + ' from the pronunciation change.'
+    + (failed ? '  ' + failed + ' could not be re-encoded - open those books and convert.' : ''));
+  if (book) await openBook(book.id);
+}
 // --- connected accounts: link a social login to this account ---------------
 // The link door, not the login door: you are already signed in, and the
 // provider gets attached to the account you are in.

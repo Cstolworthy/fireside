@@ -109,3 +109,108 @@ def token_for(text, rules):
     raw = "|".join("%s>%s" % (r["from"].lower(), r["to"])
                    for r in sorted(use, key=lambda r: r["from"].lower()))
     return "p" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:6]
+
+
+def impact(conn, storage, user_id, book_id=None, split_for=None):
+    """Chapters already voiced that the current rules make out of date.
+
+    For every book the user owns, look at each rendition - one voiced copy of a
+    chapter, one voice. A rendition is stale when the pronunciation tag it was
+    made with no longer matches the tag the rules produce for that chapter's
+    text. That is the exact test the renderer uses to decide what to redo.
+
+    `split_for(provider)` returns a provider's chunk function, so the report can
+    also say how much audio is genuinely new: only the chunks with no cached
+    audio for the current rules get synthesised, the rest are reused. Without a
+    split function the whole chapter counts, a safe upper bound.
+
+    Grouped by book and by (provider, voice, model, speed) so the caller can
+    re-encode each voice with a real render call, scoped to just these chapters.
+    """
+    from host import library, jobs
+
+    rules = load(conn, user_id)
+    q = "SELECT id,title FROM books WHERE user_id=?"
+    args = [user_id]
+    if book_id:
+        q += " AND id=?"
+        args.append(book_id)
+    books = []
+    chapters_affected = 0
+    chars_to_synth = 0
+    est_seconds = 0.0
+    for b in conn.execute(q, tuple(args)).fetchall():
+        chapters = library.chapters(conn, b["id"])
+        by_idx = {c["idx"]: c for c in chapters}
+        rends = {}
+        for r in library.renditions(conn, b["id"]):
+            rends.setdefault(r["idx"], []).append(r)
+        stale = set()
+        groups = {}
+        for c in chapters:
+            has_default = bool(c.get("audio_ref"))
+            rs = rends.get(c["idx"], [])
+            if not rs and not has_default:
+                continue  # never voiced: nothing to redo
+            try:
+                text = storage.get(c["text_ref"]).decode("utf-8")
+            except Exception:
+                text = ""
+            tag = token_for(text, rules)
+            if not rs and has_default:
+                # legacy row with audio but no rendition entry; treat the
+                # chapter's own columns as the one voiced copy.
+                rs = [{"provider": c.get("provider") or "",
+                       "voice": c.get("voice") or "", "voice_label": "",
+                       "model": c.get("model") or "",
+                       "speed": c.get("speed") or 1.0,
+                       "pron": c.get("pron") or ""}]
+            for r in rs:
+                if (r.get("pron") or "") == tag:
+                    continue
+                prov = r.get("provider") or ""
+                voice = r.get("voice") or ""
+                model = r.get("model") or ""
+                speed = float(r.get("speed") or 1.0)
+                label = r.get("voice_label") or ""
+                split = split_for(prov) if split_for else None
+                if callable(split):
+                    sc = jobs.stale_chars(conn, storage, text, rules, split,
+                                          prov, voice, model, speed)
+                else:
+                    sc = len(text)
+                g = groups.setdefault((prov, voice, model, speed, label),
+                                      {"chapters": [], "chars_to_synth": 0})
+                g["chapters"].append(c["idx"])
+                g["chars_to_synth"] += sc
+                stale.add(c["idx"])
+        if not stale:
+            continue
+        rends_out = []
+        book_chars = 0
+        book_seconds = 0.0
+        for (prov, voice, model, speed, label), g in groups.items():
+            secs = g["chars_to_synth"] / jobs.synth_rate(prov)
+            book_chars += g["chars_to_synth"]
+            book_seconds += secs
+            rends_out.append({"provider": prov, "voice": voice, "model": model,
+                              "speed": speed, "voice_label": label,
+                              "chapters": sorted(g["chapters"]),
+                              "chars_to_synth": g["chars_to_synth"],
+                              "est_seconds": round(secs, 1)})
+        books.append({
+            "id": b["id"], "title": b["title"],
+            "chapters": [{"idx": i,
+                          "title": (by_idx.get(i) or {}).get("title") or ""}
+                         for i in sorted(stale)],
+            "renditions": rends_out,
+            "chars_to_synth": book_chars,
+            "est_seconds": round(book_seconds, 1),
+        })
+        chapters_affected += len(stale)
+        chars_to_synth += book_chars
+        est_seconds += book_seconds
+    return {"books": books, "books_affected": len(books),
+            "chapters_affected": chapters_affected,
+            "chars_to_synth": chars_to_synth,
+            "est_seconds": round(est_seconds, 1)}

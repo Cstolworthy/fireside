@@ -28,7 +28,10 @@ class OpenAICompat:
     def settings(self):
         return [Field("base_url", "Server URL", "text", default=DEFAULT_BASE,
                       help="Any OpenAI-compatible /v1/audio/speech server on your LAN "
-                           "(Kokoro, Speaches, ...). Runs on your hardware, so it costs nothing.")]
+                           "(Kokoro, Speaches, ...). Runs on your hardware, so it costs nothing."),
+                Field("key", "Key", "password",
+                      help="Bearer token, if your server wants one. Sent as "
+                           "Authorization: Bearer <key>.")]
 
     def _base(self, cred):
         return (cred.get("base_url") or DEFAULT_BASE).rstrip("/")
@@ -51,6 +54,9 @@ class OpenAICompat:
 
     def chunks(self, text):
         return len(chunk_text(text))
+
+    def split(self, text):
+        return chunk_text(text)
 
     def cost_per_1m_chars(self, cred):
         return 0.0  # runs on your own machine
