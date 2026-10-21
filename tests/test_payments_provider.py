@@ -7,6 +7,7 @@ not money and must credit nothing.
 """
 
 import os
+import time
 import unittest
 
 from host import payments
@@ -111,6 +112,65 @@ class TestFromEnv(unittest.TestCase):
     def test_load_without_a_provider_name_is_a_noop(self):
         self.assertIsNone(payments.load())
         self.assertFalse(payments.configured())
+
+
+class TestWebhookSignature(unittest.TestCase):
+    """The webhook is public, so its signature is the only authentication."""
+
+    SECRET = "whsec_test_abc"
+
+    def _sig(self, raw, t=None, secret=None):
+        import hashlib
+        import hmac as _hmac
+        t = t if t is not None else int(time.time())
+        signed = (str(t) + ".").encode() + raw
+        v1 = _hmac.new((secret or self.SECRET).encode(), signed,
+                       hashlib.sha256).hexdigest()
+        return "t=%d,v1=%s" % (t, v1)
+
+    def test_a_real_signature_verifies(self):
+        raw = b'{"type":"checkout.session.completed"}'
+        self.assertTrue(payments_stripe.verify_signature(
+            raw, self._sig(raw), self.SECRET))
+
+    def test_tampered_body_or_wrong_secret_fails(self):
+        raw = b'{"a":1}'
+        sig = self._sig(raw)
+        self.assertFalse(payments_stripe.verify_signature(b'{"a":2}', sig,
+                                                          self.SECRET))
+        self.assertFalse(payments_stripe.verify_signature(raw, sig, "whsec_other"))
+
+    def test_a_stale_timestamp_is_refused(self):
+        raw = b'{}'
+        old = int(time.time()) - 3600
+        self.assertFalse(payments_stripe.verify_signature(
+            raw, self._sig(raw, t=old), self.SECRET))
+
+    def test_missing_pieces_are_not_a_pass(self):
+        self.assertFalse(payments_stripe.verify_signature(b'{}', "", self.SECRET))
+        self.assertFalse(payments_stripe.verify_signature(b'{}', "t=1", self.SECRET))
+
+    def test_verify_webhook_needs_a_configured_secret(self):
+        p = payments_stripe.StripeProvider("sk_test_x", webhook_secret="")
+        ev, err = p.verify_webhook(b"{}", "t=1,v1=x")
+        self.assertIsNone(ev)
+        self.assertIn("webhook secret", err)
+
+    def test_verify_webhook_returns_the_event_only_when_signed(self):
+        p = payments_stripe.StripeProvider("sk_test_x", webhook_secret=self.SECRET)
+        raw = b'{"type":"checkout.session.completed","data":{"object":{"id":"cs_1"}}}'
+        ev, err = p.verify_webhook(raw, self._sig(raw))
+        self.assertEqual(err, "")
+        self.assertEqual(ev["type"], "checkout.session.completed")
+        self.assertIsNone(p.verify_webhook(raw, "t=1,v1=deadbeef")[0])
+
+    def test_only_a_completed_checkout_names_a_session(self):
+        p = payments_stripe.StripeProvider("sk_test_x", webhook_secret=self.SECRET)
+        done = {"type": "checkout.session.completed",
+                "data": {"object": {"id": "cs_1"}}}
+        self.assertEqual(p.webhook_reference(done), "cs_1")
+        other = {"type": "invoice.paid", "data": {"object": {"id": "in_1"}}}
+        self.assertEqual(p.webhook_reference(other), "")
 
 
 if __name__ == "__main__":
