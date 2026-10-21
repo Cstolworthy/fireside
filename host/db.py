@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at BIGINT, expires_at BIGINT);
 CREATE TABLE IF NOT EXISTS local_accounts (
     username VARCHAR(191) PRIMARY KEY, user_id VARCHAR(128), digest TEXT, salt TEXT,
-    created_at VARCHAR(32));
+    email VARCHAR(255) DEFAULT '', created_at VARCHAR(32));
 CREATE TABLE IF NOT EXISTS identities (
     provider VARCHAR(64), subject VARCHAR(191), user_id VARCHAR(128),
     email VARCHAR(255) DEFAULT '', email_verified INT DEFAULT 0,
@@ -251,6 +251,9 @@ _ADDED_COLUMNS = [
     ("sessions", "user_agent", "TEXT"),
     ("sessions", "ip", "VARCHAR(64) DEFAULT ''"),
     ("sessions", "last_seen", "BIGINT DEFAULT 0"),
+    # the address a password account registered with. Optional on old rows;
+    # the social door reads it to spot an account that already exists.
+    ("local_accounts", "email", "VARCHAR(255) DEFAULT ''"),
 ]
 
 

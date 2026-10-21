@@ -149,8 +149,14 @@ def _start_on_free_tier(conn, uid):
         (uid, "free", "active", "", "", 0, _now(), _now()))
 
 
-def local_register(conn, username, password):
+def local_register(conn, username, password, email=""):
     """Create a local account. Raises AuthError if the name is taken or weak.
+
+    `email` is optional for callers that predate it, but a server that wants the
+    social door to spot an existing account should collect it: a password
+    account's address is the only join key a social sign-in has. The address is
+    stored unverified - nothing here proves the registrant can read that inbox -
+    so it may only ever route a social login to the prove-it door, never merge.
 
     The first account on a fresh server is always allowed and becomes admin;
     every later account needs registration to be open.
@@ -160,6 +166,11 @@ def local_register(conn, username, password):
         raise AuthError("username must be 3-64 characters")
     if not re.match(r"^[a-z0-9._-]+$", name):
         raise AuthError("username may use letters, digits, dot, dash, underscore")
+    email = (email or "").strip().lower()
+    if email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise AuthError("that email address does not look right")
+    if len(email) > 255:
+        raise AuthError("that email address is too long")
     if len(password or "") < 8:
         raise AuthError("password must be at least 8 characters")
     first = account_count(conn) == 0
@@ -172,9 +183,9 @@ def local_register(conn, username, password):
     conn.execute("INSERT OR IGNORE INTO users(id,name,created_at) VALUES(?,?,?)",
                  (uid, name, _now()))
     _start_on_free_tier(conn, uid)
-    conn.execute("INSERT INTO local_accounts(username,user_id,digest,salt,created_at)"
-                 " VALUES(?,?,?,?,?)",
-                 (name, uid, _digest(password, salt), salt, _now()))
+    conn.execute("INSERT INTO local_accounts(username,user_id,digest,salt,email,created_at)"
+                 " VALUES(?,?,?,?,?,?)",
+                 (name, uid, _digest(password, salt), salt, email, _now()))
     if first:
         conn.execute("INSERT OR IGNORE INTO admins(user_id,created_at) VALUES(?,?)",
                      (uid, _now()))
@@ -448,6 +459,30 @@ def account_for_verified_email(conn, email):
     return row["user_id"] if row is not None else None
 
 
+def account_for_email(conn, email):
+    """Any account that carries this address, verified or not, or None.
+
+    Wider than account_for_verified_email on purpose: it is the "does this
+    person already have an account?" question, not the "may I merge?" one. A
+    hit here only ever sends a social login to the prove-it door; the address
+    is untrusted, so it can never justify an automatic merge. Checks password
+    accounts first (their address is collected at sign-up), then any social
+    identity.
+    """
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    row = conn.execute(
+        "SELECT user_id FROM local_accounts WHERE email=? AND email<>''"
+        " ORDER BY created_at LIMIT 1", (email,)).fetchone()
+    if row is not None:
+        return row["user_id"]
+    row = conn.execute(
+        "SELECT user_id FROM identities WHERE email=?"
+        " ORDER BY created_at LIMIT 1", (email,)).fetchone()
+    return row["user_id"] if row is not None else None
+
+
 def upsert_user(conn, provider, ident):
     """Resolve a provider identity to one user id.
 
@@ -455,14 +490,16 @@ def upsert_user(conn, provider, ident):
     account it logs into, and never to an account just because the provider
     reports an email that account happens to own.
 
-    A verified email proves control of the mailbox, not of the account: a
-    local account's email was never verified, so matching on it would be a
-    takeover door - anyone could register victim@x, then the real owner's
-    Google login would land in the seeded account. So when a new identity's
-    verified email already belongs to a user, we refuse and raise
-    AccountExistsError; the caller must ask for that account's own login
-    (auth.complete_claim) before we attach. No verified email at all makes a
-    fresh account, as before.
+    A verified email proves control of the mailbox, not of the account. A
+    password account's address is collected at sign-up and never verified, so
+    it is not a merge key either: anyone could register victim@x, then the
+    real owner's Google login would land in the seeded account. But it is the
+    only join key a social login has to spot an account that already exists.
+    So when a new identity's verified email matches ANY account carrying that
+    address - a password account's unverified one, or a linked identity's - we
+    refuse and raise AccountExistsError; the caller asks for that account's
+    own login (auth.complete_claim) before we attach. The match never merges
+    on its own. No verified email at all makes a fresh account, as before.
     """
     subject = ident["subject"]
     email = (ident.get("email") or "").strip().lower()
@@ -473,7 +510,7 @@ def upsert_user(conn, provider, ident):
         uid = row["user_id"]
     else:
         if verified and email:
-            owner = account_for_verified_email(conn, email)
+            owner = account_for_email(conn, email)
             if owner is not None:
                 raise AccountExistsError(owner, provider, ident)
         uid = "%s:%s" % (provider, subject)

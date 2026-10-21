@@ -286,6 +286,10 @@
       <label for="lockuser">Username</label>
       <input class="in" id="lockuser" name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false">
     </div>
+    <div class="field" id="lockemailwrap" hidden>
+      <label for="lockemail">Email</label>
+      <input class="in" id="lockemail" name="email" type="email" autocomplete="email" autocapitalize="none" autocorrect="off" spellcheck="false">
+    </div>
     <div class="field">
       <label for="lockpass">Password</label>
       <input class="in" id="lockpass" name="password" type="password" autocomplete="current-password">
@@ -1605,7 +1609,9 @@ function renderAuth() {
   $('#lockgo').textContent = create ? 'Create account' : 'Sign in';
   $('#lockpass').setAttribute('autocomplete', create ? 'new-password' : 'current-password');
   $('#lockconfirm').hidden = !create;            // double entry only when creating
+  $('#lockemailwrap').hidden = !create;          // the address is a sign-up fact
   $('#lockpass2').value = '';
+  $('#lockemail').value = '';
   const canToggle = !closed;
   $('#locktoggle').hidden = !canToggle;
   $('#locktoggle').textContent = create ? 'I already have an account' : 'Create a new account';
@@ -1621,12 +1627,14 @@ function renderAuth() {
 
 async function authSubmit() {
   const u = $('#lockuser').value.trim(), p = $('#lockpass').value;
+  const em = $('#lockemail').value.trim();
   const create = AUTH.mode === 'create';
   if (AUTH.mode === 'claim') return claimSubmit();
   if (!u) return authMsg('enter a username');
   if (create) {
     // same rules the server enforces, said before the round trip
     if (u.length < 3) return authMsg('username must be at least 3 characters');
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) return authMsg('enter your email address');
     if (p.length < 8) return authMsg('password must be at least 8 characters');
     if (p !== $('#lockpass2').value) return authMsg('passwords do not match');
   }
@@ -1634,7 +1642,8 @@ async function authSubmit() {
   authMsg(''); $('#lockgo').disabled = true;
   try {
     await api(route, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: u, password: p }) });
+      body: JSON.stringify(create ? { username: u, password: p, email: em }
+                                  : { username: u, password: p }) });
     location.reload();                        // cleanest: reload into the session
   } catch (e) {
     // never say which half was wrong: a sign-in failure is always one line

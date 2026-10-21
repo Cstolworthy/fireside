@@ -37,6 +37,29 @@ class LocalAccounts(unittest.TestCase):
         with self.assertRaises(auth.AuthError):
             auth.local_register(self.conn, "no spaces", "hunter2hunter2")
 
+    def test_email_stored_normalized(self):
+        auth.local_register(self.conn, "chris", "hunter2hunter2",
+                            email="  Chris@Example.COM ")
+        row = self.conn.execute(
+            "SELECT email FROM local_accounts WHERE username=?", ("chris",)).fetchone()
+        self.assertEqual(row["email"], "chris@example.com")
+
+    def test_malformed_email_rejected(self):
+        with self.assertRaises(auth.AuthError):
+            auth.local_register(self.conn, "chris", "hunter2hunter2", email="not-an-email")
+
+    def test_email_optional_for_old_callers(self):
+        uid = auth.local_register(self.conn, "chris", "hunter2hunter2")
+        self.assertEqual(uid, "local:chris")
+
+    def test_account_for_email_finds_local(self):
+        auth.local_register(self.conn, "chris", "hunter2hunter2", email="chris@example.com")
+        self.assertEqual(auth.account_for_email(self.conn, "CHRIS@example.com"),
+                         "local:chris")
+        self.assertIsNone(auth.account_for_email(self.conn, "nobody@example.com"))
+        # an unverified address is not a merge key, only a "who is this?" key
+        self.assertIsNone(auth.account_for_verified_email(self.conn, "chris@example.com"))
+
     def test_local_listed_when_enabled(self):
         a = auth.Auth(self.conn)
         self.assertTrue(any(p["id"] == "local" for p in a.providers()))
