@@ -783,3 +783,75 @@ class Auth:
             raise AuthError("provider %s returned no subject" % pid)
         return link_identity(self.conn, pid, ident, user_id)
 
+
+
+# ---- password reset (a link you can only use once, and briefly) -------------
+# A password account's address is collected at sign-up and never verified, so
+# the reset door cannot prove it *owns* the account - all it can do is send a
+# link to whoever can read that inbox and let that person set a new password.
+# That is the whole security model, and it is why the flow says nothing about
+# whether an address matched: the answer would leak who has an account here.
+
+RESET_TTL = 3600            # one hour; long enough to find the mail, no longer
+
+
+def _hash_reset_token(token):
+    return hashlib.sha256((token or "").encode("utf-8")).hexdigest()
+
+
+def request_password_reset(conn, email):
+    """Mint a reset token for the password account that owns `email`.
+
+    Returns (raw_token, username) so the caller can mail the link, or None when
+    no password account carries the address (or it is empty). The raw token is
+    never stored - only its hash - so a read of the table cannot be replayed.
+
+    Any live reset for the account is retired first: one link at a time, so the
+    most recent request is the one that works.
+    """
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    row = conn.execute(
+        "SELECT user_id,username FROM local_accounts WHERE email=? LIMIT 1",
+        (email,)).fetchone()
+    if row is None:
+        return None
+    token = secrets.token_urlsafe(32)
+    now = int(time.time())
+    conn.execute("DELETE FROM password_resets WHERE user_id=?", (row["user_id"],))
+    conn.execute(
+        "INSERT INTO password_resets(token_hash,user_id,created_at,expires_at,used_at)"
+        " VALUES(?,?,?,?,0)",
+        (_hash_reset_token(token), row["user_id"], now, now + RESET_TTL))
+    conn.commit()
+    return token, row["username"]
+
+
+def reset_password(conn, token, new_password):
+    """Consume a reset token and set a new password.
+
+    On success every existing session of the account is revoked: a stolen
+    session dies with the password it was won under. The token is marked used,
+    not deleted, so a replay reads as 'no longer valid' rather than 'never
+    existed'.
+    """
+    if len(new_password or "") < 8:
+        raise AuthError("password must be at least 8 characters")
+    h = _hash_reset_token(token)
+    row = conn.execute(
+        "SELECT user_id,expires_at,used_at FROM password_resets WHERE token_hash=?",
+        (h,)).fetchone()
+    if row is None or row["used_at"]:
+        raise AuthError("that reset link is no longer valid")
+    if int(row["expires_at"] or 0) < int(time.time()):
+        raise AuthError("that reset link has expired")
+    uid = row["user_id"]
+    salt = secrets.token_hex(16)
+    conn.execute("UPDATE local_accounts SET digest=?,salt=? WHERE user_id=?",
+                 (_digest(new_password, salt), salt, uid))
+    conn.execute("UPDATE password_resets SET used_at=? WHERE token_hash=?",
+                 (int(time.time()), h))
+    conn.commit()
+    revoke_sessions(conn, uid)
+    return uid
