@@ -279,6 +279,20 @@ class TestProviderIdentity(unittest.TestCase):
         self.assertEqual(ident["email"], "sam@simplelogin.co")
         self.assertTrue(ident["email_verified"])
 
+    def test_simplelogin_email_without_a_flag_is_still_trusted(self):
+        # SimpleLogin does not always carry an explicit verified field; the
+        # account's own confirmed address is still the join key the door uses.
+        a = self._auth({"https://app.simplelogin.io/oauth2/userinfo": {
+            "sub": "37", "name": "Sam", "email": "sam@simplelogin.co"}})
+        ident = a.identity("simplelogin", "tok")
+        self.assertTrue(ident["email_verified"])
+
+    def test_simplelogin_without_an_email_links_nothing(self):
+        a = self._auth({"https://app.simplelogin.io/oauth2/userinfo": {
+            "sub": "38", "name": "Sam"}})
+        ident = a.identity("simplelogin", "tok")
+        self.assertFalse(ident["email_verified"])
+
     def test_github_verified_flag_comes_from_the_emails_endpoint(self):
         a = self._auth({
             "https://api.github.com/user": {"id": 7, "login": "sam", "email": None},

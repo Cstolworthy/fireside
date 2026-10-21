@@ -742,6 +742,13 @@ class Auth:
                     ident["email_verified"] = bool(primary.get("verified"))
             except Exception:
                 pass
+        if pid == "simplelogin":
+            # The Proton door. SimpleLogin hands back the signed-in account's own
+            # address with no explicit flag; that address is confirmed when the
+            # account is made, so it is the join key the social door can use.
+            # (email_verified stays the guard: only a trusted address may route
+            # a login to the prove-it door.)
+            ident["email_verified"] = bool(ident.get("email"))
         return ident
 
     def identity_from_code(self, pid, code, redirect_uri):
