@@ -38,6 +38,23 @@ def add_book(conn, storage, user_id, book):
     return book_id
 
 
+def find_by_meta(conn, user_id, key, value):
+    """The id of this user's book whose source meta[key] == value, or None.
+
+    Used to find a copy of a bundled book already on the shelf (the example)
+    without matching on its title, which a reader may have edited."""
+    rows = conn.execute("SELECT id,source_json FROM books WHERE user_id=?",
+                        (user_id,)).fetchall()
+    for r in rows:
+        try:
+            meta = json.loads(r["source_json"] or "{}")
+        except ValueError:
+            meta = {}
+        if isinstance(meta, dict) and meta.get(key) == value:
+            return r["id"]
+    return None
+
+
 def list_books(conn, user_id):
     rows = conn.execute(
         "SELECT * FROM books WHERE user_id=? ORDER BY created_at DESC", (user_id,))

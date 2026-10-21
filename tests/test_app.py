@@ -196,6 +196,40 @@ class TestApp(unittest.TestCase):
             self._get("/chapter?book=%s&idx=0" % imp["book_id"])
         self.assertEqual(cm.exception.code, 409)
 
+    def test_example_book_add_and_idempotent(self):
+        s, d = self._post("/book/example", {"user": "u1"})
+        self.assertEqual(s, 200)
+        self.assertTrue(d["title"])
+        self.assertGreaterEqual(d["chapters"], 1)
+        self.assertFalse(d["existing"])
+        s, lib = self._jget("/library?user=u1")
+        self.assertEqual(len(lib), 1)
+        # adding it again finds the copy already there, never a second book
+        s, d2 = self._post("/book/example", {"user": "u1"})
+        self.assertEqual(d2["book_id"], d["book_id"])
+        self.assertTrue(d2["existing"])
+        s, lib = self._jget("/library?user=u1")
+        self.assertEqual(len(lib), 1)
+
+    def test_example_book_free_render(self):
+        # With a sale connection named, the example is voiced through it in one
+        # call, and because the text is the same bytes for everyone the render
+        # is a cache hit after the first. Here we prove the wiring: the route
+        # adds the book and starts a render on the example voice.
+        from host import connections
+        cid = connections.upsert(self.app.conn, "u1", "fake", "Shared voice",
+                                 {"k": "v"}, scope=connections.SYSTEM)
+        self.app.sale_connection = {"connection_id": cid, "provider": "fake",
+                                    "voice": "vv"}
+        s, d = self._post("/book/example", {"user": "u1", "render": True})
+        self.assertEqual(s, 200)
+        self.assertEqual(d["render_status"], 200)
+        self.assertIsNotNone(d["example_voice"])
+        job = self._wait_job(d["render"]["job_id"])
+        self.assertEqual(job["status"], "done")
+        s, prog = self._jget("/progress?user=u1&book=%s" % d["book_id"])
+        self.assertTrue(all(c["rendered"] for c in prog["chapters"]))
+
     def test_text_and_progress_fields(self):
         # the story page reads /text; the player counts chars from /progress
         s, imp = self._post("/import", {"user": "u1", "kind": "upload"})
