@@ -5,6 +5,7 @@ is driven by a fake provider, so both the provider's request shape and the host'
 route-to-row path are checked without touching Stripe.
 """
 
+import json
 import os
 import unittest
 
@@ -178,6 +179,122 @@ class TestBillingRoutes(unittest.TestCase):
     def test_confirm_refuses_an_unknown_reference(self):
         code, out = self.app.billing_confirm({"user": "u1"}, {"reference": "nope"})
         self.assertEqual(code, 402)
+
+
+class TestStripeCart(unittest.TestCase):
+    """A cart is one subscription session with a line per entry, priced only
+    from plans this provider actually sells, and echoed back in metadata."""
+
+    def _p(self, resp, plans=None):
+        fp = FakePost(resp)
+        return payments_stripe.StripeProvider("sk_test_x", post=fp,
+                                              plans=plans), fp
+
+    def test_cart_builds_one_line_item_per_entry(self):
+        p, fp = self._p(_Resp(200, {"id": "cs_7", "url": "https://pay/cs_7"}))
+        co = p.checkout("platform", {
+            "user": "u1", "return_url": "https://x/",
+            "items": [{"plan": "platform", "quantity": 1},
+                      {"plan": "storage", "quantity": 2}]})
+        self.assertTrue(co.ok)
+        d = fp.calls[0]["data"]
+        self.assertEqual(d["mode"], "subscription")
+        self.assertEqual(d["line_items[0][quantity]"], "1")
+        self.assertEqual(d["line_items[0][price_data][unit_amount]"], "300")
+        self.assertEqual(d["line_items[1][quantity]"], "2")
+        self.assertEqual(d["line_items[1][price_data][unit_amount]"], "100")
+        self.assertEqual(d["line_items[1][price_data][recurring][interval]"], "month")
+        self.assertEqual(json.loads(d["metadata[items]"]),
+                         [{"plan": "platform", "quantity": 1},
+                          {"plan": "storage", "quantity": 2}])
+
+    def test_cart_unknown_plan_refuses_the_whole_cart(self):
+        p, _ = self._p(_Resp(200, {}))
+        co = p.checkout("platform", {"items": [{"plan": "platform"},
+                                               {"plan": "nope"}]})
+        self.assertFalse(co.ok)
+        self.assertIn("unknown plan", co.detail)
+
+    def test_cart_refuses_a_mix_of_recurring_and_one_time(self):
+        p, _ = self._p(_Resp(200, {}), plans=[
+            Plan("platform", "fireside platform", 300, "usd", "month"),
+            Plan("once", "one-shot", 500, "usd", None)])
+        co = p.checkout("platform", {"items": [{"plan": "platform"},
+                                               {"plan": "once"}]})
+        self.assertFalse(co.ok)
+
+    def test_confirm_reads_cart_items(self):
+        p, _ = self._p(_Resp(200, {
+            "id": "cs_7", "status": "complete", "payment_status": "paid",
+            "metadata": {"user": "u1", "items": json.dumps(
+                [{"plan": "platform", "quantity": 1},
+                 {"plan": "storage", "quantity": 2}])},
+            "subscription": {"status": "active", "current_period_end": 2000000000}}))
+        s = p.confirm("cs_7")
+        self.assertTrue(s.ok)
+        self.assertEqual(s.items, [{"plan": "platform", "quantity": 1},
+                                   {"plan": "storage", "quantity": 2}])
+
+
+class CartProvider:
+    """A provider whose confirm reports the tier and a storage add-on at once."""
+    id = "fakecart"
+
+    def __init__(self):
+        self.last_meta = None
+
+    def plans(self):
+        return [Plan("platform", "fireside platform", 300, "usd", "month", "x"),
+                Plan("storage", "storage +5 GB", 100, "usd", "month", "x")]
+
+    def checkout(self, plan_id, meta=None):
+        self.last_meta = meta or {}
+        return Checkout(True, "https://pay.test/cart", "cs_cart")
+
+    def confirm(self, ref):
+        if ref != "cs_cart":
+            return Subscription(False, detail="not found")
+        return Subscription(True, "u1", "platform", "active", 2000000000, ref, "ok",
+                            items=[{"plan": "platform", "quantity": 1},
+                                   {"plan": "storage", "quantity": 2}])
+
+
+class TestBillingCartRoute(unittest.TestCase):
+    """The host path for a cart: items go to the provider, and confirm lands the
+    tier and the storage add-on as separate rows in one pass."""
+
+    def setUp(self):
+        payments.REGISTRY.clear()
+        self.provider = CartProvider()
+        payments.register(self.provider)
+        import host.app as appmod
+        self.app = appmod.App(db_path=":memory:")
+
+    def tearDown(self):
+        payments.REGISTRY.clear()
+
+    def test_cart_checkout_passes_clean_items(self):
+        code, out = self.app.billing_checkout({"user": "u1"}, {
+            "items": [{"plan": "platform", "quantity": 1},
+                      {"plan": "storage", "quantity": "2"}]})
+        self.assertEqual(code, 200)
+        self.assertEqual(self.provider.last_meta["items"],
+                         [{"plan": "platform", "quantity": 1},
+                          {"plan": "storage", "quantity": 2}])
+        self.assertEqual(self.provider.last_meta["user"], "u1")
+
+    def test_cart_confirm_applies_tier_and_addon(self):
+        code, out = self.app.billing_confirm({"user": "u1"}, {"reference": "cs_cart"})
+        self.assertEqual(code, 200)
+        self.assertTrue(out["ok"])
+        self.assertEqual(len(out["applied"]), 2)
+        self.assertEqual(billing.get(self.app.conn, "u1")["plan"], "platform")
+        self.assertEqual(billing.blocks(self.app.conn, "u1"), 2)
+
+    def test_cart_item_without_a_plan_is_rejected(self):
+        code, out = self.app.billing_checkout({"user": "u1"},
+                                              {"items": [{"quantity": 2}]})
+        self.assertEqual(code, 400)
 
 
 if __name__ == "__main__":

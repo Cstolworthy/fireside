@@ -755,15 +755,34 @@ class App:
         if not callable(fn):
             return 503, {"error": "payments not configured",
                          "detail": "the platform tier is held until a payments provider lands"}
-        plan = (body or {}).get("plan") or q.get("plan") or ""
-        try:
-            quantity = int((body or {}).get("quantity") or q.get("quantity") or 1)
-        except (TypeError, ValueError):
-            quantity = 1
-        quantity = max(1, quantity)
-        co = fn(plan, {"user": uid,
-                       "quantity": quantity,
-                       "return_url": (body or {}).get("return_url") or ""})
+        body = body or {}
+        plan = body.get("plan") or q.get("plan") or ""
+        items = body.get("items")
+        meta = {"user": uid,
+                "return_url": body.get("return_url") or ""}
+        if isinstance(items, list) and items:
+            clean = []
+            for it in items:
+                if not isinstance(it, dict):
+                    return 400, {"error": "bad cart item"}
+                pid = str(it.get("plan") or "").strip()
+                if not pid:
+                    return 400, {"error": "cart item has no plan"}
+                try:
+                    qty = max(1, int(it.get("quantity") or 1))
+                except (TypeError, ValueError):
+                    return 400, {"error": "bad cart quantity"}
+                clean.append({"plan": pid, "quantity": qty})
+            meta["items"] = clean
+            if not plan:
+                plan = clean[0]["plan"]
+        else:
+            try:
+                quantity = int(body.get("quantity") or q.get("quantity") or 1)
+            except (TypeError, ValueError):
+                quantity = 1
+            meta["quantity"] = max(1, quantity)
+        co = fn(plan, meta)
         if not getattr(co, "ok", False):
             return 402, {"error": "checkout refused",
                          "detail": getattr(co, "detail", "")}
@@ -783,6 +802,28 @@ class App:
             return 402, {"error": "not confirmed",
                          "detail": getattr(sub, "detail", "")}
         provider_id = getattr(pp, "id", "")
+        # A cart (many items) settles the tier and its add-ons in one payment.
+        # Each item lands in its own row: the tier replaces the subscription,
+        # a storage item becomes the add-on row it names.
+        items = getattr(sub, "items", None)
+        if items:
+            applied = []
+            for it in items:
+                pid = (it or {}).get("plan") or ""
+                qty = int((it or {}).get("quantity") or 1)
+                if pid == quota.STORAGE_ADDON:
+                    row = billing.upsert_addon(
+                        self.conn, uid, quota.STORAGE_ADDON, qty, sub.status,
+                        provider=provider_id, reference=ref,
+                        current_period_end=sub.current_period_end)
+                    applied.append({"addon": row})
+                elif pid:
+                    row = billing.upsert(self.conn, uid, pid, sub.status,
+                                         provider=provider_id, reference=ref,
+                                         current_period_end=sub.current_period_end)
+                    applied.append({"subscription": row})
+            return 200, {"ok": True, "applied": applied,
+                         "subscription": billing.get(self.conn, uid)}
         # An add-on does not replace the tier - it adds capacity to it. Anything
         # the provider names as the storage add-on lands in its own row.
         if getattr(sub, "plan", "") == quota.STORAGE_ADDON:
@@ -1359,7 +1400,7 @@ POST_ROUTES = {
 # reachable without a session even when auth is required: the page, its health,
 # the sign-in surface, and the browser's cache of who it is.
 PUBLIC_ROUTES = {"/", "/index.html", "/favicon.ico", "/health", "/auth/providers",
-                 "/auth/policy", "/me", "/manifest.webmanifest", "/sw.js",
+                 "/auth/policy", "/me", "/plans", "/manifest.webmanifest", "/sw.js",
                  "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"}
 
 # auth sub-routes the handler serves directly (they set cookies / redirect),

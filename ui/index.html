@@ -294,6 +294,7 @@
     <button class="btn" id="lockgo" type="submit">Sign in</button>
     <p class="err" id="autherr" role="alert" aria-live="polite"></p>
     <button class="toggle" id="locktoggle" type="button" hidden></button>
+    <button class="toggle" id="lockplans" type="button">See plans &amp; pricing →</button>
     <div id="lockproviders" class="sso"></div>
   </form>
 </div>
@@ -508,6 +509,10 @@
         <p class="sub">Set an account's tier without a payment (a comp for family or a tester). Allowance and usage follow the tier.</p>
         <div id="adminplans"></div>
         <div id="planadminmsg" class="sub" style="margin-top:8px"></div>
+        <h3 style="margin-top:30px">Sign-ups (admin)</h3>
+        <p class="sub">Whether a stranger can make their own account on the buy page. Closed, only you can make accounts.</p>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:8px"><input type="checkbox" id="regopen" style="width:auto"> Open sign-ups</label>
+        <div id="regmsg" class="sub" style="margin-top:8px"></div>
       </div>
     </div>
   </section>
@@ -528,16 +533,19 @@
     <div id="pageplans" style="margin-top:14px;display:flex;gap:14px;flex-wrap:wrap"></div>
     <p class="sub" style="margin-top:12px">No plan includes a voice provider. That part is always yours to plug in.</p>
 
-    <h3 style="margin-top:28px">What every plan includes</h3>
-    <ul style="margin:10px 0 0;padding-left:20px;line-height:1.9">
-      <li>The reader: add EPUBs or story links, chapters, resume, and a play queue.</li>
-      <li>Bring your own voice provider: your key sits on the server, never in this browser.</li>
-      <li>Per-book voices, and a pronunciation list for the words a voice gets wrong.</li>
-      <li>Install to your home screen; playback keeps going with the screen locked.</li>
-    </ul>
-
     <h3 style="margin-top:28px">Storage blocks</h3>
     <div id="pageblocks" style="margin-top:12px"></div>
+
+    <h3 style="margin-top:28px">Your cart</h3>
+    <div class="addpanel" style="margin-top:10px">
+      <div id="pagecart" class="small">Nothing in the cart yet.</div>
+      <div id="pagetotal" class="small" style="margin-top:10px;font-weight:600"></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;align-items:center">
+        <button class="btn" id="pagebuy" type="button">Purchase</button>
+        <button class="btn quiet" id="pageclearcart" type="button">Empty cart</button>
+        <button class="btn quiet" id="pagesignin" type="button" style="display:none">Sign in or create an account</button>
+      </div>
+    </div>
 
     <p class="sub" id="pageplanmsg" style="margin-top:16px"></p>
   </section>
@@ -1180,7 +1188,7 @@ async function loadSessions() {
     const atab = $('#settabadmin');
     if (atab) { atab.hidden = !data.admin; setSetTab(localStorage.getItem(SETTAB_KEY)); }
     if (data.admin) loadGrants();
-    if (data.admin) loadAdminPlans();
+    if (data.admin) { loadAdminPlans(); loadRegSetting(); }
     if (data.admin) all.forEach(s => {
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:10px;margin-top:8px';
@@ -1321,6 +1329,8 @@ async function confirmCheckout(ref) {
     const d = await jpost('/billing/confirm', { reference: ref });
     if (d.subscription) idle('You are on the ' + d.subscription.plan + ' plan.');
     else if (d.addon) idle('Storage updated. You now have ' + d.addon.quantity + ' block(s).');
+    else if (d.applied) idle('Purchase complete.');
+    if (d.ok) clearCart();
   } catch (e) { fail(e); }
 }
 // --- plans page: the offering, rendered for the buy page --------------------
@@ -1333,11 +1343,44 @@ const PLAN_BULLETS = {
              'More storage for your shelf',
              'Voices: still not included, still yours to connect'],
 };
+// The cart. It survives sign-up: a logged-out visitor can pick a plan and
+// storage, hit purchase, make the account, and come back to a filled cart. The
+// account is created first, then the paid items go out as one checkout, so the
+// payment is linked to the account by the provider metadata (user = uid).
+const CART_KEY = 'fireside.cart';
+function readCart() {
+  try { const c = JSON.parse(localStorage.getItem(CART_KEY) || '{}') || {};
+    return { tier: typeof c.tier === 'string' ? c.tier : '',
+             blocks: Math.max(0, parseInt(c.blocks || 0, 10) || 0) }; }
+  catch (e) { return { tier: '', blocks: 0 }; }
+}
+function writeCart(c) { try { localStorage.setItem(CART_KEY, JSON.stringify(c)); } catch (e) {} }
+function clearCart() { try { localStorage.removeItem(CART_KEY); } catch (e) {} }
+function tierById(id) { return ((PLAN_CAT && PLAN_CAT.tiers) || []).find(t => t.id === id) || null; }
+function cartItems() {
+  const c = readCart(), cat = PLAN_CAT || {}, items = [];
+  if (c.tier && c.tier !== 'free') items.push({ plan: c.tier, quantity: 1 });
+  if (c.blocks > 0 && cat.storage) items.push({ plan: cat.storage.addon, quantity: c.blocks });
+  return items;
+}
+function cartTotalCents() {
+  const c = readCart(), cat = PLAN_CAT || {}, t = tierById(c.tier);
+  let total = 0, known = true;
+  if (t) { if (t.amount_cents == null) known = false; else total += t.amount_cents; }
+  if (c.blocks > 0) {
+    if (!cat.storage || cat.storage.amount_cents == null) known = false;
+    else total += cat.storage.amount_cents * c.blocks;
+  }
+  return { total: total, known: known, hasTier: !!t };
+}
 function planCard(t, plan, cat) {
+  const c = readCart();
   const on = t.id === plan;
+  const inCart = c.tier === t.id;
   const card = document.createElement('div');
   card.className = 'addpanel';
-  card.style.cssText = 'flex:1 1 240px;margin:0' + (on ? ';border-color:var(--flame)' : '');
+  card.style.cssText = 'flex:1 1 240px;margin:0;text-align:left'
+    + (inCart ? ';border-color:var(--flame)' : '');
   const h = document.createElement('div'); h.style.cssText = 'font-weight:600;font-size:17px';
   h.textContent = t.label || t.id; card.append(h);
   const price = document.createElement('div'); price.style.cssText = 'margin-top:6px;font-size:22px;font-weight:600';
@@ -1354,24 +1397,79 @@ function planCard(t, plan, cat) {
   if (on) {
     const tag = document.createElement('p'); tag.className = 'sub'; tag.style.margin = '12px 0 0';
     tag.textContent = 'This is your current plan.'; card.append(tag);
-  } else if (t.id !== 'free') {
+  } else if (t.amount_cents == null) {
+    const b = document.createElement('button'); b.className = 'btn'; b.type = 'button';
+    b.style.marginTop = '12px'; b.textContent = 'Not for sale yet'; b.disabled = true;
+    card.append(b);
+  } else {
     const b = document.createElement('button'); b.className = 'btn'; b.type = 'button';
     b.style.marginTop = '12px';
-    const buyable = cat && cat.payments_configured && t.amount_cents != null;
-    b.textContent = buyable ? ('Buy ' + (t.label || t.id)) : 'Not for sale yet';
-    b.disabled = !buyable;
-    b.onclick = () => startCheckout({ plan: t.id }, $('#pageplanmsg'));
+    b.textContent = inCart ? 'In the cart ✓'
+      : (t.amount_cents ? ('Add ' + (t.label || t.id)) : 'Use the free plan');
+    b.onclick = () => { const cc = readCart(); cc.tier = t.id; writeCart(cc);
+                        loadPlansPage(); };
     card.append(b);
   }
   return card;
 }
+function renderCart() {
+  const c = readCart(), cat = PLAN_CAT || {}, t = tierById(c.tier);
+  const box = $('#pagecart'); if (!box) return;
+  const lines = [];
+  if (t) lines.push(t.label + (t.id === 'free' ? ' (free)' : '') + ': '
+    + (t.amount_cents == null ? 'price not set'
+       : (t.amount_cents ? usd(t.amount_cents) + '/' + (t.interval || 'mo') : 'free')));
+  if (c.blocks > 0 && cat.storage) lines.push('Storage: ' + c.blocks + ' block'
+    + (c.blocks > 1 ? 's' : '') + ' × ' + fmtBytes(cat.storage.block_bytes)
+    + (cat.storage.amount_cents != null
+       ? ' — ' + usd(cat.storage.amount_cents * c.blocks) + '/' + (cat.storage.interval || 'mo')
+       : ' — price not set'));
+  box.innerHTML = '';
+  if (!lines.length) box.textContent = 'Nothing in the cart yet. Pick a plan, and add storage if you need it.';
+  lines.forEach(x => { const d = document.createElement('div'); d.textContent = x; box.append(d); });
+  const tot = cartTotalCents();
+  $('#pagetotal').textContent = lines.length
+    ? ('Total: ' + (tot.known ? (tot.total ? usd(tot.total) + '/mo' : 'free') : '—')) : '';
+  const btn = $('#pagebuy');
+  const payable = tot.hasTier && cartItems().length > 0;
+  btn.textContent = (!AUTH.user && payable) ? 'Create account & purchase' : 'Purchase';
+  btn.disabled = !tot.hasTier;
+  $('#pagesignin').style.display = AUTH.user ? 'none' : '';
+}
+async function buyPurchase() {
+  const c = readCart(), cat = PLAN_CAT || {}, msg = $('#pageplanmsg');
+  if (!c.tier) { msg.textContent = 'Pick a plan first.'; return; }
+  const items = cartItems();
+  if (!items.length) {
+    // The free plan costs nothing: there is no charge, only an account.
+    if (!AUTH.user) { openDoor('create'); return; }
+    clearCart(); loadPlansPage();
+    idle('You are on the free plan.');
+    msg.textContent = 'You are on the free plan. Connect a voice provider to start listening.';
+    return;
+  }
+  if (!AUTH.user) { openDoor('create'); return; }   // account first, then the payment
+  if (!cat.payments_configured) {
+    msg.textContent = 'Payments are not switched on yet, so nothing was charged. '
+      + 'Your cart is saved; try again once a payment provider is live.';
+    return;
+  }
+  await startCheckout({ items: items }, msg);
+}
+function openDoor(mode) {
+  AUTH.mode = mode || 'sign';
+  document.body.classList.add('locked');
+  $('#lock').hidden = false;
+  renderAuth();
+  $('#lockuser').focus();
+}
 async function loadPlansPage() {
   const box = $('#pageplans'); if (!box) return;
   let s = {}, cat = null;
-  try { s = await api('/storage') || {}; } catch (e) {}
-  try { cat = await api('/plans'); } catch (e) {}
+  try { s = await api('/storage') || {}; } catch (e) {}   // 401 when logged out
+  try { cat = await api('/plans') || {}; } catch (e) {}
   if (cat) PLAN_CAT = cat;
-  const plan = s.plan || 'platform';
+  const plan = AUTH.user ? (s.plan || 'free') : '';
   box.innerHTML = '';
   ((cat && cat.tiers) || []).forEach(t => box.append(planCard(t, plan, cat)));
   if (!cat || !cat.tiers) box.textContent = 'Could not load the plans just now.';
@@ -1380,24 +1478,47 @@ async function loadPlansPage() {
     blocks.innerHTML = '';
     const st = cat && cat.storage;
     if (st) {
+      const c = readCart();
       const p = document.createElement('p'); p.className = 'sub'; p.style.margin = '0 0 8px';
-      p.textContent = 'Storage blocks: ' + fmtBytes(st.block_bytes) + ' each'
+      p.textContent = fmtBytes(st.block_bytes) + ' each'
         + (st.amount_cents != null ? ', ' + usd(st.amount_cents) + '/' + (st.interval || 'mo') : ', price not set yet')
-        + '. You have ' + (s.storage_blocks || 0) + '.';
-      const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:8px;align-items:center';
-      const inp = document.createElement('input'); inp.type = 'number'; inp.min = '1'; inp.value = '1';
+        + (AUTH.user ? '. You hold ' + (s.storage_blocks || 0) + '.' : '.');
+      const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap';
+      const inp = document.createElement('input'); inp.type = 'number'; inp.min = '0'; inp.value = String(c.blocks || 0);
       inp.style.maxWidth = '90px';
-      const b = document.createElement('button'); b.className = 'btn'; b.type = 'button'; b.textContent = 'Buy blocks';
-      b.disabled = !(cat && cat.payments_configured && st.amount_cents != null);
-      b.onclick = () => startCheckout({ plan: st.addon, quantity: Math.max(1, parseInt(inp.value || '1', 10)) }, $('#pageplanmsg'));
+      const b = document.createElement('button'); b.className = 'btn quiet'; b.type = 'button'; b.textContent = 'Set blocks';
+      b.onclick = () => { const cc = readCart(); cc.blocks = Math.max(0, parseInt(inp.value || '0', 10) || 0);
+                          writeCart(cc); loadPlansPage(); };
       row.append(inp, b); blocks.append(p, row);
     }
   }
+  renderCart();
   const msg = $('#pageplanmsg');
   msg.textContent = (cat && cat.payments_configured) ? ''
-    : 'Payments are not switched on yet, so the buy buttons are off. The plans and what they include are the real shape.';
+    : 'Payments are not switched on yet, so a paid purchase cannot complete. '
+      + 'You can still create a free account, and the plans and prices are the real shape.';
 }
+if ($('#pagebuy')) $('#pagebuy').onclick = () => buyPurchase();
+if ($('#pageclearcart')) $('#pageclearcart').onclick = () => { clearCart(); loadPlansPage(); };
+if ($('#pagesignin')) $('#pagesignin').onclick = () => openDoor(AUTH.hasAccounts ? 'sign' : 'create');
 if ($('#gotoplans')) $('#gotoplans').onclick = () => show('plans');
+if ($('#lockplans')) $('#lockplans').onclick = () => {
+  document.body.classList.remove('locked');
+  $('#lock').hidden = true;
+  show('plans');
+};
+async function loadRegSetting() {
+  const cb = $('#regopen'); if (!cb) return;
+  try { const p = await api('/auth/policy');
+        cb.checked = p.registration_open !== false; } catch (e) {}
+  cb.onchange = async () => {
+    try { const d = await jpost('/auth/registration', { open: cb.checked });
+          $('#regmsg').textContent = 'Sign-ups are now '
+            + (d.registration === 'open' ? 'open.' : 'closed.');
+          AUTH.registrationOpen = cb.checked; }
+    catch (e) { cb.checked = !cb.checked; $('#regmsg').textContent = e.message || 'could not save'; }
+  };
+}
 async function loadAdminPlans() {
   const box = $('#adminplans'); if (!box) return;
   let d;
@@ -1529,6 +1650,9 @@ async function requireSession() {
   AUTH.mode = AUTH.hasAccounts ? 'sign' : 'create';
   document.body.classList.add('locked');
   $('#lock').hidden = false;        // reveal the door; body.locked hid the app
+  // A stranger sees the sales page and nothing else; the other tabs are the
+  // signed-in app. The Plans tab is public, so it stays.
+  document.querySelectorAll('#tabs button').forEach(b => { b.hidden = (b.dataset.v !== 'plans'); });
   let claim = '';
   try { claim = new URLSearchParams(location.search).get('claim') || ''; } catch (_) {}
   if (claim) {                      // a social login collided; prove the account
@@ -1553,6 +1677,7 @@ async function renderClaim() {
   $('#lockpass').setAttribute('autocomplete', 'current-password');
   $('#lockgo').textContent = 'Confirm and link';
   $('#locktoggle').hidden = true;
+  $('#lockplans').hidden = true;
   authMsg('');
   const provs = $('#lockproviders'); provs.innerHTML = '';
   try {
@@ -2700,6 +2825,8 @@ window.addEventListener('load', async () => {
   renderQueue();
   applyVolume();
   syncTog();
+  // A cart started before sign-up: bring it back so the purchase can finish.
+  try { if (readCart().tier) show('plans'); } catch (_) {}
   try {
     const lp = new URLSearchParams(location.search);
     if (lp.get('linked')) {

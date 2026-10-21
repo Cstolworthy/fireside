@@ -105,6 +105,14 @@ class TestBrowserUi(unittest.TestCase):
 
     def test_favicon_is_served_publicly(self):
         self.assertIn("/favicon.ico", PUBLIC_ROUTES)
+
+    def test_plans_catalog_is_public(self):
+        # The sales page must load for a visitor with no session: the catalog is
+        # public, and the buy button routes them through the door to an account.
+        self.assertIn("/plans", PUBLIC_ROUTES)
+        s, d = self._jget("/plans")
+        self.assertEqual(s, 200)
+        self.assertIn("tiers", d)
         s, body = self._get("/favicon.ico")
         self.assertEqual(s, 200)
         self.assertEqual(body[:4], b"\x00\x00\x01\x00")   # ICO magic
