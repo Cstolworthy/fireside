@@ -80,6 +80,29 @@ registers one. `GET /credits` is read-only (balance, rate, bundles);
 Still to build: the payment provider once it is registered (the tier and storage
 screens ship first, priced from the provider when one exists).
 
+## A settled checkout lands twice (2026-10-21)
+
+A buyer who pays and then closes the tab must still get their plan, so there are
+two ways the same sale is recorded, and both are safe:
+
+- `POST /billing/confirm` is the browser's fast path. It needs a session and the
+  Checkout Session id, and it re-reads the session from the provider.
+- `POST /webhook/<provider>` is the provider's own server-to-server call. It is
+  public by necessity, so the *signature* is the whole authentication: the body
+  is not read until the provider verifies it. A forged or replayed body changes
+  nothing.
+
+The two write the same rows (both writers are upserts), so it does not matter
+which arrives first, and the provider's retries are harmless. A render is only
+metered against the sale connection, never a BYO-key connection, and a fresh
+render pays only for characters it actually synthesises.
+
+To turn Stripe on: set `FIRESIDE_PAYMENT_PROVIDER=payments_stripe`,
+`FIRESIDE_STRIPE_KEY=sk_...` (test or live), and `FIRESIDE_STRIPE_WEBHOOK_SECRET=whsec_...`
+for the endpoint registered at `/webhook/stripe` in the Stripe dashboard. With
+no key, or no webhook secret, purchases refuse and the webhook refuses; the
+honest default is off.
+
 ## The plan model (2026-10-21)
 
 Two tiers and one add-on, named in `host/quota.py` and priced by the provider:

@@ -939,23 +939,14 @@ class App:
                          "detail": getattr(co, "detail", "")}
         return 200, {"url": co.url, "reference": co.reference}
 
-    def billing_confirm(self, q, body):
-        uid = self._uid(q, body)
-        if not uid:
-            return 401, {"error": "auth required"}
-        pp = payments.get()
-        fn = getattr(pp, "confirm", None)
-        if not callable(fn):
-            return 503, {"error": "payments not configured"}
-        ref = (body or {}).get("reference") or q.get("reference") or ""
-        sub = fn(ref)
-        if not getattr(sub, "ok", False):
-            return 402, {"error": "not confirmed",
-                         "detail": getattr(sub, "detail", "")}
-        provider_id = getattr(pp, "id", "")
-        # A cart (many items) settles the tier and its add-ons in one payment.
-        # Each item lands in its own row: the tier replaces the subscription,
-        # a storage item becomes the add-on row it names.
+    def _apply_subscription(self, uid, sub, ref, provider_id):
+        """Write what the provider reported into the rows the host reads.
+
+        A cart applies each item to its own row; a single purchase is either the
+        tier or the storage add-on. Idempotent by construction (both writers are
+        upserts), so the browser confirm and the webhook landing together - in
+        either order - leave the same rows, never a doubled one.
+        """
         items = getattr(sub, "items", None)
         if items:
             applied = []
@@ -973,21 +964,77 @@ class App:
                                          provider=provider_id, reference=ref,
                                          current_period_end=sub.current_period_end)
                     applied.append({"subscription": row})
-            return 200, {"ok": True, "applied": applied,
-                         "subscription": billing.get(self.conn, uid)}
-        # An add-on does not replace the tier - it adds capacity to it. Anything
-        # the provider names as the storage add-on lands in its own row.
+            return {"applied": applied}
+        # An add-on does not replace the tier - it adds capacity to it.
         if getattr(sub, "plan", "") == quota.STORAGE_ADDON:
-            row = billing.upsert_addon(
+            return {"addon": billing.upsert_addon(
                 self.conn, uid, quota.STORAGE_ADDON,
                 getattr(sub, "quantity", 0) or 1, sub.status,
                 provider=provider_id, reference=ref,
-                current_period_end=sub.current_period_end)
-            return 200, {"ok": True, "addon": row}
-        row = billing.upsert(self.conn, uid, sub.plan, sub.status,
-                             provider=provider_id, reference=ref,
-                             current_period_end=sub.current_period_end)
-        return 200, {"ok": True, "subscription": row}
+                current_period_end=sub.current_period_end)}
+        return {"subscription": billing.upsert(
+            self.conn, uid, sub.plan, sub.status, provider=provider_id,
+            reference=ref, current_period_end=sub.current_period_end)}
+
+    def billing_confirm(self, q, body):
+        uid = self._uid(q, body)
+        if not uid:
+            return 401, {"error": "auth required"}
+        pp = payments.get()
+        fn = getattr(pp, "confirm", None)
+        if not callable(fn):
+            return 503, {"error": "payments not configured"}
+        ref = (body or {}).get("reference") or q.get("reference") or ""
+        sub = fn(ref)
+        if not getattr(sub, "ok", False):
+            return 402, {"error": "not confirmed",
+                         "detail": getattr(sub, "detail", "")}
+        out = self._apply_subscription(uid, sub, ref, getattr(pp, "id", ""))
+        resp = {"ok": True}
+        resp.update(out)
+        if "applied" in out:
+            resp["subscription"] = billing.get(self.conn, uid)
+        return 200, resp
+
+    def payment_webhook(self, raw, sig_header, provider_id="stripe"):
+        """Stripe's server-to-server view of a settled checkout.
+
+        Public by necessity (Stripe cannot hold a session), so the signature is
+        the whole authentication: nothing is read out of the body until the
+        provider verifies it. On a completed checkout the session is re-read
+        from Stripe and applied exactly as /billing/confirm applies it, so a
+        buyer who closes the tab still gets their plan. Replays are harmless -
+        the apply is an upsert and Stripe may retry.
+        """
+        pp = payments.get(provider_id)
+        if pp is None:
+            return 404, {"error": "unknown payment provider"}
+        verify = getattr(pp, "verify_webhook", None)
+        if not callable(verify):
+            return 501, {"error": "provider has no webhook support"}
+        event, err = verify(raw, sig_header)
+        if event is None:
+            return 400, {"error": "bad webhook", "detail": err}
+        ref = ""
+        rfn = getattr(pp, "webhook_reference", None)
+        if callable(rfn):
+            ref = rfn(event) or ""
+        typ = (event or {}).get("type", "")
+        if not ref:
+            return 200, {"ok": True, "ignored": typ}
+        sub = pp.confirm(ref)
+        if not getattr(sub, "ok", False):
+            # Not paid / not complete: acknowledge so Stripe stops retrying, but
+            # record nothing. Money that has not settled is not a sale.
+            return 200, {"ok": True, "reference": ref, "applied": False,
+                         "detail": getattr(sub, "detail", "")}
+        uid = getattr(sub, "user", "") or ""
+        if not uid:
+            return 200, {"ok": True, "reference": ref, "applied": False,
+                         "detail": "no user on checkout session"}
+        self._apply_subscription(uid, sub, ref, getattr(pp, "id", ""))
+        return 200, {"ok": True, "reference": ref, "applied": True, "user": uid}
+
 
     def job(self, q, body):
         j = jobs.job(self.conn, q.get("id", ""))
@@ -1832,6 +1879,17 @@ def make_handler(app):
                                   cookie=self._cookie_str(
                                       auth.SESSION_COOKIE, token,
                                       max_age=auth.SESSION_TTL))
+            # Stripe's server-to-server webhook. Public by necessity: Stripe
+            # holds no session, so the signature is the authentication. It is
+            # read raw here, before any JSON parse, because the signature is
+            # computed over the exact bytes. No session, no auth gate.
+            if path.startswith("/webhook/") and self.command == "POST":
+                n = int(self.headers.get("Content-Length") or 0)
+                payload = self.rfile.read(n) if n else b""
+                sig = self.headers.get("Stripe-Signature", "")
+                pid = parts[1] if len(parts) > 1 else "stripe"
+                status, body = app.payment_webhook(payload, sig, pid)
+                return self._json(status, body)
             name = routes.get(path)
             if name is None:
                 return self.send_error(404)

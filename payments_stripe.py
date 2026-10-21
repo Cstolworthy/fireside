@@ -21,8 +21,11 @@ client never sees a card at all - it just opens the URL.
 """
 
 import base64
+import hashlib
+import hmac
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -30,6 +33,40 @@ import urllib.request
 from host.payments import Checkout, Plan, Receipt, Subscription
 
 STRIPE_API = os.environ.get("STRIPE_API_BASE", "https://api.stripe.com").rstrip("/")
+
+# How long a signed webhook stays acceptable. Stripe's own guidance is 5 minutes;
+# nothing older is trusted, so a captured body cannot be replayed later.
+WEBHOOK_TOLERANCE_SECONDS = 300
+
+
+def verify_signature(raw, sig_header, secret, tolerance=WEBHOOK_TOLERANCE_SECONDS):
+    """True when `sig_header` is a valid Stripe signature over `raw`.
+
+    Stripe's scheme: the header is `t=<unix>,v1=<hex>[,v1=<hex>...]`, and the
+    signed payload is `"<t>.<raw body>"` HMAC-SHA256'd with the endpoint's
+    signing secret. Any `v1` may match (Stripe rotates). A timestamp older than
+    `tolerance` is refused so a replay is not accepted. The comparison is
+    constant-time.
+    """
+    if not raw or not sig_header or not secret:
+        return False
+    parts = {}
+    for piece in sig_header.split(","):
+        k, _, v = piece.strip().partition("=")
+        parts.setdefault(k, []).append(v)
+    try:
+        t = int((parts.get("t") or [""])[0])
+    except (TypeError, ValueError):
+        return False
+    if abs(time.time() - t) > tolerance:
+        return False
+    signed = (str(t) + ".").encode() + (raw if isinstance(raw, bytes)
+                                         else str(raw).encode())
+    expected = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+    for cand in parts.get("v1") or []:
+        if hmac.compare_digest(expected, cand):
+            return True
+    return False
 
 
 def _basic_auth(key):
@@ -93,12 +130,13 @@ class StripeProvider:
     id = "stripe"
 
     def __init__(self, secret_key, api_base=STRIPE_API, timeout=20, post=None,
-                 plans=None):
+                 plans=None, webhook_secret=""):
         self.key = secret_key
         self.api_base = (api_base or STRIPE_API).rstrip("/")
         self.timeout = timeout
         self._post = post or _http_post
         self._plans = list(plans) if plans is not None else list(DEFAULT_PLANS)
+        self.webhook_secret = (webhook_secret or "").strip()
 
     # -- helpers -------------------------------------------------------------
 
@@ -300,6 +338,35 @@ class StripeProvider:
             return Checkout(False, detail=msg)
         return Checkout(True, j.get("url", ""), j.get("id", ""))
 
+    # -- webhooks -------------------------------------------------------------
+    # A buyer who closes the tab after paying must still get their plan. The
+    # webhook is the server-to-server truth; the browser's /billing/confirm is
+    # the fast path. Both land in the same place, and applying twice is a no-op.
+
+    def verify_webhook(self, raw, sig_header):
+        """(event, "") when the signature proves Stripe sent this body, else
+        (None, reason). Nothing is trusted before the signature checks out, so a
+        forged POST to the public webhook route changes nothing."""
+        if not self.webhook_secret:
+            return None, "webhook secret not configured"
+        if not verify_signature(raw, sig_header or "", self.webhook_secret):
+            return None, "signature verification failed"
+        try:
+            return json.loads(raw.decode("utf-8")), ""
+        except (ValueError, UnicodeDecodeError, AttributeError):
+            return None, "bad payload"
+
+    def webhook_reference(self, event):
+        """The Checkout Session id a settled event names, or "" for an event we
+        do not act on. Only a completed (or asynchronously paid) checkout is a
+        sale; every other event type is acknowledged and ignored."""
+        typ = (event or {}).get("type", "")
+        if typ not in ("checkout.session.completed",
+                       "checkout.session.async_payment_succeeded"):
+            return ""
+        obj = ((event or {}).get("data") or {}).get("object") or {}
+        return obj.get("id", "") or ""
+
     def confirm(self, reference):
         """Read a Checkout Session back and say whether it is paid + active."""
         ref = (reference or "").strip()
@@ -357,4 +424,6 @@ def from_env():
         return None
     if not key.startswith("sk_"):
         raise ValueError("FIRESIDE_STRIPE_KEY is not a Stripe secret key (sk_...)")
-    return StripeProvider(key)
+    whsec = (os.environ.get("FIRESIDE_STRIPE_WEBHOOK_SECRET")
+             or os.environ.get("STRIPE_WEBHOOK_SECRET") or "").strip()
+    return StripeProvider(key, webhook_secret=whsec)
