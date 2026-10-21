@@ -112,6 +112,7 @@
   .lock .card{width:100%;max-width:360px;background:var(--surface);border:1px solid var(--line);
     border-radius:16px;padding:32px;box-shadow:0 12px 40px #0006}
   .lock .mark{font:600 20px/1 var(--serif);letter-spacing:.01em;color:var(--soft)}
+  .lock .tag{color:var(--faint);font-size:13px;margin-top:6px}
   .lock h1{font:600 28px/1.25 var(--serif);margin:24px 0 8px}
   .lock .sub{color:var(--soft);font-size:15px;margin-bottom:24px}
   .lock .field + .field{margin-top:16px}
@@ -273,6 +274,7 @@
 <div class="lock" id="lock" hidden>
   <form class="card" id="lockform" autocomplete="on" novalidate>
     <div class="mark">fireside</div>
+    <p class="tag">Books and web stories, voiced.</p>
     <h1 id="locktitle">sign in</h1>
     <p class="sub" id="locksub"></p>
     <div class="field">
@@ -332,7 +334,7 @@
     <p class="small" id="shelflabel" style="margin:34px 0 0;display:none">On your shelf</p>
     <div class="shelf" id="shelf"></div>
     <p class="small" id="libempty" style="color:var(--faint)">Nothing here yet. Add a book to start.</p>
-    <div class="legend">
+    <div class="legend" id="legend" style="display:none">
       <span><span class="spine"><i class="ready"></i></span>on this device</span>
       <span><span class="spine"><i class="avail"></i></span>voiced, not here</span>
       <span><span class="spine"><i class="voice"></i></span>being voiced</span>
@@ -1424,6 +1426,7 @@ async function loadLibrary() {
     const shelf = $('#shelf'); shelf.innerHTML = '';
     $('#shelflabel').style.display = books.length ? 'block' : 'none';
     $('#libempty').style.display = books.length ? 'none' : 'block';
+    $('#legend').style.display = books.length ? 'flex' : 'none';
     books.forEach(b => {
       const cell = document.createElement('div'); cell.className = 'bk'; cell.onclick = () => { openBook(b.id); show('play'); };
       const cover = document.createElement('div'); cover.className = 'cover'; fillCover(cover, b.id, b.title, b.cover);
