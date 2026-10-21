@@ -236,6 +236,30 @@ def stale_chars(conn, storage, text, rules, split, provider, voice, model, speed
     return stale
 
 
+def stale_book_chars(conn, storage, speech, book_id, idxs, rules, voice, model, speed):
+    """Characters a re-render of `idxs` would actually synthesise in this voice.
+
+    Mirrors the renderer chunk for chunk: a chapter already voiced in this exact
+    (voice, model, speed, rules) contributes nothing, and a chunk already cached
+    contributes nothing. A metered run holds this number before it starts and,
+    measured again after, charges only the difference, so re-voicing a cached
+    book costs nothing (Chris, 2026-10-21).
+    """
+    split = (lambda text: chunks.split(speech, text))
+    total = 0
+    for i in idxs:
+        row = _chapter_row(conn, book_id, i)
+        if not row:
+            continue
+        try:
+            text = storage.get(row["text_ref"]).decode("utf-8")
+        except Exception:
+            continue
+        total += stale_chars(conn, storage, text, rules, split,
+                             speech.id, voice, model, speed)
+    return total
+
+
 def _write_chapter_audio(conn, book_id, idx, entry, provider, voice, model, speed,
                          voice_label="", pron_tag=""):
     conn.execute(

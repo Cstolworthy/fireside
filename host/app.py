@@ -46,6 +46,30 @@ ASSETS_DIR = os.path.join(BASE_DIR, "assets")
 HOST_VERSION = "2.0"
 
 
+def _sale_connection_from_env():
+    """The one connection that sells character capacity, from the environment.
+
+    A deployment names it once, so turning resale on is an operator action, not
+    a code change: `FIRESIDE_SALE_CONNECTION` is either JSON
+    ({"connection_id": "...", "provider": "azure", "voice": "..."}) or the
+    shorthand "provider:voice[:model]". Absent means nothing is sold and every
+    render is pass-through, which is the honest default.
+    """
+    raw = (os.environ.get("FIRESIDE_SALE_CONNECTION") or "").strip()
+    if not raw:
+        return None
+    try:
+        spec = json.loads(raw)
+    except ValueError:
+        parts = raw.split(":")
+        spec = {"provider": parts[0]}
+        if len(parts) > 1:
+            spec["voice"] = parts[1]
+        if len(parts) > 2:
+            spec["model"] = parts[2]
+    return spec if isinstance(spec, dict) and spec else None
+
+
 class App:
     def __init__(self, plugins_root=None, db_path=None, storage_id=None,
                  sale_connection=None, rate_limiter=None, hosted=False,
@@ -66,7 +90,8 @@ class App:
             if hasattr(obj, "configured") and not obj.configured:
                 want = "local"
         self.storage_id = want
-        self.sale_connection = sale_connection
+        self.sale_connection = (sale_connection if sale_connection is not None
+                                else _sale_connection_from_env())
         self.rate_limiter = rate_limiter
         self.hosted = hosted
         self.require_auth = require_auth
@@ -637,9 +662,16 @@ class App:
                          "detail": "this render needs about %d bytes of audio and "
                                    "your plan has no room for it" % est_bytes}
         sale = accounting.sale_connection_matches(self.sale_connection, provider, voice, model)
+        # What this run actually has to synthesise: a chapter already voiced in
+        # this exact voice (and rules) is a cache hit and costs the buyer
+        # nothing. The whole-book estimate is the storage question, not the
+        # money question, so the two are kept apart.
+        rules = pron.load(self.conn, user)
+        fresh = jobs.stale_book_chars(self.conn, self.storage, speech, book_id, todo,
+                                      rules, voice, model, speed)
         res_id = None
         if sale and not grants.credits_unlimited(self.conn, user):
-            quote = speech.quote({"chars_est": est, "cred": cred, "sale": True})
+            quote = speech.quote({"chars_est": fresh, "cred": cred, "sale": True})
             if not getattr(quote, "eligible", True):
                 return 402, {"error": "not eligible",
                              "reason": getattr(quote, "refusal_reason", "")}
@@ -663,13 +695,18 @@ class App:
                                  model, speed, cred=cred, opts=opts, only=only,
                                  job_id=jid, voice_label=voice_label)
                 if sale and res_id:
-                    # The plugin reports the real count. A failed run leaves the
-                    # job's done_chars short of the estimate, so a partial render
-                    # is charged only for what was actually voiced.
-                    jr = jobs.job(c, jid)
-                    done = (jr or {}).get("done_chars")
-                    rep = speech.report({"chars_actual": (done if done else est),
-                                         "cred": cred, "job_id": jid, "sale": True})
+                    # Charge only the characters this run actually synthesised:
+                    # what is still stale after the run is what was never voiced
+                    # (a chapter that was already cached, or one that failed).
+                    try:
+                        remaining = jobs.stale_book_chars(
+                            c, self.storage, speech, book_id, todo, rules,
+                            voice, model, speed)
+                    except Exception:
+                        remaining = 0
+                    actual = max(0, fresh - remaining)
+                    rep = speech.report({"chars_actual": actual, "cred": cred,
+                                         "job_id": jid, "sale": True})
                     accounting.settle(c, res_id, rep)
             finally:
                 c.close()
