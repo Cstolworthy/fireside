@@ -525,6 +525,7 @@
   <section class="view" id="v-plans">
     <h2>Get fireside</h2>
     <p class="sub">The reader is free to try. A plan buys the platform, and the platform is only half the story.</p>
+    <p class="sub" id="pagesignupline" style="margin-top:10px">New here? <button class="btn quiet" id="pagesignup" type="button">Create a free account</button> No card needed.</p>
 
     <div class="addpanel" style="margin-top:16px;border-color:var(--flame)">
       <div style="font-weight:600">Read this before you buy</div>
@@ -1410,10 +1411,17 @@ function planCard(t, plan, cat) {
   } else {
     const b = document.createElement('button'); b.className = 'btn'; b.type = 'button';
     b.style.marginTop = '12px';
-    b.textContent = inCart ? 'In the cart ✓'
+    const freeSignup = t.amount_cents === 0 && !AUTH.user;
+    b.textContent = freeSignup ? 'Create a free account'
+      : inCart ? 'In the cart ✓'
       : (t.amount_cents ? ('Add ' + (t.label || t.id)) : 'Use the free plan');
-    b.onclick = () => { const cc = readCart(); cc.tier = t.id; writeCart(cc);
-                        loadPlansPage(); };
+    b.onclick = () => {
+      // The free tier costs nothing and needs no cart: a visitor just makes an
+      // account, and the server starts every new account on free.
+      if (freeSignup) { openDoor('create'); return; }
+      const cc = readCart(); cc.tier = t.id; writeCart(cc);
+      loadPlansPage();
+    };
     card.append(b);
   }
   return card;
@@ -1502,6 +1510,8 @@ async function loadPlansPage() {
     }
   }
   renderCart();
+  const sl = $('#pagesignupline');
+  if (sl) sl.style.display = AUTH.user ? 'none' : '';
   const msg = $('#pageplanmsg');
   msg.textContent = (cat && cat.payments_configured) ? ''
     : 'Payments are not switched on yet, so a paid purchase cannot complete. '
@@ -1510,6 +1520,7 @@ async function loadPlansPage() {
 if ($('#pagebuy')) $('#pagebuy').onclick = () => buyPurchase();
 if ($('#pageclearcart')) $('#pageclearcart').onclick = () => { clearCart(); loadPlansPage(); };
 if ($('#pagesignin')) $('#pagesignin').onclick = () => openDoor(AUTH.hasAccounts ? 'sign' : 'create');
+if ($('#pagesignup')) $('#pagesignup').onclick = () => openDoor('create');
 if ($('#gotoplans')) $('#gotoplans').onclick = () => show('plans');
 if ($('#lockplans')) $('#lockplans').onclick = () => {
   document.body.classList.remove('locked');

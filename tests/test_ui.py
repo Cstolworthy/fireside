@@ -103,6 +103,13 @@ class TestBrowserUi(unittest.TestCase):
         # who is not signed in.
         self.assertIn("$('#lock').hidden = false", html)
 
+    def test_free_signup_is_not_a_purchase(self):
+        # The free tier is an account, not a cart item: a visitor must be able
+        # to create one directly, and the server starts new accounts on free.
+        html = open(os.path.join(UI_DIR, "index.html"), encoding="utf-8").read()
+        self.assertIn('id="pagesignup"', html)
+        self.assertIn("Create a free account", html)
+
     def test_favicon_is_served_publicly(self):
         self.assertIn("/favicon.ico", PUBLIC_ROUTES)
 
