@@ -37,7 +37,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
-from host import accounting, auth, billing, connections, credentials, db, grants, jobs, library, mailer, payments, playback, plans, pron, quota, stats
+from host import accounting, auth, billing, connections, credentials, db, example, grants, jobs, library, mailer, payments, playback, plans, pron, quota, stats
 from sources._fetch import fetch as _fetch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -233,6 +233,61 @@ class App:
         self._maybe_cover(bid, book)
         return 200, {"book_id": bid, "title": getattr(book, "title", ""),
                      "chapters": len(getattr(book, "chapters", []))}
+
+    def _example_voice(self):
+        """The free voice the example is pre-rendered in: the sale connection
+        and the voice named on it. None when no sale connection is configured,
+        in which case the example is simply a free book to add, not a free
+        listen."""
+        spec = self.sale_connection or {}
+        cid = spec.get("connection_id")
+        if not cid:
+            return None
+        c = connections.get(self.conn, cid)
+        if not c:
+            return None
+        return {"connection_id": cid, "provider": c["provider"],
+                "voice": spec.get("voice") or example.DEFAULT_VOICE,
+                "voice_label": c["label"] or ""}
+
+    def add_example_book(self, q, body):
+        """Put the bundled example book on this user's shelf.
+
+        A click, not an upload: the text is bundled, so the same bytes land on
+        every shelf and a single pre-render serves them all. Adding it twice
+        finds the copy already there. With `render` set and a sale connection
+        configured, it also starts the free voice; because the text and voice
+        are already cached, that costs the reader nothing."""
+        user = self._uid(q, body)
+        if not user:
+            return 401, {"error": "auth required"}
+        bid = library.find_by_meta(self.conn, user, "example", example.EXAMPLE_MARK)
+        made = False
+        if not bid:
+            book = example.book()
+            incoming = self._book_bytes(book)
+            if not self._storage_ok(user, incoming):
+                return 507, {"error": "not enough storage",
+                             "detail": "the example needs about %d bytes and your "
+                                       "plan has no room for it" % incoming}
+            bid = library.add_book(self.conn, self.storage, user, book)
+            author = (book.meta or {}).get("author") or ""
+            if author:
+                library.set_details(self.conn, bid, author=author)
+            made = True
+        b = library.get_book(self.conn, bid) or {}
+        out = {"book_id": bid, "title": b.get("title", ""),
+               "chapters": len(library.chapters(self.conn, bid)),
+               "existing": not made,
+               "example_voice": self._example_voice()}
+        if body.get("render") and out["example_voice"]:
+            ev = out["example_voice"]
+            st, r = self._start_render(user, bid, cid=ev["connection_id"],
+                                       provider=ev["provider"], voice=ev["voice"],
+                                       voice_label=ev["voice_label"])
+            out["render_status"] = st
+            out["render"] = r
+        return 200, out
 
     @staticmethod
     def _book_bytes(book):
@@ -626,10 +681,20 @@ class App:
 
     def render(self, q, body):
         user = self._uid(q, body)
-        book_id = body["book"]
-        cid = body.get("connection_id") or ""
+        return self._start_render(
+            user, body["book"],
+            cid=body.get("connection_id") or "",
+            provider=body.get("provider", ""),
+            voice=body.get("voice", ""),
+            voice_label=body.get("voice_label", ""),
+            model=body.get("model", ""),
+            speed=float(body.get("speed", 1.0) or 1.0),
+            only=body.get("chapters"),
+            client_cred=body.get("cred"))
+
+    def _start_render(self, user, book_id, cid="", provider="", voice="", model="",
+                      speed=1.0, only=None, voice_label="", client_cred=None):
         cred = None
-        provider = body.get("provider", "")
         if cid:
             c = connections.get(self.conn, cid)
             if not connections.may_use(c, user, auth.is_admin(self.conn, user)):
@@ -638,15 +703,10 @@ class App:
             if cred is None:
                 return 403, {"error": "connection is switched off"}
             provider = c["provider"]
-        voice = body.get("voice", "")
-        voice_label = body.get("voice_label", "")
-        model = body.get("model", "")
-        speed = float(body.get("speed", 1.0) or 1.0)
-        only = body.get("chapters")
         if provider not in self.host.speech:
             return 400, {"error": "unknown provider"}
         if cred is None:
-            cred = body.get("cred") or credentials.get_credential(self.conn, user, provider)
+            cred = client_cred or credentials.get_credential(self.conn, user, provider)
         if self.rate_limiter is not None and not self.rate_limiter.allow(user):
             return 429, {"error": "rate limited"}
         speech = self.host.speech[provider].obj
@@ -1496,7 +1556,8 @@ GET_ROUTES = {
     "/storage": "storage_get",
 }
 POST_ROUTES = {
-    "/import": "import_book", "/render": "render", "/voices": "voices",
+    "/import": "import_book", "/book/example": "add_example_book",
+    "/render": "render", "/voices": "voices",
     "/book/renditions/delete": "remove_renditions", "/book/delete": "delete_book",
     "/speak": "speak",
     "/cover": "put_cover", "/cover/auto": "cover_auto", "/cover/clear": "clear_cover",

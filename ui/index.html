@@ -366,6 +366,7 @@
       <label>Or paste a story link</label>
       <div style="display:flex;gap:8px"><input id="url" placeholder="https://…" autocomplete="off"><button id="loadurl" class="btn" style="flex:0 0 96px">Load</button></div>
       <p class="hint">A locked AO3 work needs your cookie under Settings, or drop the work's EPUB.</p>
+      <p class="hint" style="margin-top:14px">New here? <button class="btn quiet" id="exbtn" type="button">Add the free example book</button></p>
     </div>
     <p class="small" id="shelflabel" style="margin:34px 0 0;display:none">On your shelf</p>
     <div class="shelf" id="shelf"></div>
@@ -1999,7 +2000,39 @@ function renderWelcome() {
       b.type = 'button'; b.className = 'btn quiet wgo'; b.textContent = s.go; b.onclick = s.run; li.append(b); }
     box.append(li);
   });
+  // The free door: anyone can hear a book before they own one or a voice. It
+  // is already voiced, so it costs the reader nothing.
+  const foot = document.createElement('p'); foot.className = 'sub'; foot.style.margin = '12px 0 0';
+  foot.append('Or hear something now: ');
+  const exb = document.createElement('button');
+  exb.type = 'button'; exb.className = 'btn quiet'; exb.textContent = 'Read the free example book';
+  exb.onclick = addExampleBook;
+  foot.append(exb); box.append(foot);
 }
+async function addExampleBook() {
+  $('#err').textContent = '';
+  busy('Adding the example book…');
+  try {
+    const d = await jpost('/book/example', { user: USER, render: true });
+    await loadLibrary();
+    await openBook(d.book_id, true);
+    const jid = d.render && d.render.job_id;
+    if (jid) {
+      while (true) {
+        await new Promise(r => setTimeout(r, 900));
+        const j = await api('/job?id=' + encodeURIComponent(jid));
+        if (j.status === 'error') { fail(new Error(j.error || 'voicing failed')); return; }
+        if (j.status === 'cancelled') { idle('Voicing cancelled.'); return; }
+        if (j.status === 'done') break;
+        progress('Voicing the example  ·  ch ' + j.current + '/' + j.total);
+      }
+      await openBook(d.book_id, true);
+    }
+    idle('The example book is ready. Press play.');
+  } catch (e) { fail(e); }
+  finally { renderActiveJobs(); }
+}
+if ($('#exbtn')) $('#exbtn').onclick = addExampleBook;
 if ($('#wdismiss')) $('#wdismiss').onclick = () => { try { localStorage.setItem(WELCOME_KEY, USER); } catch (_) {} renderWelcome(); };
 function bookById(id) { return books.find(b => b.id === id); }
 function coverURL(id, ref) { return '/cover?book=' + encodeURIComponent(id) + (ref ? '&v=' + encodeURIComponent(ref) : ''); }

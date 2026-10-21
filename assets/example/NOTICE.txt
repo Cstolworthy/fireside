@@ -1,0 +1,16 @@
+The example book
+================
+
+happy_prince.json is the text of "The Happy Prince and Other Tales" by Oscar
+Wilde (1888). The work is in the public domain in the United States (Wilde died
+in 1900; the collection was published in 1888).
+
+The text was taken from the Project Gutenberg eBook #902
+(https://www.gutenberg.org/ebooks/902), proofread by David Price and Paul
+Redmond, and cleaned for reading: the Gutenberg header and footer, the table of
+contents, the dedication, the illustration markers and the hard line wraps were
+removed, and each of the five stories is one chapter.
+
+Project Gutenberg is a trademark of the Project Gutenberg Literary Archive
+Foundation. The underlying text is public domain; this file is redistributed
+under that public-domain status.
