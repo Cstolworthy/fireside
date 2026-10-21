@@ -387,6 +387,14 @@ def render_book(conn, storage, speech, user_id, book_id, voice="", model="",
     return job_id
 
 
+def active_for_book(conn, book_id):
+    """True when a render for this book is queued or running. The caller waits:
+    deleting a book mid-render would let the worker write rows back for it."""
+    r = conn.execute("SELECT 1 FROM jobs WHERE book_id=? AND status IN "
+                     "('queued','running') LIMIT 1", (book_id,)).fetchone()
+    return bool(r)
+
+
 def list_for(conn, user_id, limit=20):
     """Recent jobs for one user, newest first. The client shows the active
     ones (queued or running) so a conversion the page forgot is cancellable."""

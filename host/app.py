@@ -325,6 +325,59 @@ class App:
         library.clear_cover(self.conn, book_id)
         return 200, {"ok": True, "cover": ""}
 
+    def _owned_book(self, uid, book_id):
+        """The book if this user holds it, else (None, an error response)."""
+        b = library.get_book(self.conn, book_id)
+        if not b:
+            return None, (404, {"error": "no such book"})
+        if b["user_id"] != uid:
+            return None, (403, {"error": "not yours to remove"})
+        return b, None
+
+    def remove_renditions(self, q, body):
+        """Remove one voice from a book, or every voice it has. The book and
+        its text stay; only the named voice's audio goes (a shared copy on
+        another shelf is kept)."""
+        uid = self._uid(q, body)
+        book_id = body.get("book", "")
+        _b, err = self._owned_book(uid, book_id)
+        if err:
+            return err
+        if jobs.active_for_book(self.conn, book_id):
+            return 409, {"error": "a conversion for this book is still running",
+                         "detail": "cancel it, then remove the voice"}
+        voice = (body.get("voice") or "").strip()
+        provider = (body.get("provider") or "").strip()
+        model = (body.get("model") or "").strip()
+        all_voices = bool(body.get("all")) or not voice
+        out = library.remove_renditions(
+            self.conn, self.storage, book_id,
+            provider="" if all_voices else provider,
+            voice="" if all_voices else voice,
+            model="" if all_voices else model)
+        return 200, {"ok": True, "removed": out["removed"], "freed": out["freed"],
+                     "scope": "all" if all_voices else "voice",
+                     "storage": quota.usage(self.conn, self.storage, uid)}
+
+    def delete_book(self, q, body):
+        """Remove a book from the shelf: its rows, then any blob no other shelf
+        (or the render cache) still names. Its position, device stops and listen
+        rows for this user go with it."""
+        uid = self._uid(q, body)
+        book_id = body.get("book", "")
+        b, err = self._owned_book(uid, book_id)
+        if err:
+            return err
+        if jobs.active_for_book(self.conn, book_id):
+            return 409, {"error": "a conversion for this book is still running",
+                         "detail": "cancel it, then delete the book"}
+        title = b.get("title", "")
+        out = library.delete_book(self.conn, self.storage, book_id)
+        playback.discard_book(self.conn, uid, book_id)
+        stats.discard_book(self.conn, uid, book_id)
+        return 200, {"ok": True, "title": title, "freed": out["freed"],
+                     "storage": quota.usage(self.conn, self.storage, uid)}
+
     # a cover URL is user input, so it only ever reaches the public internet:
     # http(s), an image content-type (or a recognised image signature), and a
     # host that does not resolve into a private / loopback / link-local range.
@@ -1406,6 +1459,7 @@ GET_ROUTES = {
 }
 POST_ROUTES = {
     "/import": "import_book", "/render": "render", "/voices": "voices",
+    "/book/renditions/delete": "remove_renditions", "/book/delete": "delete_book",
     "/speak": "speak",
     "/cover": "put_cover", "/cover/auto": "cover_auto", "/cover/clear": "clear_cover",
     "/book/details": "fetch_details",

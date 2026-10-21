@@ -104,3 +104,13 @@ def release(conn, user_id, book_id, device_id):
         conn.execute("UPDATE positions SET owner_device_id='',updated_at=? "
                      "WHERE user_id=? AND book_id=?", (now(), user_id, book_id))
         conn.commit()
+
+
+def discard_book(conn, user_id, book_id):
+    """Forget everything playback kept for this user and book: position, device
+    rows, and pending stops. Used when the book leaves the shelf."""
+    conn.execute("DELETE FROM positions WHERE user_id=? AND book_id=?",
+                 (user_id, book_id))
+    conn.execute("DELETE FROM devices WHERE user_id=? AND book_id=?",
+                 (user_id, book_id))
+    conn.commit()

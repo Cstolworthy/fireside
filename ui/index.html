@@ -664,6 +664,16 @@
       <button class="btn quiet" id="scovrmbtn" type="button" hidden>Remove</button>
       <input type="file" id="scovfile" accept="image/*" hidden>
     </div>
+    <label style="margin-top:16px">Reading copies</label>
+    <p class="small" id="scopiesnote"></p>
+    <div id="scopies"></div>
+    <div class="setrow" id="scopiesall" hidden>
+      <button class="btn quiet" id="srmallbtn" type="button">Remove all voices</button>
+    </div>
+    <label style="margin-top:16px">Delete</label>
+    <div class="setrow">
+      <button class="btn quiet" id="sdelbookbtn" type="button">Remove this book from my library</button>
+    </div>
     <div class="connrow" style="margin-top:16px"><button class="btn" id="scovdone" type="button">Done</button></div>
   </div>
 </div>
@@ -2485,6 +2495,47 @@ function renderSettings() {
     }
     meta.hidden = false;
   } else meta.hidden = true;
+  renderCopies();
+}
+// Reading copies live in Book settings: each voice the book has been voiced in,
+// with how many chapters it covers, and a way to drop one, all of them, or the
+// whole book. Dropping a voice frees this user's storage; audio another shelf
+// still holds is kept.
+function voiceChapterCount(v) {
+  if (!book) return 0;
+  return book.chapters.filter(c => (c.renditions || []).some(r => rkey(r) === v.key && r.audio_ref)).length;
+}
+function renderCopies() {
+  const box = $('#scopies'); if (!box) return;
+  box.innerHTML = '';
+  const vs = book ? bookVoices() : [];
+  const note = $('#scopiesnote');
+  if (!vs.length) {
+    note.textContent = 'Not voiced yet.';
+    $('#scopiesall').hidden = true;
+    return;
+  }
+  note.textContent = vs.length === 1 ? '1 voice on this book.' : vs.length + ' voices on this book.';
+  vs.forEach(v => {
+    const row = document.createElement('div');
+    row.className = 'setrow'; row.style.alignItems = 'center';
+    const lab = document.createElement('span'); lab.className = 'small';
+    const n = voiceChapterCount(v);
+    lab.textContent = rlabel(v) + ' · ' + n + ' chapter' + (n === 1 ? '' : 's');
+    lab.style.flex = '1'; lab.style.minWidth = '0';
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.className = 'btn quiet'; btn.textContent = 'Remove';
+    btn.onclick = async () => {
+      if (!confirm('Remove the ' + rlabel(v) + ' copy? The book and its other voices stay.')) return;
+      $('#err').textContent = ''; busy('Removing the voice…');
+      try { await jpost('/book/renditions/delete',
+        { book: book.id, provider: v.provider, voice: v.voice, model: v.model });
+        await settingsReload('Removed the ' + rlabel(v) + ' copy.'); }
+      catch (err) { fail(err); }
+    };
+    row.append(lab, btn); box.append(row);
+  });
+  $('#scopiesall').hidden = vs.length < 2;
 }
 async function settingsReload(msg) {
   await loadLibrary(); await openBook(book.id);
@@ -2533,6 +2584,26 @@ $('#scovrmbtn').onclick = async () => {
   if (!book) return; $('#err').textContent = ''; busy('Removing the cover…');
   try { await jpost('/cover/clear', { book: book.id }); await settingsReload('Cover removed.'); }
   catch (err) { fail(err); }
+};
+$('#srmallbtn').onclick = async () => {
+  if (!book) return;
+  if (!confirm('Remove every voice from ' + (book.title || 'this book') + '? The book and its text stay.')) return;
+  $('#err').textContent = ''; busy('Removing every voice…');
+  try { await jpost('/book/renditions/delete', { book: book.id, all: true });
+    await settingsReload('Removed every voice.'); }
+  catch (err) { fail(err); }
+};
+$('#sdelbookbtn').onclick = async () => {
+  if (!book) return;
+  if (!confirm('Remove ' + (book.title || 'this book') + ' from your library? Its voices go with it.')) return;
+  $('#err').textContent = ''; busy('Removing the book…');
+  try {
+    await jpost('/book/delete', { book: book.id });
+    $('#settingsdlg').hidden = true;
+    book = null; cur = -1;
+    await loadLibrary();
+    show('lib'); idle('Book removed.');
+  } catch (err) { fail(err); }
 };
 
 // --- verify-before-play ----------------------------------------------------
