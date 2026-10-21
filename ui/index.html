@@ -32,6 +32,8 @@
   nav.tabs button.on{color:var(--text);border-color:var(--flame)}
   main{padding:30px 40px 80px;max-width:960px;margin:0 auto}
   .view{display:none}.view.on{display:block}
+  .settabs{margin-top:16px;border-bottom:1px solid var(--line)}
+  .setpanel{display:none}.setpanel.on{display:block}
   h2{margin:0;font:600 26px/1.25 var(--serif)}
   h3{font:600 17px var(--ui);margin:0}
   p{margin:0}
@@ -412,77 +414,99 @@
   <section class="view" id="v-set">
     <h2>Settings</h2>
     <p class="sub">Voice servers and source logins live on this server. Keys never reach your browser.</p>
-    <div id="conns"></div>
-    <div style="margin-top:14px"><button class="btn quiet" id="addconn" type="button">＋ Add a voice server</button></div>
-    <div class="addpanel" id="connform" hidden>
-      <label>Kind of server</label>
-      <select id="cprovider"></select>
-      <label>Label</label>
-      <input id="clabel" placeholder="e.g. Tower Kokoro" autocomplete="off">
-      <label id="csharerow" style="display:flex;align-items:center;gap:8px;margin-top:10px"><input type="checkbox" id="cshare" style="width:auto"> Share with everyone (household)</label>
-      <div id="cfields"></div>
-      <div style="display:flex;gap:8px;margin-top:16px">
-        <button class="btn" id="csave" type="button">Save server</button>
-        <button class="btn quiet" id="ccancel" type="button">Cancel</button>
+    <nav class="tabs settabs" id="settabs">
+      <button data-p="voice" class="on">Voice</button>
+      <button data-p="words">Words</button>
+      <button data-p="plan">Plan &amp; storage</button>
+      <button data-p="account">Account</button>
+      <button data-p="admin" id="settabadmin" hidden>Admin</button>
+    </nav>
+
+    <div class="setpanel on" data-p="voice">
+      <div id="conns"></div>
+      <div style="margin-top:14px"><button class="btn quiet" id="addconn" type="button">＋ Add a voice server</button></div>
+      <div class="addpanel" id="connform" hidden>
+        <label>Kind of server</label>
+        <select id="cprovider"></select>
+        <label>Label</label>
+        <input id="clabel" placeholder="e.g. Tower Kokoro" autocomplete="off">
+        <label id="csharerow" style="display:flex;align-items:center;gap:8px;margin-top:10px"><input type="checkbox" id="cshare" style="width:auto"> Share with everyone (household)</label>
+        <div id="cfields"></div>
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button class="btn" id="csave" type="button">Save server</button>
+          <button class="btn quiet" id="ccancel" type="button">Cancel</button>
+        </div>
       </div>
-    </div>
-    <h3 style="margin-top:30px">Default voice</h3>
-    <p class="sub">Which server and voice a new book uses.</p>
-    <label>Server</label>
-    <select id="dconn"></select>
-    <label>Voice</label>
-    <input id="vfilter" placeholder="filter, e.g. en-US or Jenny" autocomplete="off">
-    <select id="voice"><option value="">load voices…</option></select>
-    <div style="display:flex;gap:8px;margin-top:10px">
-      <button class="btn quiet" id="loadvoices" type="button">Load voices</button>
-      <button class="btn" id="save" type="button">Save</button>
-    </div>
-    <div id="srcpanel" style="display:none">
-      <label>Text sources</label>
-      <p class="hint" style="margin-top:0">Each source asks for what it needs (AO3 asks for a cookie). These live on the server, never in this browser.</p>
-      <div id="sources"></div>
-    </div>
-    <h3 style="margin-top:30px">Pronunciations</h3>
-    <p class="sub">Words the voice says wrong. Left: the word as it appears. Right: how it should sound, spelled out (Qui-Gon → Kwai-Gon). Applies to every book.</p>
-    <div id="pronrows"></div>
-    <div style="display:flex;gap:8px;margin-top:10px">
-      <button class="btn quiet" id="pronadd" type="button">＋ Add a word</button>
-      <button class="btn" id="pronsave" type="button">Save</button>
-    </div>
-    <div id="pronmsg" class="sub" style="margin-top:8px"></div>
-    <h3 style="margin-top:30px">Plan &amp; storage</h3>
-    <p class="sub">Your tier sets how much you can keep. Storage counts once per book you hold; delete a book and its bytes come back.</p>
-    <div id="planusage" class="small" style="margin-top:8px">loading…</div>
-    <div class="prog" id="planbar" style="margin-top:6px;display:none"><i id="planbarfill"></i></div>
-    <div id="plancards" style="margin-top:14px;display:flex;gap:12px;flex-wrap:wrap"></div>
-    <div id="planblocks" style="margin-top:14px"></div>
-    <div id="planmsg" class="sub" style="margin-top:8px"></div>
-    <h3 style="margin-top:30px">Connected accounts</h3>
-    <p class="sub">Sign in with Google, GitHub, Microsoft or SimpleLogin instead of a password. Link one here while you are signed in.</p>
-    <div id="oauthrows"></div>
-    <h3 style="margin-top:30px">Devices &amp; sessions</h3>
-    <p class="sub">Everywhere this account is signed in. Log out a device you do not recognise.</p>
-    <div id="sessionrows"></div>
-    <div style="display:flex;gap:8px;margin-top:10px">
-      <button class="btn quiet" id="sessothers" type="button">Log out other devices</button>
-      <button class="btn" id="sessall" type="button">Log out everywhere</button>
-    </div>
-    <div id="sessmsg" class="sub" style="margin-top:8px"></div>
-    <div id="adminwrap" style="display:none">
-      <h3 style="margin-top:30px">All sessions (admin)</h3>
-      <p class="sub">Every device signed in to this server. You can boot any of them.</p>
-      <div id="adminsessions"></div>
+      <h3 style="margin-top:30px">Default voice</h3>
+      <p class="sub">Which server and voice a new book uses.</p>
+      <label>Server</label>
+      <select id="dconn"></select>
+      <label>Voice</label>
+      <input id="vfilter" placeholder="filter, e.g. en-US or Jenny" autocomplete="off">
+      <select id="voice"><option value="">load voices…</option></select>
       <div style="display:flex;gap:8px;margin-top:10px">
-        <button class="btn" id="sessallusers" type="button">Sign out everyone</button>
+        <button class="btn quiet" id="loadvoices" type="button">Load voices</button>
+        <button class="btn" id="save" type="button">Save</button>
       </div>
-      <h3 style="margin-top:30px">Users (admin)</h3>
-      <p class="sub">Lift the storage or character check for one account. Usage is still counted and shown; this only stops the refusal.</p>
-      <div id="admingrants"></div>
-      <div id="grantmsg" class="sub" style="margin-top:8px"></div>
-      <h3 style="margin-top:30px">Plans (admin)</h3>
-      <p class="sub">Set an account's tier without a payment (a comp for family or a tester). Allowance and usage follow the tier.</p>
-      <div id="adminplans"></div>
-      <div id="planadminmsg" class="sub" style="margin-top:8px"></div>
+      <div id="srcpanel" style="display:none">
+        <label>Text sources</label>
+        <p class="hint" style="margin-top:0">Each source asks for what it needs (AO3 asks for a cookie). These live on the server, never in this browser.</p>
+        <div id="sources"></div>
+      </div>
+    </div>
+
+    <div class="setpanel" data-p="words">
+      <h3 style="margin-top:24px">Pronunciations</h3>
+      <p class="sub">Words the voice says wrong. Left: the word as it appears. Right: how it should sound, spelled out (Qui-Gon → Kwai-Gon). Applies to every book.</p>
+      <div id="pronrows"></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn quiet" id="pronadd" type="button">＋ Add a word</button>
+        <button class="btn" id="pronsave" type="button">Save</button>
+      </div>
+      <div id="pronmsg" class="sub" style="margin-top:8px"></div>
+    </div>
+
+    <div class="setpanel" data-p="plan">
+      <h3 style="margin-top:24px">Plan &amp; storage</h3>
+      <p class="sub">Your tier sets how much you can keep. Storage counts once per book you hold; delete a book and its bytes come back.</p>
+      <div id="planusage" class="small" style="margin-top:8px">loading…</div>
+      <div class="prog" id="planbar" style="margin-top:6px;display:none"><i id="planbarfill"></i></div>
+      <div id="plancards" style="margin-top:14px;display:flex;gap:12px;flex-wrap:wrap"></div>
+      <div id="planblocks" style="margin-top:14px"></div>
+      <div id="planmsg" class="sub" style="margin-top:8px"></div>
+    </div>
+
+    <div class="setpanel" data-p="account">
+      <h3 style="margin-top:24px">Connected accounts</h3>
+      <p class="sub">Sign in with Google, GitHub, Microsoft or SimpleLogin instead of a password. Link one here while you are signed in.</p>
+      <div id="oauthrows"></div>
+      <h3 style="margin-top:30px">Devices &amp; sessions</h3>
+      <p class="sub">Everywhere this account is signed in. Log out a device you do not recognise.</p>
+      <div id="sessionrows"></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn quiet" id="sessothers" type="button">Log out other devices</button>
+        <button class="btn" id="sessall" type="button">Log out everywhere</button>
+      </div>
+      <div id="sessmsg" class="sub" style="margin-top:8px"></div>
+    </div>
+
+    <div class="setpanel" data-p="admin">
+      <div id="adminwrap" style="display:none">
+        <h3 style="margin-top:24px">All sessions (admin)</h3>
+        <p class="sub">Every device signed in to this server. You can boot any of them.</p>
+        <div id="adminsessions"></div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn" id="sessallusers" type="button">Sign out everyone</button>
+        </div>
+        <h3 style="margin-top:30px">Users (admin)</h3>
+        <p class="sub">Lift the storage or character check for one account. Usage is still counted and shown; this only stops the refusal.</p>
+        <div id="admingrants"></div>
+        <div id="grantmsg" class="sub" style="margin-top:8px"></div>
+        <h3 style="margin-top:30px">Plans (admin)</h3>
+        <p class="sub">Set an account's tier without a payment (a comp for family or a tester). Allowance and usage follow the tier.</p>
+        <div id="adminplans"></div>
+        <div id="planadminmsg" class="sub" style="margin-top:8px"></div>
+      </div>
     </div>
   </section>
 
@@ -573,7 +597,7 @@
 
 <script>
 const $ = s => document.querySelector(s);
-const UKEY = 'fireside.user', SKEY = 'fireside.settings', LKEY = 'fireside.lastbook', DEVICE = 'web-' + Math.random().toString(36).slice(2, 8);
+const UKEY = 'fireside.user', SKEY = 'fireside.settings', SETTAB_KEY = 'fireside.settab', LKEY = 'fireside.lastbook', DEVICE = 'web-' + Math.random().toString(36).slice(2, 8);
 let USER = localStorage.getItem(UKEY) || '';
 let plugins = null, sources = [], voices = [], books = [], book = null, cur = -1;
 // The player is separate from the page. `book` is whatever book you are looking
@@ -716,9 +740,24 @@ function needUser() { if (!USER) { fail('set your name first (top right)'); thro
 function show(v) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
-  if (v === 'set') { loadPron(); loadLinked(); loadSessions(); loadPlan(); }
+  if (v === 'set') { loadPron(); loadLinked(); loadSessions(); loadPlan();
+    setSetTab(localStorage.getItem(SETTAB_KEY)); }
 }
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.dataset.v));
+
+// --- settings page tabs -----------------------------------------------------
+// The settings page holds unrelated jobs (voices, words, plan, account, admin),
+// so it gets its own tab bar, separate from the app nav (#tabs). The admin tab
+// only exists for an admin account.
+function setSetTab(p) {
+  const bar = $('#settabs'); if (!bar) return;
+  let btn = p ? bar.querySelector(`button[data-p="${p}"]`) : null;
+  if (!btn || btn.hidden) { p = 'voice'; btn = bar.querySelector('button[data-p="voice"]'); }
+  bar.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === btn));
+  document.querySelectorAll('#v-set .setpanel').forEach(el => el.classList.toggle('on', el.dataset.p === p));
+  try { localStorage.setItem(SETTAB_KEY, p); } catch (_) {}
+}
+if ($('#settabs')) document.querySelectorAll('#settabs button').forEach(b => b.onclick = () => setSetTab(b.dataset.p));
 
 // --- settings: voice servers, kept on the server ---------------------------
 // The old model kept the key in this browser. It does not any more: a server
@@ -1105,6 +1144,8 @@ async function loadSessions() {
     abox.innerHTML = '';
     const all = data.all || [];
     wrap.style.display = data.admin ? '' : 'none';
+    const atab = $('#settabadmin');
+    if (atab) { atab.hidden = !data.admin; setSetTab(localStorage.getItem(SETTAB_KEY)); }
     if (data.admin) loadGrants();
     if (data.admin) loadAdminPlans();
     if (data.admin) all.forEach(s => {
