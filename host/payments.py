@@ -87,12 +87,13 @@ class Subscription:
     reference: str = ""
     detail: str = ""
     quantity: int = 0
+    items: List[Dict[str, Any]] = field(default_factory=list)
 
     def dict(self):
         return {"ok": self.ok, "user": self.user, "plan": self.plan,
                 "status": self.status, "current_period_end": self.current_period_end,
                 "reference": self.reference, "detail": self.detail,
-                "quantity": self.quantity}
+                "quantity": self.quantity, "items": self.items}
 
 
 # id -> provider object. Empty until an operator registers one.

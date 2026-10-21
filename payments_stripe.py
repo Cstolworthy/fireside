@@ -193,9 +193,18 @@ class StripeProvider:
         return None
 
     def checkout(self, plan_id, meta=None):
-        """Create a Stripe-hosted Checkout Session for a plan, return its URL.
-        `meta['quantity']` buys more than one of a plan (storage blocks)."""
+        """Create a Stripe-hosted Checkout Session, return its URL.
+
+        Two shapes. A single plan: `plan_id` with `meta['quantity']` buying more
+        than one of it (storage blocks). A cart: `meta['items']` is a list of
+        `{"plan": id, "quantity": n}` line items, each priced from this
+        provider's own price list. The tier and its storage add-on go out as one
+        subscription, so a single payment settles both at once.
+        """
         meta = meta or {}
+        items = meta.get("items") or None
+        if items:
+            return self._checkout_items(items, meta)
         plan = self._plan(plan_id)
         if plan is None:
             return Checkout(False, detail="unknown plan %r" % plan_id)
@@ -224,6 +233,58 @@ class StripeProvider:
         if success_url:
             data["success_url"] = success_url
             data["cancel_url"] = return_url
+        return self._session(data)
+
+    def _checkout_items(self, items, meta):
+        """A cart: one line item per entry, all on one subscription session.
+
+        Only names this provider actually prices are accepted - an unknown plan
+        refuses the whole session rather than charging a guessed amount. The
+        items are echoed into metadata so confirm() can apply each one.
+        """
+        out = []
+        for it in items:
+            pid = (it or {}).get("plan") or ""
+            plan = self._plan(pid)
+            if plan is None:
+                return Checkout(False, detail="unknown plan %r" % pid)
+            try:
+                qty = max(1, int(it.get("quantity") or 1))
+            except (TypeError, ValueError):
+                qty = 1
+            out.append({"plan": plan.id, "quantity": qty, "interval": plan.interval,
+                        "amount_cents": plan.amount_cents, "currency": plan.currency,
+                        "label": plan.label or plan.id})
+        if not out:
+            return Checkout(False, detail="empty cart")
+        recurring = all(bool(o["interval"]) for o in out)
+        if not recurring:
+            return Checkout(False, detail="cart mixes recurring and one-time items")
+        return_url = (meta.get("return_url") or "").strip()
+        if return_url:
+            sep = "&" if "?" in return_url else "?"
+            success_url = return_url + sep + "checkout={CHECKOUT_SESSION_ID}"
+        else:
+            success_url = ""
+        data = {
+            "mode": "subscription",
+            "metadata[user]": str(meta.get("user", "")),
+            "metadata[items]": json.dumps([{"plan": o["plan"], "quantity": o["quantity"]}
+                                           for o in out]),
+        }
+        for i, o in enumerate(out):
+            b = "line_items[%d]" % i
+            data[b + "[quantity]"] = str(o["quantity"])
+            data[b + "[price_data][currency]"] = o["currency"]
+            data[b + "[price_data][unit_amount]"] = str(o["amount_cents"])
+            data[b + "[price_data][product_data][name]"] = o["label"]
+            data[b + "[price_data][recurring][interval]"] = o["interval"]
+        if success_url:
+            data["success_url"] = success_url
+            data["cancel_url"] = return_url
+        return self._session(data)
+
+    def _session(self, data):
         try:
             r = self._post(self.api_base + "/v1/checkout/sessions", data=data,
                            auth=self._auth(), timeout=self.timeout)
@@ -256,6 +317,17 @@ class StripeProvider:
         md = j.get("metadata") or {}
         plan = md.get("plan", "")
         user = md.get("user", "")
+        items = []
+        raw = md.get("items")
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    items = [{"plan": str((x or {}).get("plan", "")),
+                              "quantity": int((x or {}).get("quantity") or 1)}
+                             for x in parsed if (x or {}).get("plan")]
+            except (ValueError, TypeError):
+                items = []
         try:
             quantity = int(md.get("quantity") or 0)
         except (TypeError, ValueError):
@@ -275,7 +347,7 @@ class StripeProvider:
                                 reference=ref, detail="not paid")
         return Subscription(True, user=user, plan=plan, status=status or "active",
                             current_period_end=period_end, reference=ref,
-                            detail="ok", quantity=quantity)
+                            detail="ok", quantity=quantity, items=items)
 
 
 def from_env():
