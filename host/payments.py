@@ -74,7 +74,11 @@ class Checkout:
 
 @dataclass
 class Subscription:
-    """What `confirm` says about a completed checkout. `ok` means paid/active."""
+    """What `confirm` says about a completed checkout. `ok` means paid/active.
+
+    `plan` is the tier id, or the add-on id when what was bought is an add-on
+    (a storage block is a monthly thing you buy `quantity` of).
+    """
     ok: bool = False
     user: str = ""
     plan: str = ""
@@ -82,11 +86,13 @@ class Subscription:
     current_period_end: int = 0
     reference: str = ""
     detail: str = ""
+    quantity: int = 0
 
     def dict(self):
         return {"ok": self.ok, "user": self.user, "plan": self.plan,
                 "status": self.status, "current_period_end": self.current_period_end,
-                "reference": self.reference, "detail": self.detail}
+                "reference": self.reference, "detail": self.detail,
+                "quantity": self.quantity}
 
 
 # id -> provider object. Empty until an operator registers one.

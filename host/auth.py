@@ -134,6 +134,21 @@ def local_accounts(conn):
             for r in rows]
 
 
+def _start_on_free_tier(conn, uid):
+    """Give a freshly created account the free tier, once.
+
+    A new sign-up starts at 500 MB (quota.FREE_ALLOWANCE_BYTES). An account that
+    already has a subscription row is untouched, and an account with no row at
+    all still fails open to the platform allowance - so accounts created before
+    the free tier existed are not silently cut down.
+    """
+    conn.execute(
+        "INSERT OR IGNORE INTO subscriptions"
+        "(user_id,plan,status,provider,reference,current_period_end,updated_at,"
+        "created_at) VALUES(?,?,?,?,?,?,?,?)",
+        (uid, "free", "active", "", "", 0, _now(), _now()))
+
+
 def local_register(conn, username, password):
     """Create a local account. Raises AuthError if the name is taken or weak.
 
@@ -156,6 +171,7 @@ def local_register(conn, username, password):
     salt = secrets.token_hex(16)
     conn.execute("INSERT OR IGNORE INTO users(id,name,created_at) VALUES(?,?,?)",
                  (uid, name, _now()))
+    _start_on_free_tier(conn, uid)
     conn.execute("INSERT INTO local_accounts(username,user_id,digest,salt,created_at)"
                  " VALUES(?,?,?,?,?)",
                  (name, uid, _digest(password, salt), salt, _now()))
@@ -463,6 +479,7 @@ def upsert_user(conn, provider, ident):
         uid = "%s:%s" % (provider, subject)
         conn.execute("INSERT OR IGNORE INTO users(id,name,created_at) VALUES(?,?,?)",
                      (uid, ident.get("name", ""), _now()))
+        _start_on_free_tier(conn, uid)
     conn.execute("INSERT OR REPLACE INTO identities"
                  "(provider,subject,user_id,email,email_verified,created_at)"
                  " VALUES(?,?,?,?,?,?)",

@@ -37,7 +37,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
-from host import accounting, auth, billing, connections, credentials, db, grants, jobs, library, payments, playback, pron, quota, stats
+from host import accounting, auth, billing, connections, credentials, db, grants, jobs, library, payments, playback, plans, pron, quota, stats
 from sources._fetch import fetch as _fetch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -197,8 +197,9 @@ class App:
         book = plugin.obj.read(req, self._make_fetch(plugin.obj, cred), cred)
         incoming = self._book_bytes(book)
         plan = (billing.get(self.conn, user) or {}).get("plan") or ""
-        if not quota.check_room(self.conn, self.storage, user, plan, incoming):
-            left = max(0, quota.allowance_bytes(plan)
+        blocks = billing.blocks(self.conn, user)
+        if not quota.check_room(self.conn, self.storage, user, plan, incoming, blocks):
+            left = max(0, quota.allowance_bytes(plan, blocks)
                        - quota.usage(self.conn, self.storage, user)["own_bytes"])
             return 507, {"error": "not enough storage",
                          "detail": "this book needs about %d bytes; %d left in your plan"
@@ -231,7 +232,8 @@ class App:
         if grants.storage_unlimited(self.conn, user_id):
             return True
         return quota.check_room(self.conn, self.storage, user_id,
-                                self._plan(user_id), nbytes)
+                                self._plan(user_id), nbytes,
+                                billing.blocks(self.conn, user_id))
 
     # ---- cover art -----------------------------------------------------------
     # A book's cover is its own image when the reader handed one over (an epub
@@ -713,25 +715,34 @@ class App:
     def billing_get(self, q, body):
         uid = self._uid(q, body)
         pp = payments.get()
-        plans = []
+        plans_list = []
         fn = getattr(pp, "plans", None)
         if callable(fn):
-            plans = [p.dict() if hasattr(p, "dict") else dict(p) for p in fn()]
+            plans_list = [p.dict() if hasattr(p, "dict") else dict(p) for p in fn()]
         return 200, {"subscription": billing.get(self.conn, uid) if uid else None,
-                     "plans": plans,
+                     "plans": plans_list,
                      "payments_configured": payments.configured()}
+
+    def plans_get(self, q, body):
+        """The offering, for the plan screen: the tiers and the storage add-on,
+        with whatever prices a payment provider reports (None until one is set)."""
+        return 200, plans.catalog(payments.get())
 
     def storage_get(self, q, body):
         """The signed-in user's storage: the bytes their own shelf holds and how
-        much their plan includes. A held book bills its own bytes; there is no
-        sharing discount and nothing is auto-released. Read-only."""
+        much their plan plus any storage blocks include. A held book bills its
+        own bytes; there is no sharing discount and nothing is auto-released.
+        Read-only."""
         uid = self._uid(q, body)
         sub = billing.get(self.conn, uid) if uid else None
         plan = (sub or {}).get("plan") or ""
+        blocks = billing.blocks(self.conn, uid) if uid else 0
         u = quota.usage(self.conn, self.storage, uid) if uid else {
             "user_id": uid, "own_bytes": 0, "total_bytes": 0, "blobs": 0}
-        allowed = quota.allowance_bytes(plan)
-        u.update({"plan": plan, "allowance_bytes": allowed,
+        allowed = quota.allowance_bytes(plan, blocks)
+        u.update({"plan": plan, "storage_blocks": blocks,
+                  "block_bytes": quota.STORAGE_BLOCK_BYTES,
+                  "allowance_bytes": allowed,
                   "remaining_bytes": max(0, allowed - u["own_bytes"])})
         return 200, u
 
@@ -745,7 +756,13 @@ class App:
             return 503, {"error": "payments not configured",
                          "detail": "the platform tier is held until a payments provider lands"}
         plan = (body or {}).get("plan") or q.get("plan") or ""
+        try:
+            quantity = int((body or {}).get("quantity") or q.get("quantity") or 1)
+        except (TypeError, ValueError):
+            quantity = 1
+        quantity = max(1, quantity)
         co = fn(plan, {"user": uid,
+                       "quantity": quantity,
                        "return_url": (body or {}).get("return_url") or ""})
         if not getattr(co, "ok", False):
             return 402, {"error": "checkout refused",
@@ -765,8 +782,18 @@ class App:
         if not getattr(sub, "ok", False):
             return 402, {"error": "not confirmed",
                          "detail": getattr(sub, "detail", "")}
+        provider_id = getattr(pp, "id", "")
+        # An add-on does not replace the tier - it adds capacity to it. Anything
+        # the provider names as the storage add-on lands in its own row.
+        if getattr(sub, "plan", "") == quota.STORAGE_ADDON:
+            row = billing.upsert_addon(
+                self.conn, uid, quota.STORAGE_ADDON,
+                getattr(sub, "quantity", 0) or 1, sub.status,
+                provider=provider_id, reference=ref,
+                current_period_end=sub.current_period_end)
+            return 200, {"ok": True, "addon": row}
         row = billing.upsert(self.conn, uid, sub.plan, sub.status,
-                             provider=getattr(pp, "id", ""), reference=ref,
+                             provider=provider_id, reference=ref,
                              current_period_end=sub.current_period_end)
         return 200, {"ok": True, "subscription": row}
 
@@ -1165,6 +1192,53 @@ class App:
                      if "credits_unlimited" in body else None))
         return 200, {"ok": True, "user": target, "grants": out}
 
+    # ---- plans (admin) -------------------------------------------------------
+    # An admin sets what tier an account is on without a payment. This is how a
+    # comped account (family, a tester) gets the paid tier; usage and the
+    # allowance are the tier's own, so the screen stays honest.
+
+    def plans_admin(self, q, body):
+        """Admin: every account, its plan, and its storage blocks."""
+        uid = (q or {}).get("_user") or ""
+        if not auth.is_admin(self.conn, uid):
+            return 403, {"error": "admin only"}
+        subs = billing.list_all(self.conn)
+        admins = {r["user_id"] for r in
+                  self.conn.execute("SELECT user_id FROM admins")}
+        rows = []
+        for r in self.conn.execute("SELECT id,name FROM users ORDER BY created_at"):
+            uid_row = r["id"]
+            sub = subs.get(uid_row)
+            rows.append({
+                "username": r["name"] or uid_row,
+                "user_id": uid_row,
+                "admin": uid_row in admins,
+                "plan": (sub or {}).get("plan") or "",
+                "plan_status": (sub or {}).get("status") or "",
+                "plan_provider": (sub or {}).get("provider") or "",
+                "storage_blocks": billing.blocks(self.conn, uid_row),
+            })
+        return 200, {"users": rows,
+                     "tiers": [quota.FREE_PLAN, quota.PLATFORM_PLAN]}
+
+    def plans_admin_set(self, q, body):
+        """Admin: set one account's tier (free or platform). Records it like a
+        provider would, with `admin` as the provider, so nothing downstream can
+        tell a comp from a paid row except the provider field."""
+        uid = (q or {}).get("_user") or ""
+        if not auth.is_admin(self.conn, uid):
+            return 403, {"error": "admin only"}
+        body = body or {}
+        target = (body.get("user") or "").strip()
+        plan = (body.get("plan") or "").strip().lower()
+        tiers = (quota.FREE_PLAN, quota.PLATFORM_PLAN)
+        if not target:
+            return 400, {"error": "user required"}
+        if plan not in tiers:
+            return 400, {"error": "plan must be one of %s" % (tiers,)}
+        row = billing.upsert(self.conn, target, plan, "active", provider="admin")
+        return 200, {"ok": True, "subscription": row}
+
     def set_registration(self, q, body):
         uid = (q or {}).get("_user") or ""
         if not auth.is_admin(self.conn, uid):
@@ -1258,7 +1332,9 @@ GET_ROUTES = {
     "/sessions": "sessions_list",
     "/auth/users": "auth_users", "/credits": "credits",
     "/grants": "grants_list",
+    "/admin/plans": "plans_admin",
     "/billing": "billing_get",
+    "/plans": "plans_get",
     "/storage": "storage_get",
 }
 POST_ROUTES = {
@@ -1274,6 +1350,7 @@ POST_ROUTES = {
     "/connections/override": "connection_override", "/prefs": "prefs_set",
     "/pron": "pron_set", "/credits/purchase": "credits_purchase",
     "/grants": "grants_set",
+    "/admin/plan": "plans_admin_set",
     "/billing/checkout": "billing_checkout", "/billing/confirm": "billing_confirm",
     "/sessions/revoke": "session_revoke",
     "/sessions/revoke_all": "sessions_revoke_all",
