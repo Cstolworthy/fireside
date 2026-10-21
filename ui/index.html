@@ -466,6 +466,10 @@
       <div style="display:flex;gap:8px;margin-top:10px">
         <button class="btn" id="sessallusers" type="button">Sign out everyone</button>
       </div>
+      <h3 style="margin-top:30px">Users (admin)</h3>
+      <p class="sub">Lift the storage or character check for one account. Usage is still counted and shown; this only stops the refusal.</p>
+      <div id="admingrants"></div>
+      <div id="grantmsg" class="sub" style="margin-top:8px"></div>
     </div>
   </section>
 
@@ -999,6 +1003,7 @@ async function loadSessions() {
     abox.innerHTML = '';
     const all = data.all || [];
     wrap.style.display = data.admin ? '' : 'none';
+    if (data.admin) loadGrants();
     if (data.admin) all.forEach(s => {
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:10px;margin-top:8px';
@@ -1024,6 +1029,40 @@ async function loadSessions() {
       abox.append(row);
     });
   }
+}
+async function loadGrants() {
+  const box = $('#admingrants');
+  if (!box) return;
+  let d;
+  try { d = await api('/grants'); } catch (e) { return; }
+  box.innerHTML = '';
+  (d.users || []).forEach(u => {
+    const g = (d.grants || {})[u.user_id] || {};
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:14px;margin-top:8px';
+    const name = document.createElement('div'); name.style.flex = '1 1 0';
+    name.textContent = u.username + (u.admin ? ' (admin)' : '');
+    row.append(name);
+    const mk = (label, key) => {
+      const lab = document.createElement('label');
+      lab.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:12px;text-transform:none;letter-spacing:0';
+      const cb = document.createElement('input'); cb.type = 'checkbox';
+      cb.checked = !!g[key];
+      cb.onchange = async () => {
+        const body = { user: u.user_id };
+        body[key] = cb.checked;
+        try { await jpost('/grants', body);
+              $('#grantmsg').textContent = 'Saved for ' + u.username + '.'; }
+        catch (e) { cb.checked = !cb.checked;
+                    $('#grantmsg').textContent = e.message || 'could not save'; }
+      };
+      lab.append(cb, document.createTextNode(label));
+      return lab;
+    };
+    row.append(mk('unlimited storage', 'storage_unlimited'));
+    row.append(mk('unlimited chars', 'credits_unlimited'));
+    box.append(row);
+  });
 }
 async function revokeSessions(others, allUsers) {
   try {
