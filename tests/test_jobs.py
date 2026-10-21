@@ -1,12 +1,16 @@
 """Render pipeline: cache on (text, provider, voice, model, speed), progress."""
 
 import tempfile
+import threading
 import unittest
 
 from host.contracts import Audio, Book, Chapter, Quote, Report
 from host import jobs, library
 from host.db import connect
 from storage.local import LocalBackend
+
+# The retry logic is under test; the waiting is not. No backoff in tests.
+jobs.SYNTH_BACKOFF = 0.0
 
 
 class FakeSpeech:
@@ -113,6 +117,97 @@ class TestRender(unittest.TestCase):
         j = jobs.job(self.conn, jid)
         self.assertEqual(j["status"], "error")
         self.assertIn("no key", j["error"])
+
+
+
+class RetryAndCancel(unittest.TestCase):
+    """A dropped request retries; a bad chapter skips ahead; a cancel stops."""
+
+    def setUp(self):
+        import os
+        self.tmp = tempfile.mkdtemp(prefix="fireside-rc-")
+        self.storage = LocalBackend(self.tmp + "/blobs")
+        self.dbpath = os.path.join(self.tmp, "db.sqlite")
+        self.conn = connect(self.dbpath)
+        library.create_user(self.conn, "u1")
+        self.bid = library.add_book(self.conn, self.storage, "u1",
+                                    _book(("aa", "bb", "cc")))
+        self._save = (jobs.SYNTH_ATTEMPTS, jobs.SYNTH_BACKOFF)
+        jobs.SYNTH_ATTEMPTS = 4
+        jobs.SYNTH_BACKOFF = 0.0          # no waiting in tests
+
+    def tearDown(self):
+        jobs.SYNTH_ATTEMPTS, jobs.SYNTH_BACKOFF = self._save
+
+    def test_dropped_request_is_retried(self):
+        class Flaky(FakeSpeech):
+            def __init__(self):
+                FakeSpeech.__init__(self)
+                self.left = {"aa": 2}
+
+            def synth(self, text, voice, opts, cred):
+                if self.left.get(text, 0) > 0:
+                    self.left[text] -= 1
+                    raise RuntimeError("dropped")
+                return FakeSpeech.synth(self, text, voice, opts, cred)
+
+        jid = jobs.render_book(self.conn, self.storage, Flaky(), "u1", self.bid, voice="v1")
+        self.assertEqual(jobs.job(self.conn, jid)["status"], "done")
+        self.assertTrue(all(r["audio_ref"] for r in library.chapters(self.conn, self.bid)))
+
+    def test_one_failed_chapter_does_not_abort_the_book(self):
+        class BadOne(FakeSpeech):
+            def synth(self, text, voice, opts, cred):
+                if text == "bb":
+                    raise RuntimeError("no key")
+                return FakeSpeech.synth(self, text, voice, opts, cred)
+
+        jid = jobs.render_book(self.conn, self.storage, BadOne(), "u1", self.bid, voice="v1")
+        j = jobs.job(self.conn, jid)
+        self.assertEqual(j["status"], "error")
+        self.assertIn("no key", j["error"])
+        rows = {r["idx"]: r for r in library.chapters(self.conn, self.bid)}
+        self.assertTrue(rows[0]["audio_ref"], "chapter 0 still renders")
+        self.assertIsNone(rows[1]["audio_ref"])
+        self.assertTrue(rows[2]["audio_ref"], "chapter 2 renders though 1 failed")
+
+    def test_cancel_stops_a_running_render(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        class Slow(FakeSpeech):
+            def synth(self, text, voice, opts, cred):
+                started.set()
+                release.wait(5)
+                return FakeSpeech.synth(self, text, voice, opts, cred)
+
+        jid = jobs.start_job(self.conn, "u1", self.bid, "fake", "v1", "", total=3,
+                             status="queued")
+
+        def run():
+            c = connect(self.dbpath)
+            try:
+                jobs.render_book(c, self.storage, Slow(), "u1", self.bid,
+                                 voice="v1", job_id=jid)
+            finally:
+                c.close()
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        self.assertTrue(started.wait(5), "render never reached synth")
+        jobs.request_cancel(jid)
+        release.set()
+        t.join(5)
+        j = jobs.job(connect(self.dbpath), jid)
+        self.assertEqual(j["status"], "cancelled")
+        self.assertIn("cancel", j["error"].lower())
+
+    def test_start_job_can_be_queued(self):
+        jid = jobs.start_job(self.conn, "u1", self.bid, "fake", "v1", "", total=3,
+                             status="queued")
+        self.assertEqual(jobs.job(self.conn, jid)["status"], "queued")
+        self.assertEqual(jobs.sweep_stale(self.conn), 1)
+        self.assertEqual(jobs.job(self.conn, jid)["status"], "stalled")
 
 
 if __name__ == "__main__":

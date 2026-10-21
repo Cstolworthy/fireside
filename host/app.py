@@ -598,7 +598,7 @@ class App:
                 except accounting.Insufficient as e:
                     return 402, {"error": "insufficient balance", "detail": str(e)}
         jid = jobs.start_job(self.conn, user, book_id, speech.id, voice, model,
-                             total=len(todo))
+                             total=len(todo), status="queued")
         opts = {"model": model, "speed": speed}
 
         def _work():
@@ -841,6 +841,32 @@ class App:
     def job(self, q, body):
         j = jobs.job(self.conn, q.get("id", ""))
         return (200, j) if j else (404, {"error": "no job"})
+
+    def jobs_list(self, q, body):
+        """This user's recent conversions, newest first, so the client can show
+        a queued or running one and let the reader cancel it after a reload."""
+        uid = self._uid(q, body)
+        return 200, {"jobs": jobs.list_for(self.conn, uid, limit=20)}
+
+    def cancel_job(self, q, body):
+        """Stop a queued or running render. The row is marked at once so the
+        page sees it, and the worker is signalled so it unwinds before its next
+        chapter. A job that already finished is reported, not restarted."""
+        uid = self._uid(q, body)
+        jid = body.get("job") or q.get("job") or q.get("id") or ""
+        j = jobs.job(self.conn, jid)
+        if not j:
+            return 404, {"error": "no job"}
+        if j["user_id"] != uid and not auth.is_admin(self.conn, uid):
+            return 403, {"error": "not your job"}
+        if j["status"] in ("done", "error", "cancelled"):
+            return 200, {"cancel": False, "job": j, "reason": j["status"]}
+        jobs.request_cancel(jid)
+        self.conn.execute(
+            "UPDATE jobs SET status='cancelled',error=?,updated_at=? WHERE id=?",
+            ("cancelled by user", db.now(), jid))
+        self.conn.commit()
+        return 200, {"cancel": True, "job": jobs.job(self.conn, jid)}
 
     def estimate(self, q, body):
         """Pre-convert time and disk, before the user commits to a long job."""
@@ -1361,7 +1387,7 @@ GET_ROUTES = {
     "/icon-192.png": "icon192", "/icon-512.png": "icon512",
     "/icon-maskable-512.png": "icon_maskable",
     "/health": "health", "/plugins": "plugins", "/library": "library_list",
-    "/job": "job", "/progress": "progress", "/chapter": "chapter",
+    "/job": "job", "/jobs": "jobs_list", "/progress": "progress", "/chapter": "chapter",
     "/estimate": "estimate",
     "/position": "get_position", "/last": "last_position", "/stop": "stop", "/text": "text",
     "/stats": "stats_get", "/pron": "pron_get",
@@ -1384,7 +1410,7 @@ POST_ROUTES = {
     "/cover": "put_cover", "/cover/auto": "cover_auto", "/cover/clear": "clear_cover",
     "/book/details": "fetch_details",
     "/position": "put_position", "/claim": "claim", "/ack": "ack",
-    "/listen": "listen",
+    "/listen": "listen", "/cancel": "cancel_job",
     "/credential": "put_credential", "/auth/registration": "set_registration",
     "/connections": "connection_save", "/connections/delete": "connection_delete",
     "/source-creds": "source_cred_save", "/source-creds/delete": "source_cred_delete",

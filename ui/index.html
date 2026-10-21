@@ -70,6 +70,9 @@
   .cover{border-radius:6px;padding:12px;display:flex;align-items:flex-end;font:600 15px/1.2 var(--serif);color:#f3e7cf;background:linear-gradient(160deg,#5a3b2a,#2a1c14)}
   .resume{display:flex;gap:24px;align-items:center}
   .resume .cover{width:130px;flex:none;aspect-ratio:2/3}
+  .convjobs{display:flex;flex-direction:column;gap:8px;margin-top:18px}
+  .convjobs[hidden]{display:none}
+  .convrow{display:flex;gap:12px;align-items:center;justify-content:space-between;border:1px solid var(--line);border-radius:10px;padding:8px 12px}
   .shelf{display:grid;grid-template-columns:repeat(auto-fill,170px);gap:22px;margin-top:12px;justify-content:start}
   .bk{cursor:pointer;max-width:170px}
   .bk .cover{aspect-ratio:2/3;font-size:14px;margin-bottom:8px;max-width:170px}
@@ -326,6 +329,7 @@
   <!-- library -->
   <section class="view on" id="v-lib">
     <div id="resume" class="resume"></div>
+    <div id="convjobs" class="convjobs" hidden></div>
     <div style="margin-top:28px"><button class="btn" id="addbtn" type="button">＋ Add a book</button></div>
     <div class="addpanel" id="addpanel" hidden>
       <p class="sub">Drop an EPUB or paste a story link. Fireside reads it, breaks it into chapters, and voices each one.</p>
@@ -553,7 +557,7 @@
   <div class="err" id="err"></div>
   <audio id="audio" preload="metadata"></audio>
 </main>
-<div id="ribbon" class=""><span class="spin" id="rspin" style="display:none"></span><span class="rtext" id="rtext"></span><span class="rtime" id="rtime"></span><span class="rprog" id="rprog"><i id="rprogfill"></i></span><button class="rbtn" id="rdismiss" type="button" hidden>Dismiss</button></div>
+<div id="ribbon" class=""><span class="spin" id="rspin" style="display:none"></span><span class="rtext" id="rtext"></span><span class="rtime" id="rtime"></span><span class="rprog" id="rprog"><i id="rprogfill"></i></span><button class="rbtn" id="rcancel" type="button" hidden>Cancel</button><button class="rbtn" id="rdismiss" type="button" hidden>Dismiss</button></div>
 <div id="toasts"></div>
 <button id="selplay" type="button" hidden style="position:fixed;z-index:60;padding:8px 14px;border-radius:999px;border:1px solid #3a3f47;background:#191c22;color:#eceff3;font:inherit;font-size:13px;box-shadow:0 8px 22px rgba(0,0,0,.45);cursor:pointer">▶ Play from here</button>
 <div id="transport">
@@ -647,6 +651,7 @@ let player = { id: '', title: '', chapters: [] };
 let pcur = -1;
 let state = {};                 // idx -> ready | avail | down | voice | fail | miss | todo
 let SELECT = new Set();         // chapter idx chosen for a conditional convert
+let RENDERJOB = null;           // the render this page is watching, if any
 let selVoice = '';              // the voice being played: provider\u0000voice\u0000model
 const BADGE = { ready: 'on device', avail: 'voiced', voice: 'voicing', down: '…', fail: 'failed', todo: '', miss: 'missing' };
 let lastName = localStorage.getItem(LKEY) || '';
@@ -721,18 +726,18 @@ function _ribbon(cls, t) { const r = $('#ribbon'); clearTimeout(_hideTimer);
   r.className = cls; $('#rtext').textContent = t || ''; }
 function busy(t) { _t0 = Date.now(); _ribbon('on', t);
   $('#rspin').style.display = 'inline-block'; $('#rtime').textContent = '0s';
-  $('#rprog').style.display = 'none'; $('#rdismiss').hidden = true;
+  $('#rprog').style.display = 'none'; $('#rdismiss').hidden = true; $('#rcancel').hidden = true;
   clearInterval(_tick); _tick = setInterval(() => $('#rtime').textContent = Math.round((Date.now()-_t0)/1000) + 's', 500); }
 function progress(t) { $('#rtext').textContent = t; }
 function bar(d, n) { if (!n) { $('#rprog').style.display = 'none'; return; }
   $('#rprog').style.display = 'block'; $('#rprogfill').style.width = Math.round(100*d/n) + '%'; }
-function idle(t) { clearInterval(_tick); $('#rspin').style.display = 'none'; $('#rtime').textContent = '';
+function idle(t) { clearInterval(_tick); $('#rcancel').hidden = true; $('#rspin').style.display = 'none'; $('#rtime').textContent = '';
   $('#rprog').style.display = 'none'; $('#rprogfill').style.width = '0%';
   if (!t) { _ribbon('', ''); $('#rdismiss').hidden = true; return; }
   _ribbon('on ok', t); $('#rdismiss').hidden = false;
   toast('ok', t);
   _hideTimer = setTimeout(() => { _ribbon('', ''); }, 6000); }
-function fail(e) { clearInterval(_tick); $('#rspin').style.display = 'none'; $('#rtime').textContent = '';
+function fail(e) { clearInterval(_tick); $('#rcancel').hidden = true; $('#rspin').style.display = 'none'; $('#rtime').textContent = '';
   $('#rprog').style.display = 'none';
   const msg = String(e && e.message ? e.message : e);
   _ribbon('on bad', msg); $('#rdismiss').hidden = false; $('#err').textContent = msg;
@@ -783,6 +788,7 @@ function show(v) {
   if (v === 'set') { loadPron(); loadLinked(); loadSessions(); loadPlan();
     setSetTab(localStorage.getItem(SETTAB_KEY)); }
   if (v === 'plans') loadPlansPage();
+  if (v === 'lib') renderActiveJobs();
 }
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.dataset.v));
 
@@ -2206,6 +2212,8 @@ async function runConvert(list, label) {
       voice: vs.value, voice_label: vopt ? vopt.textContent : '', speed: 1.0 };
     if (list) body.chapters = list;
     const r = await jpost('/render', body);
+    RENDERJOB = r.job_id;                    // cancellable from the ribbon
+    $('#rcancel').hidden = false;
     // Chapters differ in length, so weight the ETA by characters, not just by
     // how many chapters are done, and project the finish from the rate so far.
     const order = book.chapters.map(c => c.idx).filter(i => !list || list.includes(i)).sort((a, b) => a - b);
@@ -2215,6 +2223,10 @@ async function runConvert(list, label) {
     while (true) {
       await new Promise(res => setTimeout(res, 1200));
       const j = await api('/job?id=' + encodeURIComponent(r.job_id));
+      if (j.status === 'cancelled') {
+        idle('Conversion cancelled. The chapters already finished are kept.');
+        return;
+      }
       if (j.status === 'error') throw new Error(j.error || 'render failed');
       if (j.status === 'stalled') {
         idle('Interrupted mid-book. ' + (j.error || '') + ' Convert again to resume; finished chapters are kept.');
@@ -2235,8 +2247,57 @@ async function runConvert(list, label) {
     }
     idle('Converted ' + r.total + ' chapter' + (r.total === 1 ? '' : 's') + '.');
   } catch (e) { fail(e); }
-  finally { SELECT.clear(); await openBook(book.id); }
+  finally { RENDERJOB = null; $('#rcancel').hidden = true; SELECT.clear();
+            await openBook(book.id); renderActiveJobs(); }
 }
+
+// --- cancel a conversion ---------------------------------------------------
+// The ribbon's Cancel stops whatever this page is converting: the server marks
+// the job and the worker unwinds before its next chapter, so the audio already
+// made is kept and the rest is simply not done.
+$('#rcancel').onclick = async () => {
+  if (!RENDERJOB) return;
+  $('#rcancel').disabled = true;
+  try { await jpost('/cancel', { user: USER, job: RENDERJOB }); progress('Cancelling…'); }
+  catch (e) { fail(e); }
+  finally { $('#rcancel').disabled = false; }
+};
+
+// Conversions the server still remembers, so one the page forgot (a reload, a
+// second tab, a job queued behind another) is still cancellable.
+async function renderActiveJobs() {
+  const box = $('#convjobs'); if (!box) return;
+  if (!USER) { box.hidden = true; return; }
+  let js = [];
+  try { const d = await api('/jobs?user=' + encodeURIComponent(USER)); js = d.jobs || []; }
+  catch (_) { box.hidden = true; return; }
+  const active = js.filter(j => j.status === 'queued' || j.status === 'running'
+    || j.status === 'stalled');
+  if (!active.length) { box.hidden = true; box.innerHTML = ''; return; }
+  box.innerHTML = '';
+  active.slice(0, 5).forEach(j => {
+    const row = document.createElement('div'); row.className = 'convrow';
+    const t = document.createElement('span'); t.className = 'small';
+    const bk = bookById(j.book_id) || {};
+    const state = (j.status === 'queued') ? 'waiting to start'
+      : (j.status === 'running') ? ('voicing ' + (j.current || 0) + '/' + (j.total || 0))
+      : 'stopped';
+    t.textContent = (bk.title || 'A book') + ' · ' + state;
+    const b = document.createElement('button'); b.type = 'button';
+    b.className = 'btn quiet';
+    b.textContent = (j.status === 'stalled') ? 'Clear' : 'Cancel';
+    b.onclick = async () => {
+      b.disabled = true;
+      try { await jpost('/cancel', { user: USER, job: j.id });
+            idle(j.status === 'stalled' ? 'Cleared.' : 'Conversion cancelled.'); }
+      catch (e) { fail(e); }
+      renderActiveJobs();
+    };
+    row.append(t, b); box.append(row);
+  });
+  box.hidden = false;
+}
+
 $('#convertbtn').onclick = openConvert;
 
 // --- book settings: metadata by ISBN, plus a cover from a URL or a file ----
@@ -2820,6 +2881,7 @@ window.addEventListener('load', async () => {
   try { await loadPlugins(); } catch (e) { fail(e); }
   loadQueue();
   await loadLibrary();
+  renderActiveJobs();
   try { const lp = await api('/last?user=' + encodeURIComponent(USER));
     if (lp && lp.book_id) { RESUME = lp; lastName = lp.book_id;
       try { localStorage.setItem(LKEY, lastName); } catch (e) {}
