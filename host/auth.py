@@ -490,14 +490,16 @@ def upsert_user(conn, provider, ident):
     account it logs into, and never to an account just because the provider
     reports an email that account happens to own.
 
-    A verified email proves control of the mailbox, not of the account: a
-    local account's email was never verified, so matching on it would be a
-    takeover door - anyone could register victim@x, then the real owner's
-    Google login would land in the seeded account. So when a new identity's
-    verified email already belongs to a user, we refuse and raise
-    AccountExistsError; the caller must ask for that account's own login
-    (auth.complete_claim) before we attach. No verified email at all makes a
-    fresh account, as before.
+    A verified email proves control of the mailbox, not of the account. A
+    password account's address is collected at sign-up and never verified, so
+    it is not a merge key either: anyone could register victim@x, then the
+    real owner's Google login would land in the seeded account. But it is the
+    only join key a social login has to spot an account that already exists.
+    So when a new identity's verified email matches ANY account carrying that
+    address - a password account's unverified one, or a linked identity's - we
+    refuse and raise AccountExistsError; the caller asks for that account's
+    own login (auth.complete_claim) before we attach. The match never merges
+    on its own. No verified email at all makes a fresh account, as before.
     """
     subject = ident["subject"]
     email = (ident.get("email") or "").strip().lower()
@@ -508,7 +510,7 @@ def upsert_user(conn, provider, ident):
         uid = row["user_id"]
     else:
         if verified and email:
-            owner = account_for_verified_email(conn, email)
+            owner = account_for_email(conn, email)
             if owner is not None:
                 raise AccountExistsError(owner, provider, ident)
         uid = "%s:%s" % (provider, subject)

@@ -65,6 +65,26 @@ class TestIdentityLinking(unittest.TestCase):
         with self.assertRaises(auth.AccountExistsError):
             self._login("github", "99", "a@example.com", True)
 
+    def test_a_password_accounts_email_routes_the_social_login(self):
+        # a password account stores the address it signed up with, unverified.
+        # A matching verified social login must not make a silent duplicate -
+        # it collides, so the caller can hold a claim and ask for the password.
+        auth.local_register(self.conn, "chris", "hunter2hunter2",
+                            email="chris@example.com")
+        with self.assertRaises(auth.AccountExistsError) as cm:
+            self._login("google", "g1", "chris@example.com", True)
+        self.assertEqual(cm.exception.user_id, "local:chris")
+        self.assertIsNone(auth.identity_user(self.conn, "google", "g1"))
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"], 1)
+
+    def test_a_password_account_without_email_still_makes_a_fresh_account(self):
+        # grandfathering: an account created before addresses were collected
+        # carries none, so a social login makes its own account, as before.
+        auth.local_register(self.conn, "chris", "hunter2hunter2")
+        uid = self._login("google", "g1", "chris@example.com", True)
+        self.assertEqual(uid, "google:g1")
+
 
 class TestExplicitLink(unittest.TestCase):
     """The settings > link an account door, distinct from login-by-email."""
@@ -135,6 +155,24 @@ class TestClaimProof(unittest.TestCase):
         with self.assertRaises(auth.AccountExistsError):
             auth.upsert_user(self.conn, "microsoft", self._ident("m1"))
         self.assertIsNone(auth.identity_user(self.conn, "microsoft", "m1"))
+
+    def test_social_login_collides_with_a_local_email_and_links_after_proof(self):
+        # the whole point of collecting the address: a returning person who
+        # clicks Continue with Google lands back on their password account,
+        # after proving it, instead of a silent empty second account.
+        self.conn.execute("UPDATE local_accounts SET email='chris@example.com'"
+                          " WHERE username='chris'")
+        self.conn.commit()
+        try:
+            auth.upsert_user(self.conn, "google", self._ident("g1"))
+        except auth.AccountExistsError as e:
+            token = auth.create_claim(self.conn, e.provider, e.ident, e.user_id)
+        else:
+            raise AssertionError("collision should have raised AccountExistsError")
+        self.assertIsNone(auth.identity_user(self.conn, "google", "g1"))
+        got = auth.complete_claim(self.conn, token, "hunter2hunter2")
+        self.assertEqual(got, self.uid)
+        self.assertEqual(auth.identity_user(self.conn, "google", "g1"), self.uid)
 
     def test_right_password_links_the_identity(self):
         token = self._collide()
