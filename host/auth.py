@@ -103,6 +103,13 @@ def is_admin(conn, user_id):
                         (user_id,)).fetchone() is not None
 
 
+def admin_count(conn):
+    """How many admins the server has. The last one must not delete itself:
+    that leaves nobody who can administer the deployment."""
+    row = conn.execute("SELECT COUNT(*) AS n FROM admins").fetchone()
+    return int(row["n"] or 0)
+
+
 def registration_open(conn):
     """Can a stranger still make an account by themselves?
 

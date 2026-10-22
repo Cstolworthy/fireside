@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delete your account — fireside</title>
+<meta name="color-scheme" content="dark">
+<style>
+  :root{
+    --bg:#14110f; --surface:#1d1916; --raise:#241f1b; --line:#332c26;
+    --text:#efe7dd; --faint:#9a8f83; --flame:#e3a857; --on-flame:#241808;
+    --ui:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 var(--ui);
+       -webkit-font-smoothing:antialiased}
+  main{max-width:720px;margin:0 auto;padding:56px 22px 96px}
+  header{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+  header img{width:40px;height:40px;border-radius:10px}
+  h1{font-size:26px;margin:18px 0 4px;letter-spacing:-.01em}
+  h2{font-size:17px;margin:34px 0 8px;color:var(--flame);letter-spacing:.01em}
+  p,li{color:var(--text)}
+  .lead{color:var(--faint)}
+  ul{padding-left:20px}
+  li{margin:5px 0}
+  a{color:var(--flame)}
+  .meta{color:var(--faint);font-size:13px;margin-top:6px}
+  .back{display:inline-block;margin-top:40px;color:var(--faint);text-decoration:none;
+        border:1px solid var(--line);border-radius:999px;padding:9px 18px}
+  .back:hover{color:var(--text);border-color:var(--flame)}
+  code{background:var(--surface);padding:1px 5px;border-radius:5px;font-size:14px}
+  ol{padding-left:20px}
+</style>
+</head>
+<body>
+<main>
+  <header><img src="/icon-192.png" alt=""><strong>fireside</strong></header>
+  <h1>Delete your account</h1>
+  <p class="meta">Last updated: 22 October 2026</p>
+
+  <p class="lead">You can erase your fireside account and everything in it at any time. There
+  are two ways, depending on whether you still have the app.</p>
+
+  <h2>From the app</h2>
+  <ol>
+    <li>Open fireside and sign in.</li>
+    <li>Go to <strong>Settings</strong>, then the <strong>Account</strong> tab.</li>
+    <li>Under <strong>Delete account</strong>, choose <strong>Delete my account</strong> and
+      confirm.</li>
+  </ol>
+  <p>You confirm with your password. If your account signs in through Google, GitHub, Microsoft
+  or SimpleLogin and has no password, you confirm by typing the phrase
+  <code>delete my account</code> instead.</p>
+
+  <h2>If you no longer have the app</h2>
+  <p>Email <a href="mailto:__CONTACT__">__CONTACT__</a> from the address on your account and ask
+  us to delete it. We verify the request against the account it names, then erase it. You do not
+  need to give a reason.</p>
+
+  <h2>What gets deleted</h2>
+  <ul>
+    <li>Your account record and every way of signing in to it (password and any linked Google,
+      GitHub, Microsoft or SimpleLogin identity).</li>
+    <li>Your library: every book you added, the text you imported, and the audio we
+      rendered for you.</li>
+    <li>Your listening history, playback positions, and device sessions.</li>
+    <li>Any speech-provider credentials you stored, and your own shared connections and
+      preferences.</li>
+  </ul>
+  <p>Audio that only your account held leaves our storage, including the copies the shared
+  render cache was keeping so a re-read would be free. A book or recording that another account
+  still holds is not deleted with you; it stays with them.</p>
+
+  <h2>What can outlive the account</h2>
+  <p>A few things are not ours to erase, and one is worth saying out loud:</p>
+  <ul>
+    <li><strong>Billing and tax records.</strong> Where tax or accounting rules require it, we
+      keep the record that a payment was made, for the required period.</li>
+    <li><strong>A paid subscription is not cancelled by deleting the app or the account.</strong>
+      If you are being billed by card, cancel it from the platform you subscribed through (the
+      billing page) first, or email us and we will stop it. Deleting the account removes your
+      plan here; it does not by itself stop a card charge.</li>
+    <li><strong>Encrypted backups</strong> roll off on their own cycle; a deleted account is not
+      restored from them.</li>
+  </ul>
+
+  <h2>Contact</h2>
+  <p>Questions, or a deletion request: <a href="mailto:__CONTACT__">__CONTACT__</a>.</p>
+  <p class="meta">fireside is operated by __COMPANY__.</p>
+
+  <a class="back" href="/">← Back to fireside</a>
+</main>
+</body>
+</html>
