@@ -172,15 +172,23 @@ class App:
             page = f.read().replace("__HOST_VERSION__", HOST_VERSION)
         return 200, {"_html": page}
 
-    def privacy(self, q, body):
-        """The privacy policy. Public, static, and store-listing mineable."""
-        with open(os.path.join(UI_DIR, "privacy.html"), "r", encoding="utf-8") as f:
+    def _legal(self, name):
+        """A public, static legal page a store listing or payment processor can mine."""
+        with open(os.path.join(UI_DIR, name), "r", encoding="utf-8") as f:
             page = f.read()
         page = (page
                 .replace("__COMPANY__", os.environ.get("FIRESIDE_COMPANY", "Fireside"))
                 .replace("__CONTACT__", os.environ.get("FIRESIDE_CONTACT_EMAIL",
                                                       "fireside@readfireside.com")))
         return 200, {"_html": page}
+
+    def privacy(self, q, body):
+        """The privacy policy. Public, static, and store-listing mineable."""
+        return self._legal("privacy.html")
+
+    def terms(self, q, body):
+        """The terms of service. Public, static, and store-listing mineable."""
+        return self._legal("terms.html")
 
     def favicon(self, q, body):
         """The browser-tab icon: the same mark the install screen shows."""
@@ -1594,7 +1602,7 @@ GET_ROUTES = {
     "/manifest.webmanifest": "manifest", "/sw.js": "service_worker",
     "/icon-192.png": "icon192", "/icon-512.png": "icon512",
     "/icon-maskable-512.png": "icon_maskable",
-    "/privacy": "privacy",
+    "/privacy": "privacy", "/terms": "terms",
     "/health": "health", "/plugins": "plugins", "/library": "library_list",
     "/job": "job", "/jobs": "jobs_list", "/progress": "progress", "/chapter": "chapter",
     "/estimate": "estimate",
@@ -1638,7 +1646,7 @@ POST_ROUTES = {
 # the sign-in surface, and the browser's cache of who it is.
 PUBLIC_ROUTES = {"/", "/index.html", "/favicon.ico", "/health", "/auth/providers",
                  "/auth/policy", "/auth/forgot", "/auth/reset", "/me", "/plans",
-                 "/privacy",
+                 "/privacy", "/terms",
                  "/manifest.webmanifest", "/sw.js",
                  "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"}
 
