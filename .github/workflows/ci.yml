@@ -38,7 +38,9 @@ jobs:
       - name: Compute registries
         id: reg
         run: |
-          IMAGES="ghcr.io/${GITHUB_REPOSITORY_OWNER}/fireside"
+          # GHCR paths must be lowercase; an org login can carry capitals
+          OWNER_LC=$(printf %s "$GITHUB_REPOSITORY_OWNER" | tr "[:upper:]" "[:lower:]")
+          IMAGES="ghcr.io/${OWNER_LC}/fireside"
           HAS_HUB=false
           if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
             IMAGES="${IMAGES}"$'\n'"docker.io/${{ secrets.DOCKERHUB_USERNAME }}/fireside"

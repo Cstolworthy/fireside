@@ -9,8 +9,8 @@ Bring your own speech engine: Azure, any OpenAI-compatible endpoint, MiniMax, or
 
 Open source, MIT licensed. This repository holds the Community Applications template for the fireside Docker image.
 
-Support and issues: https://github.com/Cstolworthy/fireside/issues
+Support and issues: https://github.com/magic-smoke-technologies-llc/fireside/issues
   </Profile>
-  <Icon>https://raw.githubusercontent.com/Cstolworthy/fireside/main/assets/icon.png</Icon>
-  <WebPage>https://github.com/Cstolworthy/fireside</WebPage>
+  <Icon>https://raw.githubusercontent.com/magic-smoke-technologies-llc/fireside/main/assets/icon.png</Icon>
+  <WebPage>https://github.com/magic-smoke-technologies-llc/fireside</WebPage>
 </CommunityApplications>

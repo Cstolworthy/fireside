@@ -7,8 +7,8 @@
   <MyIP/>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
-  <Support>https://github.com/Cstolworthy/fireside/issues</Support>
-  <Project>https://github.com/Cstolworthy/fireside</Project>
+  <Support>https://github.com/magic-smoke-technologies-llc/fireside/issues</Support>
+  <Project>https://github.com/magic-smoke-technologies-llc/fireside</Project>
   <Overview>Drop in an EPUB or paste a public story link and fireside narrates it, chapter by chapter.
 
 Built for long serialized fiction: no subscription wall, no account required, runs on your own machine. Bring your own TTS key (Azure, OpenAI-compatible, MiniMax) or point it at a local engine such as Kokoro and it costs nothing per word. Open source (MIT).
@@ -21,8 +21,8 @@ Built for long serialized fiction: no subscription wall, no account required, ru
 First run: open the WebUI, add a speech engine on the Settings page, drop in a book, and press play.</Overview>
   <Category>MediaApp:Books Productivity:</Category>
   <WebUI>http://[IP]:[PORT:8788]/</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/Cstolworthy/fireside/main/templates/fireside.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/Cstolworthy/fireside/main/assets/icon.png</Icon>
+  <TemplateURL>https://raw.githubusercontent.com/magic-smoke-technologies-llc/fireside/main/templates/fireside.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/magic-smoke-technologies-llc/fireside/main/assets/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <CPUset/>
