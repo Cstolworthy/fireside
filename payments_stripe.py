@@ -120,7 +120,7 @@ DEFAULT_PLANS = [
     Plan(id="platform", label="fireside platform", amount_cents=300,
          currency="usd", interval="month",
          description="Server, updates, and 2GB storage. The platform only."),
-    Plan(id="storage", label="fireside storage +5 GB", amount_cents=100,
+    Plan(id="storage", label="fireside storage +5 GB", amount_cents=200,
          currency="usd", interval="month",
          description="Add 5 GB of storage, monthly. Buy as many blocks as you need."),
 ]
