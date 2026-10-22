@@ -37,7 +37,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
-from host import accounting, auth, billing, connections, credentials, db, example, grants, jobs, library, mailer, payments, playback, plans, pron, quota, stats
+from host import accounting, auth, billing, connections, credentials, db, erase, example, grants, jobs, library, mailer, payments, playback, plans, pron, quota, stats
 from sources._fetch import fetch as _fetch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -189,6 +189,12 @@ class App:
     def terms(self, q, body):
         """The terms of service. Public, static, and store-listing mineable."""
         return self._legal("terms.html")
+
+    def delete_account(self, q, body):
+        """How to erase your account. Public and static: a store listing has to
+        point at a URL, and it must be reachable by someone who already
+        uninstalled the app."""
+        return self._legal("delete_account.html")
 
     def favicon(self, q, body):
         """The browser-tab icon: the same mark the install screen shows."""
@@ -1532,7 +1538,10 @@ class App:
     def me(self, q, body):
         uid = (q or {}).get("_user") or ""
         return 200, {"user": uid, "authenticated": bool(uid),
-                     "admin": auth.is_admin(self.conn, uid)}
+                     "admin": auth.is_admin(self.conn, uid),
+                     # about yourself only: the account panel reads this to ask
+                     # for a password (local) or a typed phrase (social-only).
+                     "has_password": bool(uid) and auth.has_local_account(self.conn, uid)}
 
     def auth_linked(self, q, body):
         """Which social providers the signed-in user has attached."""
@@ -1596,13 +1605,43 @@ class App:
         out["revoked"] = n
         return 200, out
 
+    # ---- erasing the account --------------------------------------------------
+
+    def account_delete(self, q, body):
+        """Erase the signed-in account for good: books, voiced audio, history,
+        credentials, and sign-ins.
+
+        Proof first, the way the account already signs in: a password account
+        proves with its password; a social-only account has no password to give,
+        so it must type the confirmation phrase. The last admin cannot delete
+        itself - that would leave the server with nobody who can run it."""
+        uid = (q or {}).get("_user") or ""
+        if not uid:
+            return 401, {"error": "auth required"}
+        body = body or {}
+        if auth.is_admin(self.conn, uid) and auth.admin_count(self.conn) <= 1:
+            return 409, {"error": "last admin",
+                         "detail": "this is the only admin account. Make another "
+                                   "account an admin and delete this one after."}
+        if auth.has_local_account(self.conn, uid):
+            if not auth.local_password_proof(self.conn, uid,
+                                             body.get("password") or ""):
+                return 403, {"error": "wrong password"}
+        elif (body.get("confirm") or "").strip().lower() != "delete my account":
+            return 400, {"error": "confirm",
+                         "detail": "type 'delete my account' to confirm"}
+        out = erase.purge_user(self.conn, self.storage, uid)
+        out["ok"] = True
+        out["logout"] = True
+        return 200, out
+
 
 GET_ROUTES = {
     "/": "ui", "/index.html": "ui", "/favicon.ico": "favicon",
     "/manifest.webmanifest": "manifest", "/sw.js": "service_worker",
     "/icon-192.png": "icon192", "/icon-512.png": "icon512",
     "/icon-maskable-512.png": "icon_maskable",
-    "/privacy": "privacy", "/terms": "terms",
+    "/privacy": "privacy", "/terms": "terms", "/delete-account": "delete_account",
     "/health": "health", "/plugins": "plugins", "/library": "library_list",
     "/job": "job", "/jobs": "jobs_list", "/progress": "progress", "/chapter": "chapter",
     "/estimate": "estimate",
@@ -1625,6 +1664,7 @@ POST_ROUTES = {
     "/import": "import_book", "/book/example": "add_example_book",
     "/render": "render", "/voices": "voices",
     "/book/renditions/delete": "remove_renditions", "/book/delete": "delete_book",
+    "/account/delete": "account_delete",
     "/speak": "speak",
     "/cover": "put_cover", "/cover/auto": "cover_auto", "/cover/clear": "clear_cover",
     "/book/details": "fetch_details",
@@ -1646,7 +1686,7 @@ POST_ROUTES = {
 # the sign-in surface, and the browser's cache of who it is.
 PUBLIC_ROUTES = {"/", "/index.html", "/favicon.ico", "/health", "/auth/providers",
                  "/auth/policy", "/auth/forgot", "/auth/reset", "/me", "/plans",
-                 "/privacy", "/terms",
+                 "/privacy", "/terms", "/delete-account",
                  "/manifest.webmanifest", "/sw.js",
                  "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png"}
 

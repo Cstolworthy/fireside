@@ -531,6 +531,22 @@
         account. <a href="/privacy" target="_blank" rel="noopener">Read the privacy policy →</a>
         The rules for using the service are in the
         <a href="/terms" target="_blank" rel="noopener">terms of service →</a></p>
+      <h3 style="margin-top:30px">Delete account</h3>
+      <p class="sub">Erases your account and everything in it: every book, the audio we voiced
+        for you, your listening history, and every way of signing in. This cannot be undone.
+        <a href="/delete-account" target="_blank" rel="noopener">What gets deleted →</a></p>
+      <div id="delpwrow" style="margin-top:10px">
+        <input type="password" id="delpw" placeholder="Your password"
+               autocomplete="current-password" style="max-width:320px">
+      </div>
+      <div id="delconfrow" style="margin-top:10px" hidden>
+        <input type="text" id="delconf" placeholder="type: delete my account"
+               autocomplete="off" style="max-width:320px">
+      </div>
+      <div style="margin-top:10px">
+        <button class="btn" id="delbtn" type="button">Delete my account</button>
+      </div>
+      <div id="delmsg" class="sub" style="margin-top:8px"></div>
     </div>
 
     <div class="setpanel" data-p="admin">
@@ -833,7 +849,7 @@ function show(v) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
   if (v === 'set') { loadPron(); loadLinked(); loadSessions(); loadPlan();
-    setSetTab(localStorage.getItem(SETTAB_KEY)); }
+    loadDanger(); setSetTab(localStorage.getItem(SETTAB_KEY)); }
   if (v === 'plans') loadPlansPage();
   if (v === 'lib') renderActiveJobs();
 }
@@ -1631,9 +1647,36 @@ if ($('#sessall')) $('#sessall').onclick = () => {
 if ($('#sessallusers')) $('#sessallusers').onclick = () => {
   if (confirm('Boot every session on the server, except this one?')) revokeSessions(true, true);
 };
+// --- deleting the account: the one button with no undo ---------------------
+// Proof matches the account's own door: a password account confirms with its
+// password; a social-only account has none to give, so it types the phrase.
+function loadDanger() {
+  const pw = $('#delpwrow');
+  if (!pw) return;
+  const hasPw = !!AUTH.hasPassword;
+  pw.hidden = !hasPw;
+  $('#delconfrow').hidden = hasPw;
+  $('#delmsg').textContent = hasPw ? ''
+    : 'This account signs in with a provider and has no password, so type the phrase to confirm.';
+}
+if ($('#delbtn')) $('#delbtn').onclick = async () => {
+  const body = AUTH.hasPassword ? { password: $('#delpw').value }
+                                : { confirm: $('#delconf').value };
+  if (!confirm('Delete your account and everything in it? This cannot be undone.')) return;
+  $('#delbtn').disabled = true;
+  try {
+    await jpost('/account/delete', body);
+    $('#delmsg').textContent = 'Account deleted.';
+    localStorage.removeItem(UKEY);
+    location.reload();
+  } catch (e) {
+    $('#delmsg').textContent = e.message || 'could not delete the account';
+    $('#delbtn').disabled = false;
+  }
+};
 // --- the door: the whole app is behind a session ---------------------------
 let AUTH = { user: '', admin: false, hasAccounts: false, registrationOpen: true,
-             providers: [], mode: 'sign', resetToken: '' };
+             hasPassword: false, providers: [], mode: 'sign', resetToken: '' };
 
 function authMsg(t) { $('#autherr').textContent = t || ''; }
 
@@ -1752,6 +1795,7 @@ async function requireSession() {
   const who = $('#auth'); who.innerHTML = '';
   if (me.authenticated) {
     USER = me.user; AUTH.user = me.user; AUTH.admin = !!me.admin;
+    AUTH.hasPassword = !!me.has_password;
     localStorage.setItem(UKEY, USER);
     const label = me.user.includes(':') ? me.user.split(':')[1] : me.user;
     who.textContent = label + (AUTH.admin ? ' · admin' : '');
