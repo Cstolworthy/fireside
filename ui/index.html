@@ -1076,10 +1076,15 @@ async function loadPron() {
 }
 async function savePron() {
   collectPron();
+  const sent = PRON.length;
   try {
     const d = await jpost('/pron', { rules: PRON });
     PRON = d.rules || PRON; showPron(PRON);
-    $('#pronmsg').textContent = PRON.length + ' word(s) set.';
+    const kept = PRON.length;
+    const msg = kept + ' word(s) set.'
+      + (kept < sent ? '  (' + (sent - kept) + ' row(s) dropped: one rule per word, the first one wins.)' : '');
+    $('#pronmsg').textContent = msg;
+    idle(msg);
     await showPronImpact();
   } catch (e) { fail(e); }
 }
@@ -1117,7 +1122,8 @@ function findConnFor(provider) {
 }
 async function showPronImpact() {
   let im = null;
-  try { im = await api('/pron/impact'); } catch (e) { return; }
+  try { im = await api('/pron/impact'); }
+  catch (e) { $('#pronmsg').textContent += '  Words saved. (Could not check which chapters need re-encoding: ' + String(e && e.message ? e.message : e) + ')'; return; }
   PRONIMPACT = im;
   if (!im || !im.chapters_affected) return;
   const n = im.chapters_affected, m = im.books_affected;
@@ -2698,22 +2704,36 @@ $('#sdelbookbtn').onclick = async () => {
 };
 
 // --- verify-before-play ----------------------------------------------------
+// The server is the authority on which audio a chapter is. The listing in memory
+// can be older than the audio: a re-encode (a pronunciation fix, a voice change)
+// replaces a chapter's blob while the page still shows the ref and size it had
+// before. So verify against the blob the server says it just sent (X-Checksum is
+// the content hash, the same address the store uses), not against the listing,
+// and take the newer metadata instead of refusing to play.
 async function fetchChapter(id, idx, ref, nbytes, r) {
   const key = ref || (id + ':' + idx);
   if (cache.has(key)) return cache.get(key);
   let q = '/chapter?book=' + encodeURIComponent(id) + '&idx=' + idx;
   if (r && r.voice) q += '&voice=' + encodeURIComponent(r.voice)
     + '&provider=' + encodeURIComponent(r.provider || '')
-    + (r.model ? '&model=' + encodeURIComponent(r.model) : '');
+    + (r.model ? '&model=' + encodeURIComponent(r.model) : '')
+    + (r.speed ? '&speed=' + encodeURIComponent(r.speed) : '');
   const resp = await fetch(q);
   if (!resp.ok) { const d = await resp.json().catch(() => ({})); throw new Error(d.error || ('HTTP ' + resp.status)); }
+  const served = (resp.headers.get('X-Checksum') || '').trim();
   const buf = await resp.arrayBuffer();
   const bytes = new Uint8Array(buf);
-  if (nbytes && bytes.length !== nbytes) throw new Error('size mismatch (' + bytes.length + ' != ' + nbytes + ')');
-  if (ref) { const got = sha256hex(bytes); if (got !== ref) throw new Error('checksum mismatch — refusing to play'); }
+  const want = served || ref;
+  if (want) { const got = sha256hex(bytes); if (got !== want) throw new Error('checksum mismatch — refusing to play'); }
+  else if (nbytes && bytes.length !== nbytes) throw new Error('size mismatch (' + bytes.length + ' != ' + nbytes + ')');
+  // the audio moved on since this page was drawn: update what we hold about it
+  if (r && served && r.audio_ref !== served) {
+    r.audio_ref = served; r.audio_bytes = bytes.length;
+  }
   const url = URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' }));
   const entry = { url, bytes: bytes.length };
-  cache.set(key, entry); return entry;
+  cache.set(key, entry); if (served && served !== key) cache.set(served, entry);
+  return entry;
 }
 
 function play(idx, autoplay = true) { return playSelection(book, idx, autoplay); }

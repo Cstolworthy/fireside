@@ -1145,9 +1145,11 @@ class App:
         voice = q.get("voice") or ""
         provider = q.get("provider") or ""
         model = q.get("model") or ""
+        speed = q.get("speed") or ""
         if voice or provider:
             # a named voice: serve that rendition, and say so if it is not there
-            r = library.rendition(self.conn, book_id, idx, provider, voice, model)
+            r = library.rendition(self.conn, book_id, idx, provider, voice, model,
+                                  speed=speed)
             if not r:
                 return 409, {"error": "not rendered in that voice"}
             data = self.storage.get(r["audio_ref"])
