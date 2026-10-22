@@ -50,6 +50,28 @@ class TestLibrary(unittest.TestCase):
         library.add_book(self.conn, self.storage, "u1", _book())
         self.assertEqual(library.list_books(self.conn, "u2"), [])
 
+    def test_rendition_by_voice_can_name_the_speed(self):
+        """Two rows for one voice at different speeds are different audio.
+
+        The player already knows which row it showed the user, speed included,
+        so asking for a voice without a speed used to be able to hand back the
+        other row's blob - a different length, and a player that checks what it
+        got would refuse to play it.
+        """
+        library.create_user(self.conn, "u1")
+        bid = library.add_book(self.conn, self.storage, "u1", _book())
+        for speed, tag in ((1.0, "normal"), (1.1, "fast")):
+            library.add_rendition(self.conn, bid, 0, "fake", "v", "", speed,
+                                  "ref-" + tag, 100, voice_label="V")
+        self.assertEqual(library.rendition(self.conn, bid, 0, "fake", "v")["audio_ref"],
+                         "ref-normal")
+        self.assertEqual(
+            library.rendition(self.conn, bid, 0, "fake", "v", speed=1.1)["audio_ref"],
+            "ref-fast")
+        self.assertEqual(
+            library.rendition(self.conn, bid, 0, "fake", "v", speed="1.0")["audio_ref"],
+            "ref-normal")
+
 
 if __name__ == "__main__":
     unittest.main()

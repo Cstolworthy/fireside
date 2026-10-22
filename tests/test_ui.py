@@ -142,6 +142,27 @@ class TestBrowserUi(unittest.TestCase):
         ao3 = next(r for r in d["readers"] if r["id"] == "ao3")
         self.assertTrue(any(f["name"] == "cookie" for f in ao3["settings"]))
 
+    def test_chapter_says_which_blob_it_served(self):
+        """The header is the play check the page relies on.
+
+        The listing in memory can be older than the audio after a re-encode, so
+        the player verifies the bytes against the hash the server reports for
+        what it just sent, and takes the newer ref - instead of failing on a
+        stale size and refusing to play a chapter that is perfectly fine.
+        """
+        _, imp = self._post("/import", {"user": "u1", "kind": "upload"})
+        bid = imp["book_id"]
+        _, r = self._post("/render", {"user": "u1", "book": bid,
+                                       "provider": "fake", "voice": "vv"})
+        self._wait_job(r["job_id"])
+        url = ("http://127.0.0.1:%d/chapter?book=%s&idx=0&provider=fake&voice=vv"
+               % (self.port, bid))
+        with urllib.request.urlopen(url) as resp:
+            body = resp.read()
+            self.assertEqual(resp.headers.get("X-Checksum"),
+                             hashlib.sha256(body).hexdigest())
+            self.assertEqual(resp.headers.get("Content-Length"), str(len(body)))
+
     def test_browser_flow_verify_before_play(self):
         # the exact sequence the page runs: identity -> import -> voices ->
         # render -> poll -> progress -> verified chapter bytes -> position/claim

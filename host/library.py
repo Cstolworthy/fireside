@@ -176,9 +176,22 @@ def renditions(conn, book_id):
     return [dict(r) for r in rows]
 
 
-def rendition(conn, book_id, idx, provider="", voice="", model=""):
+def rendition(conn, book_id, idx, provider="", voice="", model="", speed=None):
     """The rendition of one chapter for a named voice, or None. An empty voice
-    matches any, so the newest wins (the ORDER BY picks it)."""
+    matches any, so the newest wins (the ORDER BY picks it).
+
+    `speed` narrows to one speed when the caller knows it. The player already
+    names the exact rendition it showed the user (provider, voice, model AND
+    speed); without the speed a second row for the same voice at another speed
+    could be served instead - a different blob, so a different length, and a
+    player that checks what it was handed would refuse to play it.
+    """
+    want_speed = None
+    if speed not in (None, ""):
+        try:
+            want_speed = float(speed)
+        except (TypeError, ValueError):
+            want_speed = None
     for r in renditions(conn, book_id):
         if r["idx"] != idx:
             continue
@@ -188,6 +201,10 @@ def rendition(conn, book_id, idx, provider="", voice="", model=""):
             continue
         if model and r["model"] != model:
             continue
+        if want_speed is not None:
+            have = r["speed"]
+            if abs(float(have if have is not None else 1.0) - want_speed) > 0.0005:
+                continue
         if r["audio_ref"]:
             return r
     return None
