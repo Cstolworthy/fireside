@@ -153,7 +153,9 @@ class StripeProvider:
                          auth=self._auth(), timeout=self.timeout)
 
     def live(self):
-        return self.key.startswith("sk_live_")
+        # A standard secret key is sk_live_/sk_test_; a restricted key is
+        # rk_live_/rk_test_. Either is live when the mode segment says live.
+        return self.key.startswith(("sk_live_", "rk_live_"))
 
     def account(self):
         """GET /v1/account - proves the key is real at startup, no charge made."""
@@ -422,8 +424,10 @@ def from_env():
     key = os.environ.get("FIRESIDE_STRIPE_KEY", "").strip()
     if not key:
         return None
-    if not key.startswith("sk_"):
-        raise ValueError("FIRESIDE_STRIPE_KEY is not a Stripe secret key (sk_...)")
+    # sk_ = standard secret key, rk_ = restricted key. Both are valid server
+    # credentials; the restricted one just carries fewer granted permissions.
+    if not key.startswith(("sk_", "rk_")):
+        raise ValueError("FIRESIDE_STRIPE_KEY is not a Stripe key (sk_... or rk_...)")
     whsec = (os.environ.get("FIRESIDE_STRIPE_WEBHOOK_SECRET")
              or os.environ.get("STRIPE_WEBHOOK_SECRET") or "").strip()
     return StripeProvider(key, webhook_secret=whsec)

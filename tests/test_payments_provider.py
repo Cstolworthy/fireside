@@ -100,6 +100,17 @@ class TestFromEnv(unittest.TestCase):
         with self.assertRaises(ValueError):
             payments_stripe.from_env()
 
+    def test_restricted_key_is_accepted(self):
+        # A restricted key (rk_) is a valid server credential with fewer
+        # granted permissions; it must register, and live mode is the mode
+        # segment, not the sk_/rk_ prefix.
+        os.environ["FIRESIDE_STRIPE_KEY"] = "rk_test_dummy"
+        p = payments_stripe.from_env()
+        self.assertIsNotNone(p)
+        self.assertFalse(p.live())
+        os.environ["FIRESIDE_STRIPE_KEY"] = "rk_live_dummy"
+        self.assertTrue(payments_stripe.from_env().live())
+
     def test_load_registers_the_named_provider(self):
         os.environ["FIRESIDE_PAYMENT_PROVIDER"] = "payments_stripe"
         os.environ["FIRESIDE_STRIPE_KEY"] = "sk_test_dummy"
