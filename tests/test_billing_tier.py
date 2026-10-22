@@ -79,6 +79,16 @@ class TestStripeTier(unittest.TestCase):
         self.assertEqual(pl[0].amount_cents, 300)
         self.assertEqual(pl[0].interval, "month")
 
+    def test_storage_block_is_two_dollars_monthly(self):
+        # Raised from $1 on 2026-10-22: at a dollar, Stripe's 30c flat fee took a
+        # third of the block. Pinned here so the sold price cannot drift back
+        # without a test going red.
+        p, _ = self._p(_Resp(200, {}))
+        pl = p.plans()
+        storage = [x for x in pl if x.id == "storage"][0]
+        self.assertEqual(storage.amount_cents, 200)
+        self.assertEqual(storage.interval, "month")
+
     def test_checkout_builds_a_subscription_session(self):
         p, fp = self._p(_Resp(200, {"id": "cs_9", "url": "https://pay.stripe/cs_9"}))
         co = p.checkout("platform", {"user": "u1", "return_url": "https://x/"})
@@ -202,7 +212,7 @@ class TestStripeCart(unittest.TestCase):
         self.assertEqual(d["line_items[0][quantity]"], "1")
         self.assertEqual(d["line_items[0][price_data][unit_amount]"], "300")
         self.assertEqual(d["line_items[1][quantity]"], "2")
-        self.assertEqual(d["line_items[1][price_data][unit_amount]"], "100")
+        self.assertEqual(d["line_items[1][price_data][unit_amount]"], "200")
         self.assertEqual(d["line_items[1][price_data][recurring][interval]"], "month")
         self.assertEqual(json.loads(d["metadata[items]"]),
                          [{"plan": "platform", "quantity": 1},
