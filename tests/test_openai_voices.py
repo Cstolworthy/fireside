@@ -7,6 +7,7 @@ call, the same one synth already sends.
 
 import json
 import unittest
+import urllib.error
 from unittest import mock
 
 from providers.openai import OpenAICompat
@@ -58,3 +59,52 @@ class TestListVoices(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestListRetries(unittest.TestCase):
+    """A cold server (the tower's tunnel) used to cost the user every voice.
+
+    One slow answer collapsed the whole menu to the default voice with no
+    explanation. Now the list is retried, and a real failure names itself in the
+    menu instead of looking like the server only has one voice.
+    """
+
+    def test_a_transient_failure_is_retried(self):
+        p = OpenAICompat()
+        calls = {"n": 0}
+
+        def flaky(req, timeout=0):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise urllib.error.URLError("connection reset")
+            return _Resp(json.dumps({"voices": [{"id": "af_bella"},
+                                                {"id": "am_adam"}]}).encode())
+
+        with mock.patch("providers.openai.urllib.request.urlopen", flaky), \
+             mock.patch("providers.openai.time.sleep"):
+            vs = p.list_voices({"base_url": "https://tower:8443", "key": "tok"})
+        self.assertEqual(calls["n"], 2)
+        self.assertEqual([v.id for v in vs], ["af_bella", "am_adam"])
+
+    def test_a_real_failure_says_why(self):
+        p = OpenAICompat()
+
+        def denied(req, timeout=0):
+            raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, None)
+
+        with mock.patch("providers.openai.urllib.request.urlopen", denied), \
+             mock.patch("providers.openai.time.sleep"):
+            vs = p.list_voices({"base_url": "https://tower:8443", "key": "bad"})
+        self.assertEqual(len(vs), 1)
+        self.assertIn("rejected the key", vs[0].label)
+
+    def test_a_failure_still_leaves_a_usable_voice(self):
+        p = OpenAICompat()
+
+        def dead(req, timeout=0):
+            raise urllib.error.URLError("name or service not known")
+
+        with mock.patch("providers.openai.urllib.request.urlopen", dead), \
+             mock.patch("providers.openai.time.sleep"):
+            vs = p.list_voices({"base_url": "http://nowhere:8880"})
+        self.assertEqual(vs[0].id, "af_heart")

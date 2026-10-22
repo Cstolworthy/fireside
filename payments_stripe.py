@@ -120,7 +120,7 @@ DEFAULT_PLANS = [
     Plan(id="platform", label="fireside platform", amount_cents=300,
          currency="usd", interval="month",
          description="Server, updates, and 2GB storage. The platform only."),
-    Plan(id="storage", label="fireside storage +5 GB", amount_cents=100,
+    Plan(id="storage", label="fireside storage +5 GB", amount_cents=200,
          currency="usd", interval="month",
          description="Add 5 GB of storage, monthly. Buy as many blocks as you need."),
 ]
@@ -316,6 +316,13 @@ class StripeProvider:
         return self._session(data)
 
     def _session(self, data):
+        # Stripe now turns Managed Payments on by default on some accounts, and a
+        # session made while it is on demands a tax_code on every product and hands
+        # Stripe the merchant of record (its 3.5% on top of processing, and it owns
+        # the sale). fireside sells as itself: Magic Smoke is the merchant, the tax
+        # position stays ours, and the fee stays at processing. Say so explicitly
+        # per session instead of relying on an account-level default we do not own.
+        data.setdefault("managed_payments[enabled]", "false")
         try:
             r = self._post(self.api_base + "/v1/checkout/sessions", data=data,
                            auth=self._auth(), timeout=self.timeout)

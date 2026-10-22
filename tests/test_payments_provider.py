@@ -86,6 +86,36 @@ class TestStripeCharge(unittest.TestCase):
         self.assertEqual(fp.calls[0]["data"]["payment_method"], "pm_from_client")
 
 
+class TestCheckoutSessions(unittest.TestCase):
+    """The one place a buyer is sent to pay. Two things must hold every time."""
+
+    def _p(self, fp):
+        return payments_stripe.StripeProvider("rk_live_x", post=fp,
+                                              plans=payments_stripe.DEFAULT_PLANS)
+
+    def test_a_single_plan_session_opts_out_of_managed_payments(self):
+        fp = _FakePost(_Resp(200, {"id": "cs_1", "url": "https://pay.stripe/cs_1"}))
+        c = self._p(fp).checkout("platform", {"user": "u1",
+                                              "return_url": "https://readfireside.com/"})
+        self.assertTrue(c.ok)
+        self.assertEqual(c.reference, "cs_1")
+        data = fp.calls[0]["data"]
+        # Stripe defaults Managed Payments on for some accounts; left implicit the
+        # session 400s for a missing product tax_code and Stripe becomes the
+        # merchant of record. We sell as ourselves, so the session says so.
+        self.assertEqual(data["managed_payments[enabled]"], "false")
+        self.assertEqual(data["mode"], "subscription")
+
+    def test_a_cart_session_also_opts_out(self):
+        fp = _FakePost(_Resp(200, {"id": "cs_2", "url": "https://pay.stripe/cs_2"}))
+        c = self._p(fp).checkout(None, {"user": "u1", "return_url": "https://readfireside.com/",
+                                        "items": [{"plan": "platform", "quantity": 1},
+                                                  {"plan": "storage", "quantity": 2}]})
+        self.assertTrue(c.ok)
+        data = fp.calls[0]["data"]
+        self.assertEqual(data["managed_payments[enabled]"], "false")
+        self.assertEqual(data["line_items[1][quantity]"], "2")
+
 class TestFromEnv(unittest.TestCase):
     def tearDown(self):
         os.environ.pop("FIRESIDE_STRIPE_KEY", None)

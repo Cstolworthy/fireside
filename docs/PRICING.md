@@ -143,7 +143,8 @@ day) is maybe 20-30c/mo.
 So at the $3/mo platform tier a user's own cost is covered with room to spare,
 but the fixed cost is carried by the crowd: **~20 subs break even on the box,
 ~50 leave a real margin.** A 5 GB storage block costs us ~9c/mo and sells for
-$1/mo. These fixed figures are list-price estimates from the Azure calculator,
+$2/mo. The block was $1 until 2026-10-22: at that price Stripe's 30c flat fee ate
+a third of it, so the block is priced to clear its own fees, not to make a margin. These fixed figures are list-price estimates from the Azure calculator,
 not a measured bill; the honest next step is to check them against the live
 invoice once there are users. The egress figure is the one to watch, since
 streaming scales with listening, not with storage.
