@@ -10,6 +10,8 @@ new local engine is a URL, not a code change.
 """
 
 import json
+import time
+import urllib.error
 import urllib.request
 
 from . import Audio, Field, Voice, report
@@ -17,6 +19,27 @@ from ._text import chunk_text
 
 DEFAULT_BASE = "http://127.0.0.1:8880"
 DEFAULT_VOICE = "af_heart"
+
+# Seconds to wait between tries, and per try. Total worst case ~50s, but the
+# common case is a cold tunnel that answers on the second knock.
+_RETRY_WAITS = (1.0, 2.5)
+_LIST_TIMEOUT = 12
+
+
+def _why(e):
+    """A short reason a human can act on, not a repr of an exception."""
+    code = getattr(e, "code", None)
+    if code == 401:
+        return "server rejected the key"
+    if code == 403:
+        return "key not allowed"
+    if code == 404:
+        return "no voice list at that address"
+    if code:
+        return "server said %s" % code
+    if isinstance(e, urllib.error.URLError) or "timed out" in str(e).lower():
+        return "server did not answer"
+    return "server did not answer"
 
 
 class OpenAICompat:
@@ -42,14 +65,28 @@ class OpenAICompat:
             # a gated server (our tower) needs the token to answer the list too,
             # not just synth; without it the menu silently falls back to one voice
             hdr["Authorization"] = "Bearer " + cred["key"]
-        try:
-            req = urllib.request.Request(self._base(cred) + "/v1/audio/voices",
-                                         headers=hdr)
-            with urllib.request.urlopen(req, timeout=15) as r:
-                data = json.loads(r.read().decode())
-        except Exception:
-            # voices are a convenience; a working server with no list still speaks
-            return [Voice(DEFAULT_VOICE, DEFAULT_VOICE)]
+        data = None
+        # A self-hosted server behind a tunnel can be cold on the first call and
+        # answer a second later (the tower's funnel does exactly this). One slow
+        # list used to cost the user every voice but the default, so try again
+        # before deciding the server is really gone.
+        for attempt, wait in enumerate(_RETRY_WAITS + (None,)):
+            try:
+                req = urllib.request.Request(self._base(cred) + "/v1/audio/voices",
+                                             headers=hdr)
+                with urllib.request.urlopen(req, timeout=_LIST_TIMEOUT) as r:
+                    data = json.loads(r.read().decode())
+                break
+            except Exception as e:
+                last = e
+                if wait is not None:
+                    time.sleep(wait)
+        if data is None:
+            # Still nothing. Keep speaking (the synth call may well work), but say
+            # so out loud in the menu instead of pretending one voice is the list.
+            why = _why(last)
+            return [Voice(DEFAULT_VOICE,
+                          "%s (voice list unavailable: %s)" % (DEFAULT_VOICE, why))]
         out = []
         for v in data.get("voices", []):
             vid = v.get("id") or v.get("name")
@@ -57,7 +94,10 @@ class OpenAICompat:
                 continue
             out.append(Voice(vid, v.get("name") or vid))
         out.sort(key=lambda x: x.id)
-        return out or [Voice(DEFAULT_VOICE, DEFAULT_VOICE)]
+        if not out:
+            return [Voice(DEFAULT_VOICE,
+                          "%s (server returned an empty voice list)" % DEFAULT_VOICE)]
+        return out
 
     def chunks(self, text):
         return len(chunk_text(text))
