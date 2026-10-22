@@ -38,7 +38,7 @@ jobs:
       - name: Compute registries
         id: reg
         run: |
-          IMAGES="ghcr.io/cstolworthy/fireside"
+          IMAGES="ghcr.io/${GITHUB_REPOSITORY_OWNER}/fireside"
           HAS_HUB=false
           if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
             IMAGES="${IMAGES}"$'\n'"docker.io/${{ secrets.DOCKERHUB_USERNAME }}/fireside"
