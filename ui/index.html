@@ -1093,7 +1093,14 @@ async function testPron(text) {
     const r = await api('/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, connection_id: cid, voice: v, speed: 1 }) });
     const blob = await r.blob();
-    const au = $('#audio'); au.src = URL.createObjectURL(blob); await au.play();
+    // A preview gets its own element. Sharing #audio would stop the book,
+    // let its `ended` handler fire, and auto-advance a chapter mid-book.
+    const url = URL.createObjectURL(blob);
+    if (window.__pronPrev) { try { window.__pronPrev.pause(); } catch (_) {} }
+    const au = new Audio(url);
+    window.__pronPrev = au;
+    au.onended = () => URL.revokeObjectURL(url);
+    await au.play();
     idle('That is "' + text + '" in the default voice.');
   } catch (e) { fail(e); }
 }
@@ -2727,7 +2734,7 @@ async function playSelection(bk, idx, autoplay = true) {
   busy((autoplay ? 'Downloading chapter ' : 'Loading chapter ') + (idx + 1) + '…');
   try {
     const e = await fetchChapter(bk.id, idx, rd.audio_ref, rd.audio_bytes, rd);
-    const a = $('#audio'); a.src = e.url;
+    const a = $('#audio'); a.src = e.url; bookSrc = a.src;
     player = { id: bk.id, title: bk.title, chapters: bk.chapters };
     player.cover = bk.cover || '';
     pcur = idx;
@@ -2745,6 +2752,7 @@ async function playSelection(bk, idx, autoplay = true) {
 }
 
 // --- transport -------------------------------------------------------------
+let bookSrc = '';
 const $a = $('#audio');
 function syncTog() {
   const paused = $a.paused;
@@ -2837,6 +2845,9 @@ $a.addEventListener('loadedmetadata', async () => {
 });
 $a.addEventListener('ended', () => {
   if (!player.id || pcur < 0) return;
+  // Only a real chapter finishing may advance. Anything else that lands in
+  // this element (a pronunciation preview, a stray blob) must not skip a chapter.
+  if (bookSrc && $a.src !== bookSrc) return;
   const nx = pcur + 1; const c = player.chapters.find(x => x.idx === nx);
   const r = c && renditionFor(c);
   if (r && r.audio_ref) { playSelection(player, nx); return; }
