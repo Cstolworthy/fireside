@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — fireside</title>
+<meta name="color-scheme" content="dark">
+<style>
+  :root{
+    --bg:#14110f; --surface:#1d1916; --raise:#241f1b; --line:#332c26;
+    --text:#efe7dd; --faint:#9a8f83; --flame:#e3a857; --on-flame:#241808;
+    --ui:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:16px/1.6 var(--ui);
+       -webkit-font-smoothing:antialiased}
+  main{max-width:720px;margin:0 auto;padding:56px 22px 96px}
+  header{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+  header img{width:40px;height:40px;border-radius:10px}
+  h1{font-size:26px;margin:18px 0 4px;letter-spacing:-.01em}
+  h2{font-size:17px;margin:34px 0 8px;color:var(--flame);letter-spacing:.01em}
+  p,li{color:var(--text)}
+  .lead{color:var(--faint)}
+  ul{padding-left:20px}
+  li{margin:5px 0}
+  a{color:var(--flame)}
+  .meta{color:var(--faint);font-size:13px;margin-top:6px}
+  .back{display:inline-block;margin-top:40px;color:var(--faint);text-decoration:none;
+        border:1px solid var(--line);border-radius:999px;padding:9px 18px}
+  .back:hover{color:var(--text);border-color:var(--flame)}
+  code{background:var(--surface);padding:1px 5px;border-radius:5px;font-size:14px}
+</style>
+</head>
+<body>
+<main>
+  <header><img src="/icon-192.png" alt=""><strong>fireside</strong></header>
+  <h1>Privacy Policy</h1>
+  <p class="meta">Last updated: 22 October 2026</p>
+
+  <p class="lead">fireside reads books and web stories aloud. This policy explains what the
+  hosted service at <a href="https://readfireside.com">readfireside.com</a> and the fireside
+  mobile app collect, why, and what you can do about it. If you run fireside on your own
+  server, you are the operator of that server and this policy describes what the software
+  does with your data; you are responsible for it.</p>
+
+  <h2>What we collect</h2>
+  <ul>
+    <li><strong>Account details.</strong> Your email address and a password, or the identity
+      returned by a sign-in provider you choose (Google or SimpleLogin). Passwords are stored
+      only as a salted hash; we never see the plain text.</li>
+    <li><strong>Library content.</strong> The books and stories you add, the voices and covers
+      you generate, and your playback position, so your shelf is where you left it.</li>
+    <li><strong>Session data.</strong> A session identifier, your browser or device user-agent,
+      IP address, and last-seen time, so you can see and revoke signed-in devices.</li>
+    <li><strong>Billing records.</strong> Your plan and character balance. Card numbers are
+      handled by our payment processor (Stripe); they never reach our servers.</li>
+    <li><strong>The text you ask us to read.</strong> To turn text into speech we send it to a
+      speech provider. That is Microsoft Azure when you use our hosted voice service; when you
+      connect your own key, the text goes to your provider under your own account.</li>
+  </ul>
+
+  <h2>What we do not do</h2>
+  <ul>
+    <li>We do not sell your personal information.</li>
+    <li>We do not run advertising or third-party ad trackers.</li>
+    <li>We do not use your library to train models.</li>
+  </ul>
+
+  <h2>Cookies and local storage</h2>
+  <p>We use a single session cookie to keep you signed in, and your browser's local storage to
+  hold your theme and in-progress choices. We do not set advertising cookies.</p>
+
+  <h2>Who we share data with</h2>
+  <ul>
+    <li><strong>Cloud hosting</strong> (Microsoft Azure) — where the service and database run.</li>
+    <li><strong>Speech synthesis</strong> — Microsoft Azure, or the provider you connect
+      yourself, receives the text being read.</li>
+    <li><strong>Payments</strong> — Stripe processes purchases and holds card data.</li>
+    <li><strong>Sign-in</strong> — Google or SimpleLogin, only if you choose to sign in with them.</li>
+    <li><strong>Email delivery</strong> — a transactional mail provider sends password-reset
+      and account messages.</li>
+  </ul>
+  <p>We share only what each of these needs to do its job, and only when you use that feature.</p>
+
+  <h2>Keeping your data</h2>
+  <p>We keep your account and library while your account is open. Deleting your account removes
+  your library, sessions, and account record. Some billing records are retained where tax and
+  accounting rules require it. Rendered audio for voices you no longer hold is cleaned up
+  automatically.</p>
+
+  <h2>Your choices</h2>
+  <ul>
+    <li><strong>Delete your account and data.</strong> Request deletion from the app or by
+      emailing us; we act on verified requests.</li>
+    <li><strong>Revoke devices.</strong> Sign out individual devices or all others from
+      Settings.</li>
+    <li><strong>Forget a book or voice.</strong> Remove any book or voice from your shelf
+      at any time.</li>
+  </ul>
+
+  <h2>Children</h2>
+  <p>fireside is not directed at children under 13, and we do not knowingly collect their
+  personal information.</p>
+
+  <h2>Security</h2>
+  <p>Traffic is encrypted in transit, passwords are hashed, and sessions are individually
+  revocable. No service is perfectly secure, but we try to hold the line here.</p>
+
+  <h2>Changes</h2>
+  <p>If this policy changes in a way that matters, we will say so on this page and update the
+  date above.</p>
+
+  <h2>Contact</h2>
+  <p>Questions or deletion requests: <a href="mailto:__CONTACT__">__CONTACT__</a>.</p>
+  <p class="meta">fireside is operated by __COMPANY__.</p>
+
+  <a class="back" href="/">← Back to fireside</a>
+</main>
+</body>
+</html>
