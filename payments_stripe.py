@@ -260,16 +260,11 @@ class StripeProvider:
             success_url = ""
         data = {
             "mode": "subscription" if plan.interval else "payment",
-            "line_items[0][quantity]": str(quantity),
-            "line_items[0][price_data][currency]": plan.currency,
-            "line_items[0][price_data][unit_amount]": str(plan.amount_cents),
-            "line_items[0][price_data][product_data][name]": plan.label or plan.id,
             "metadata[user]": str(meta.get("user", "")),
             "metadata[plan]": plan.id,
             "metadata[quantity]": str(quantity),
         }
-        if plan.interval:
-            data["line_items[0][price_data][recurring][interval]"] = plan.interval
+        _line(data, 0, plan, quantity)
         if success_url:
             data["success_url"] = success_url
             data["cancel_url"] = return_url
@@ -294,7 +289,8 @@ class StripeProvider:
                 qty = 1
             out.append({"plan": plan.id, "quantity": qty, "interval": plan.interval,
                         "amount_cents": plan.amount_cents, "currency": plan.currency,
-                        "label": plan.label or plan.id})
+                        "label": plan.label or plan.id,
+                        "price": getattr(plan, "price", "") or ""})
         if not out:
             return Checkout(False, detail="empty cart")
         recurring = all(bool(o["interval"]) for o in out)
@@ -313,12 +309,7 @@ class StripeProvider:
                                            for o in out]),
         }
         for i, o in enumerate(out):
-            b = "line_items[%d]" % i
-            data[b + "[quantity]"] = str(o["quantity"])
-            data[b + "[price_data][currency]"] = o["currency"]
-            data[b + "[price_data][unit_amount]"] = str(o["amount_cents"])
-            data[b + "[price_data][product_data][name]"] = o["label"]
-            data[b + "[price_data][recurring][interval]"] = o["interval"]
+            _line(data, i, o, o["quantity"])
         if success_url:
             data["success_url"] = success_url
             data["cancel_url"] = return_url
@@ -419,6 +410,29 @@ class StripeProvider:
                             detail="ok", quantity=quantity, items=items)
 
 
+def _line(data, i, plan, quantity):
+    """One checkout line item, from a stored Price when we have one.
+
+    `plan` is a Plan or the plain dict the cart builds. With a `price` id the
+    line points at the real Price object, so the Stripe dashboard shows a named
+    product, renewals group, and the Customer Portal can reason about the
+    subscription. Without one we fall back to an inline price, which works but
+    leaves an anonymous one-off price behind on every checkout.
+    """
+    get = (lambda k, d=None: plan.get(k, d)) if isinstance(plan, dict) \
+        else (lambda k, d=None: getattr(plan, k, d))
+    b = "line_items[%d]" % i
+    data[b + "[quantity]"] = str(quantity)
+    price = get("price") or ""
+    if price:
+        data[b + "[price]"] = price
+        return
+    data[b + "[price_data][currency]"] = get("currency") or "usd"
+    data[b + "[price_data][unit_amount]"] = str(get("amount_cents") or 0)
+    data[b + "[price_data][product_data][name]"] = get("label") or get("id") or "fireside"
+    if get("interval"):
+        data[b + "[price_data][recurring][interval]"] = get("interval")
+
 def from_env():
     """Build the provider from $FIRESIDE_STRIPE_KEY, or None if unset."""
     key = os.environ.get("FIRESIDE_STRIPE_KEY", "").strip()
@@ -430,4 +444,55 @@ def from_env():
         raise ValueError("FIRESIDE_STRIPE_KEY is not a Stripe key (sk_... or rk_...)")
     whsec = (os.environ.get("FIRESIDE_STRIPE_WEBHOOK_SECRET")
              or os.environ.get("STRIPE_WEBHOOK_SECRET") or "").strip()
-    return StripeProvider(key, webhook_secret=whsec)
+    return StripeProvider(key, webhook_secret=whsec, plans=_plans_from_env())
+
+
+# The Price ids are deployment configuration, not code: one product per plan,
+# created once in the Stripe dashboard or by create_prices(), then pinned here so
+# the catalog in the app and the catalog in Stripe cannot drift apart.
+PRICE_ENV = {"platform": "FIRESIDE_STRIPE_PRICE_PLATFORM",
+             "storage": "FIRESIDE_STRIPE_PRICE_STORAGE"}
+
+
+def _plans_from_env(environ=None):
+    """The default plans, with any configured Stripe Price ids attached."""
+    env = os.environ if environ is None else environ
+    out = []
+    for p in DEFAULT_PLANS:
+        pid = (env.get(PRICE_ENV.get(p.id, ""), "") or "").strip()
+        out.append(Plan(id=p.id, label=p.label, amount_cents=p.amount_cents,
+                        currency=p.currency, interval=p.interval,
+                        description=p.description, price=pid))
+    return out
+
+
+def create_prices(provider, name_prefix="fireside"):
+    """Create the Product+Price pair for every default plan, print the ids.
+
+    Run once per Stripe mode (a test-mode Price does not exist in live mode),
+    then put the ids in FIRESIDE_STRIPE_PRICE_*. This is a deliberate one-off:
+    the app never creates catalog objects while serving a checkout.
+    """
+    made = []
+    for p in DEFAULT_PLANS:
+        prod = provider._post(provider.api_base + "/v1/products",
+                              data={"name": p.label or p.id,
+                                    "description": p.description or ""},
+                              auth=provider._auth(), timeout=provider.timeout)
+        if prod.status_code >= 300:
+            raise RuntimeError("product failed: %s" % prod.json())
+        product_id = prod.json().get("id", "")
+        data = {"product": product_id, "currency": p.currency,
+                "unit_amount": str(p.amount_cents),
+                "nickname": "%s_%s" % (name_prefix, p.id)}
+        if p.interval:
+            data["recurring[interval]"] = p.interval
+        pr = provider._post(provider.api_base + "/v1/prices", data=data,
+                            auth=provider._auth(), timeout=provider.timeout)
+        if pr.status_code >= 300:
+            raise RuntimeError("price failed: %s" % pr.json())
+        made.append({"plan": p.id, "product": product_id,
+                     "price": pr.json().get("id", ""),
+                     "amount_cents": p.amount_cents,
+                     "env": PRICE_ENV.get(p.id, "")})
+    return made

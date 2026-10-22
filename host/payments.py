@@ -52,6 +52,11 @@ class Plan:
     currency: str = "usd"
     interval: Optional[str] = None      # "month"/"year" recurring; None = one-time
     description: str = ""
+    # The provider's own stored id for this price, when it has one. A real Price
+    # object (Stripe `price_...`) is what the dashboard shows, what the Customer
+    # Portal can reason about, and what keeps renewals grouped; with no id the
+    # provider falls back to pricing the line inline at checkout time.
+    price: str = ""
 
     def dict(self):
         return {"id": self.id, "label": self.label, "amount_cents": self.amount_cents,
