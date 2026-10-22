@@ -1,6 +1,7 @@
 services:
   fireside:
-    image: ghcr.io/magic-smoke-technologies-llc/fireside:latest
+    # published from CI on every main push; GHCR mirror stays private, so Hub is the public one
+    image: docker.io/cstolworthy/fireside:latest
     build: .
     ports:
       - "8788:8788"
