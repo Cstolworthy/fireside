@@ -273,8 +273,9 @@ class TestGlyphsAndNumbers(unittest.TestCase):
                          "50 galleon 30 sickle and 20 knut")
 
     def test_symbol_before_the_number_is_read(self):
+        # a unit in front of its number reads number-first: fifty thousand galleon
         self.assertEqual(pron.spoken("\u029b50,000", self.RULES),
-                         "galleon fifty thousand")
+                         "fifty thousand galleon")
 
     def test_a_grouped_number_becomes_words(self):
         self.assertEqual(pron.expand_numbers("50,000"), "fifty thousand")
@@ -285,6 +286,19 @@ class TestGlyphsAndNumbers(unittest.TestCase):
         self.assertEqual(pron.expand_numbers("chapter 12 in 1999"),
                          "chapter 12 in 1999")
         self.assertEqual(pron.expand_numbers("50000"), "50000")
+
+    def test_a_unit_in_front_of_a_number_reads_number_first(self):
+        self.assertEqual(pron.spoken("\u03ba50", self.RULES), "fifty knut")
+        self.assertEqual(pron.spoken("\u029b50,000", self.RULES),
+                         "fifty thousand galleon")
+
+    def test_a_glyph_and_a_separate_number_are_not_one_amount(self):
+        self.assertEqual(pron.spoken("50\u029b 30\u03b4", self.RULES),
+                         "50 galleon 30 sickle")
+
+    def test_a_multi_word_replacement_is_not_treated_as_a_unit(self):
+        rules = [{"from": "\u03ba", "to": "knut piece", "book": "", "author": ""}]
+        self.assertEqual(pron.spoken("\u03ba50", rules), "knut piece 50")
 
     def test_a_rule_still_keeps_out_of_longer_words(self):
         rules = [{"from": "cat", "to": "kat", "book": "", "author": ""}]
