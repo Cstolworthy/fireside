@@ -500,7 +500,9 @@
 
     <div class="setpanel" data-p="words">
       <h3 style="margin-top:24px">Pronunciations</h3>
-      <p class="sub">Words the voice says wrong. Left: the word as it appears. Right: how it should sound, spelled out (Qui-Gon → Kwai-Gon). Applies to every book.</p>
+      <p class="sub">Words and symbols the voice says wrong. Left: exactly what appears in the text. Right: how it should sound, spelled out (Qui-Gon → Kwai-Gon, ʛ → galleon). Works when the symbol is glued to a number too: 50ʛ and ʛ50,000 both read right.</p>
+      <p class="sub" style="margin-top:4px">Scope: all books, one author, or one book. A writer's own money glyphs usually belong to the author; a single story's belong to the book. The same word in a narrower scope wins.</p>
+      <p class="sub" style="margin-top:4px">Numbers written with commas (50,000) are read as words (fifty thousand) automatically. A plain 1999 or Chapter 12 is left as the author wrote it.</p>
       <div id="pronrows"></div>
       <div style="display:flex;gap:8px;margin-top:10px">
         <button class="btn quiet" id="pronadd" type="button">＋ Add a word</button>
@@ -1095,29 +1097,60 @@ $('#save').onclick = async () => {
 // Left is the word as it appears; right is the respelling the engine will read.
 // Test speaks the respelling in the default voice, so you hear it before saving.
 let PRON = [];
-function pronRow(frm, to) {
+// A rule applies to all books, to one author, or to one book. Author is the
+// usual answer for a fic writer's private money glyphs; a single story's
+// convention is the narrow case, and it wins for the same word.
+let SCOPEBOOKS = [], SCOPEAUTHORS = [];
+async function loadScopeOptions() {
+  try { const d = await api('/library'); SCOPEBOOKS = d.books || [];
+        SCOPEAUTHORS = [...new Set(SCOPEBOOKS.map(b => (b.author || '').trim()).filter(Boolean))].sort(); }
+  catch (_) { SCOPEBOOKS = []; SCOPEAUTHORS = []; }
+}
+function scopeValue(r) {
+  if (r && r.book) return 'book:' + r.book;
+  if (r && r.author) return 'author:' + r.author;
+  return '';
+}
+function scopeSelect(val) {
+  const sel = document.createElement('select');
+  sel.className = 'pscope'; sel.style.flex = '0 0 40%';
+  const add = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.append(o); };
+  add('', 'All books');
+  SCOPEAUTHORS.forEach(a => add('author:' + a, 'By ' + a));
+  SCOPEBOOKS.forEach(b => add('book:' + b.id, 'Only: ' + (b.title || b.id).slice(0, 40)));
+  if (val && ![...sel.options].some(o => o.value === val)) add(val, val.startsWith('book:') ? 'Only: ' + val.slice(5) : 'By ' + val.slice(7));
+  sel.value = val || '';
+  return sel;
+}
+function pronRow(frm, to, scope) {
   const row = document.createElement('div');
-  row.className = 'prow'; row.style.cssText = 'display:flex;gap:6px;margin-top:6px';
+  row.className = 'prow'; row.style.cssText = 'display:flex;gap:6px;margin-top:6px;flex-wrap:wrap';
   const a = document.createElement('input'); a.value = frm || ''; a.placeholder = 'word in the text'; a.style.flex = '1 1 0';
   const b = document.createElement('input'); b.value = to || ''; b.placeholder = 'how it should sound'; b.style.flex = '1.4 1 0';
+  const s = scopeSelect(scope || '');
   const t = document.createElement('button'); t.type = 'button'; t.className = 'btn quiet'; t.textContent = 'Test';
   t.onclick = () => { collectPron(); testPron(b.value || a.value); };
   const x = document.createElement('button'); x.type = 'button'; x.className = 'btn quiet'; x.textContent = '\u2715';
   x.onclick = () => { row.remove(); collectPron(); };
-  row.append(a, b, t, x);
+  row.append(a, b, s, t, x);
   $('#pronrows').append(row);
 }
 function collectPron() {
   PRON = [...$('#pronrows').querySelectorAll('.prow')].map(r => {
     const i = r.querySelectorAll('input');
-    return { from: i[0].value.trim(), to: i[1].value.trim() };
+    const sc = (r.querySelector('.pscope') || {}).value || '';
+    const out = { from: i[0].value.trim(), to: i[1].value.trim(), book: '', author: '' };
+    if (sc.startsWith('book:')) out.book = sc.slice(5);
+    else if (sc.startsWith('author:')) out.author = sc.slice(7);
+    return out;
   }).filter(r => r.from && r.to);
 }
 function showPron(rules) {
   $('#pronrows').innerHTML = '';
-  (rules && rules.length ? rules : [{ from: '', to: '' }]).forEach(r => pronRow(r.from, r.to));
+  (rules && rules.length ? rules : [{ from: '', to: '' }]).forEach(r => pronRow(r.from, r.to, scopeValue(r)));
 }
 async function loadPron() {
+  await loadScopeOptions();
   try { const d = await api('/pron'); PRON = d.rules || []; showPron(PRON); }
   catch (e) { showPron([]); }
 }
