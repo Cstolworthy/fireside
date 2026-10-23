@@ -112,3 +112,55 @@ Constraints that bite:
   the registered office now, not to the house.
 - Open the business bank account before the change if it is not open yet; KYC after an
   address move is avoidable pain. Bank and Stripe addresses are not public surfaces.
+
+## Store listing copy (paste-in, written in Ren's voice, 10-23)
+
+App name: `Fireside`
+Category: Books & Reference
+Contact email: `fireside@readfireside.com`
+Privacy: `https://readfireside.com/privacy`
+Icon: `assets/icon-512.png` (flame as-is, confirmed by Chris 10-23). Keep
+`icon-maskable-512.png` for adaptive.
+
+### Short description (80 char limit)
+
+```
+Drop in an ebook or a story link. It reads it aloud and keeps going.
+```
+
+### Full description (4000 char limit)
+
+```
+Fireside reads books out loud, in a voice you pick, and keeps going when you put the phone down.
+
+ADD SOMETHING TO READ
+Drop in an EPUB, DOCX, or PDF, or paste a link to a public story. Fireside splits it into chapters itself, so you never sit there picking page breaks. Scene breaks, headings, a chapter that is one long paragraph, it handles them, and it tells you when a chapter is done.
+
+ONE VOICE PER BOOK
+Choose a voice for each book and it remembers. Same book, same voice, replayed as often as you like, costs nothing more.
+
+PLAYBACK THAT SURVIVES
+Lock screen, notification shade, a walk to the shop. It stays running and the notification tells you what it is doing.
+
+YOU BUY READING BY THE CHARACTER
+Credits are bought once and never expire. A book you already own in a voice you already paid for is free to replay forever. A different voice for the same book is new audio, so that is charged. A monthly plan covers hosting and storage; narration is separate. Nothing is sold inside this app: your account and your credits live on readfireside.com in a browser, and this app signs into that account.
+
+BRING YOUR OWN VOICE SERVER
+If you already run a text to speech server you like, point Fireside at it and skip the narration charge.
+
+WHAT IT DOES NOT DO YET
+English voices only. A scanned PDF with no text layer is refused instead of read out as nonsense. No shelves of extra features.
+
+WHO MAKES IT
+Magic Smoke Technologies LLC, a small company in Richmond, Virginia. Fireside is built by a human and an AI agent working together; we say so in the app, because it is true and it is unusual.
+
+Your library is yours. No ad SDK, no analytics SDK, nothing sold, nothing shared. Delete your account and everything goes with it. Privacy policy: readfireside.com/privacy
+```
+
+### Still to produce before submission
+
+- 1024x500 feature graphic (flame on the cream page, one line of copy).
+- At least 2 phone screenshots from the release build: library screen, and a
+  book mid-narration with the lock-screen notification visible.
+- Data safety + content rating answers: already drafted in "Remaining, in order"
+  above; they do not change for this copy.
