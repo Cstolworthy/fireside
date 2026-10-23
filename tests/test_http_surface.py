@@ -187,6 +187,35 @@ class TestAuthDoors(Base):
                               {"username": "surf", "password": "longenough"})
         self.assertEqual(code, 401)
 
+    def test_password_change_needs_a_session(self):
+        code, _ = self.status(self.post, "/account/password",
+                              {"current": "longenough", "password": "anotherpass"})
+        self.assertEqual(code, 401)
+
+    def test_password_change_swaps_the_password(self):
+        self.post("/auth/local/register", {"username": "surf", "password": "longenough"})
+        r = self.post("/account/password",
+                      {"current": "longenough", "password": "anotherpass"})
+        self.assertEqual(r.status, 200)
+        body = json.loads(r.read())
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["username"], "surf")
+        # the account still works with the new password
+        self.assertEqual(auth.local_login(self.app.conn, "surf", "anotherpass"),
+                         "local:surf")
+
+    def test_password_change_refuses_a_wrong_current_one(self):
+        self.post("/auth/local/register", {"username": "surf", "password": "longenough"})
+        code, r = self.status(self.post, "/account/password",
+                              {"current": "not-it-at-all", "password": "anotherpass"})
+        self.assertEqual(code, 400)
+        self.assertIn("current password", json.loads(r.read())["error"])
+
+    def test_password_change_shows_has_password_on_me(self):
+        self.post("/auth/local/register", {"username": "surf", "password": "longenough"})
+        me = json.loads(self.get("/me").read())
+        self.assertTrue(me["has_password"])
+
     def test_claim_check_and_confirm_reject_a_bad_token(self):
         code, r = self.status(self.get, "/auth/claim?token=nope")
         self.assertEqual(code, 410)

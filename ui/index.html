@@ -194,8 +194,12 @@
   .qrow .qi{color:var(--faint);font-variant-numeric:tabular-nums;font-size:12px}
   .qrow button{background:none;border:1px solid var(--line);border-radius:7px;color:var(--soft);cursor:pointer;font-size:12px;padding:2px 7px;line-height:1.4}
   @media(max-width:600px){ #transport .tnow{display:none} #transport .vol input{width:64px} }
-  .toast{background:var(--raise);border:1px solid var(--line);border-left:3px solid var(--flame);border-radius:9px;padding:10px 12px;font-size:13px;box-shadow:0 10px 30px #0007}
+  .toast{background:var(--raise);border:1px solid var(--line);border-left:3px solid var(--flame);border-radius:9px;padding:10px 12px;font-size:13px;box-shadow:0 10px 30px #0007;display:flex;gap:10px;align-items:flex-start}
+  .toast span{flex:1 1 auto;min-width:0;line-height:1.45;user-select:text;-webkit-user-select:text;cursor:text}
+  .toast .x{flex:0 0 auto;background:none;border:0;color:var(--soft);font-size:16px;line-height:1;padding:0 2px;cursor:pointer}
   .toast.bad{border-left-color:var(--warn)}.toast.ok{border-left-color:var(--ready)}
+  /* an error stays until it is read: it is the only copy of what went wrong */
+  .toast.bad{box-shadow:0 10px 30px #0007, 0 0 0 1px #e2917f33}
   /* add belongs on the library screen */
   .addpanel{margin-top:16px;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--surface)}
   .addpanel[hidden]{display:none}
@@ -475,7 +479,7 @@
         </div>
       </div>
       <h3 style="margin-top:30px">Default voice</h3>
-      <p class="sub">Which server and voice a new book uses.</p>
+      <p class="sub">The voice a new conversion starts on, and the voice the sandbox opens on. A book already voiced keeps the voice it has until you convert it again.</p>
       <label>Server</label>
       <select id="dconn"></select>
       <label>Voice</label>
@@ -515,7 +519,27 @@
     </div>
 
     <div class="setpanel" data-p="account">
-      <h3 style="margin-top:24px">Connected accounts</h3>
+      <h3 style="margin-top:24px">Password</h3>
+      <p class="sub" id="pwsub">The password you sign in with.</p>
+      <div id="pwcurrentrow">
+        <label for="pwcurrent">Current password</label>
+        <input type="password" id="pwcurrent" autocomplete="current-password" style="max-width:320px">
+      </div>
+      <div id="pwuserrow" hidden>
+        <label for="pwusername">Sign-in name</label>
+        <input type="text" id="pwusername" autocomplete="username" style="max-width:320px"
+               placeholder="e.g. cat">
+        <p class="hint" style="margin-top:2px">Your password signs in with this name. Letters, digits, dot, dash or underscore.</p>
+      </div>
+      <label for="pwnew">New password</label>
+      <input type="password" id="pwnew" autocomplete="new-password" style="max-width:320px">
+      <label for="pwnew2">New password again</label>
+      <input type="password" id="pwnew2" autocomplete="new-password" style="max-width:320px">
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn" id="pwsave" type="button">Save password</button>
+      </div>
+      <div id="pwmsg" class="sub" style="margin-top:8px"></div>
+      <h3 style="margin-top:30px">Connected accounts</h3>
       <p class="sub">Sign in with Google, GitHub, Microsoft or SimpleLogin instead of a password. Link one here while you are signed in.</p>
       <div id="oauthrows"></div>
       <h3 style="margin-top:30px">Devices &amp; sessions</h3>
@@ -805,8 +829,18 @@ function fail(e) { clearInterval(_tick); $('#rcancel').hidden = true; $('#rspin'
   const msg = String(e && e.message ? e.message : e);
   _ribbon('on bad', msg); $('#rdismiss').hidden = false; $('#err').textContent = msg;
   toast('bad', msg); bellRaise(); }
-function toast(kind, text) { const t = document.createElement('div');
-  t.className = 'toast ' + (kind || ''); t.textContent = text; $('#toasts').append(t);
+function toast(kind, text) {
+  const t = document.createElement('div'); t.className = 'toast ' + (kind || '');
+  const s = document.createElement('span'); s.textContent = text; t.append(s);
+  const x = document.createElement('button'); x.type = 'button'; x.className = 'x';
+  x.textContent = '×'; x.title = 'Dismiss'; x.setAttribute('aria-label', 'Dismiss');
+  x.onclick = () => t.remove(); t.append(x);
+  $('#toasts').append(t);
+  // An error is the only copy of what went wrong, so it stays until it is
+  // dismissed. A confirmation can pass on its own.
+  if (kind === 'bad') { const box = $('#toasts');
+    while (box.children.length > 3 && box.firstElementChild !== t) box.firstElementChild.remove();
+    return; }
   setTimeout(() => { t.style.transition = 'opacity .4s'; t.style.opacity = '0';
     setTimeout(() => t.remove(), 420); }, 5200); }
 function bellRaise() { ALERTS.unshift({ kind: 'bad', text: $('#rtext').textContent, at: Date.now() });
@@ -848,7 +882,7 @@ function needUser() { if (!USER) { fail('set your name first (top right)'); thro
 function show(v) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
-  if (v === 'set') { loadPron(); loadLinked(); loadSessions(); loadPlan();
+  if (v === 'set') { loadPron(); loadLinked(); loadSessions(); loadPlan(); loadPasswordPanel();
     loadDanger(); setSetTab(localStorage.getItem(SETTAB_KEY)); }
   if (v === 'plans') loadPlansPage();
   if (v === 'lib') renderActiveJobs();
@@ -919,6 +953,16 @@ async function loadConnections() {
   catch (_) { CONNS = []; }
   renderWelcome();
   renderConns(); renderDefaultPicker(); renderSandboxPicker();
+  // Show the saved default voice without making anyone press Load voices: the
+  // panel says "default voice", so it had better be showing one. One fetch per
+  // server, and quiet - opening Settings is not an event worth a toast.
+  maybeLoadDefaultVoices();
+}
+let VOICESFOR = '';
+function maybeLoadDefaultVoices() {
+  const cid = $('#dconn') && $('#dconn').value;
+  if (!cid || cid === VOICESFOR) return;
+  VOICESFOR = cid; loadVoices(true);
 }
 
 function renderConns() {
@@ -1091,8 +1135,8 @@ async function savePron() {
 async function testPron(text) {
   text = (text || '').trim();
   if (!text) { fail('type how it should sound first'); return; }
-  const cid = $('#dconn').value, v = $('#voice').value;
-  if (!v) { fail('pick a default voice first'); return; }
+  const cid = $('#dconn').value, v = $('#voice').value || PREFS.default_voice;
+  if (!v) { fail('No default voice yet. Pick one under Settings, Voice, then Save, and this Test will use it.'); return; }
   busy('Hearing "' + text + '"...');
   try {
     const r = await api('/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1188,6 +1232,48 @@ async function reencodePronImpact() {
     + (failed ? '  ' + failed + ' could not be re-encoded - open those books and convert.' : ''));
   if (book) await openBook(book.id);
 }
+// --- the account's own password -------------------------------------------
+// One form for both cases. An account that has a password must give it before
+// it changes: that is what stops a borrowed session from locking the owner out.
+// An account that only ever signed in with Google has no password to give, so
+// it picks a sign-in name instead and the current-password box is disabled with
+// the reason on it, rather than hidden or left to fail on submit.
+let PWHAS = null;      // null until /me answers, then whether a password exists
+async function loadPasswordPanel() {
+  const cur = $('#pwcurrent'), nameRow = $('#pwuserrow'), sub = $('#pwsub');
+  if (!cur) return;
+  try { const d = await api('/me'); PWHAS = !!d.has_password; } catch (_) { PWHAS = null; }
+  const have = PWHAS !== false;
+  cur.disabled = !have; cur.value = '';
+  $('#pwcurrentrow').style.opacity = have ? '1' : '.55';
+  cur.title = have ? '' : 'You sign in with Google or SimpleLogin, so there is no password to confirm.';
+  nameRow.hidden = have;
+  sub.textContent = have
+    ? 'Change the password you sign in with. Saving signs out every other device.'
+    : 'You sign in with a social login. Set a password here and you can sign in with a name and password too.';
+  $('#pwmsg').textContent = '';
+  $('#pwnew').value = ''; $('#pwnew2').value = ''; $('#pwusername').value = '';
+}
+if ($('#pwsave')) $('#pwsave').onclick = async () => {
+  const msg = $('#pwmsg'); msg.style.color = '';
+  const cur = $('#pwcurrent').value, pw = $('#pwnew').value, pw2 = $('#pwnew2').value;
+  const uname = ($('#pwusername').value || '').trim();
+  if (pw.length < 8) { msg.textContent = 'A password needs at least 8 characters.'; return; }
+  if (pw !== pw2) { msg.textContent = 'The two new passwords do not match.'; return; }
+  if (PWHAS === false && !uname) { msg.textContent = 'Pick a sign-in name first.'; return; }
+  busy('Saving the password...');
+  try {
+    const d = await jpost('/account/password', PWHAS === false
+      ? { password: pw, username: uname }
+      : { current: cur, password: pw });
+    PWHAS = true;
+    idle('Password saved. Other devices were signed out.');
+    await loadPasswordPanel();
+    $('#pwmsg').textContent = 'Saved. Sign in with the name "' + (d.username || uname)
+      + '" and your new password.';
+  } catch (e) { msg.textContent = ''; fail(e); }
+};
+
 // --- connected accounts: link a social login to this account ---------------
 // The link door, not the login door: you are already signed in, and the
 // provider gets attached to the account you are in.
@@ -1948,25 +2034,35 @@ function enFirst(list) {
 }
 function fillVoices(sel, list, pick) {
   const sorted = enFirst(list); sel.innerHTML = '';
-  sorted.forEach(v => { const o = document.createElement('option'); o.value = v.id; o.textContent = v.label || v.id; sel.append(o); });
+  sorted.forEach(v => { const o = document.createElement('option'); o.value = v.id; o.textContent = v.label || v.id; sel.append(o);
+    VLABELS[v.id] = v.label || v.id; });
   if (pick && sorted.some(v => v.id === pick)) sel.value = pick;
+}
+// A voice id means nothing to a person, so every list we load teaches the page
+// its label. Then a message can name the default voice, not spell its id.
+let VLABELS = {};
+function vlabel(id) { return VLABELS[id] || ''; }
+function defVoiceNote() {
+  const n = vlabel(PREFS.default_voice);
+  return n ? ('your default voice, ' + n) : 'your default voice';
 }
 function filterSel(sel, q) {
   q = (q || '').trim().toLowerCase();
   [...sel.options].forEach(o => { const hit = !q || (o.value + ' ' + o.textContent).toLowerCase().includes(q); o.hidden = !hit; o.disabled = !hit; });
   const c = sel.selectedOptions[0]; if (!c || c.disabled) { const f = [...sel.options].find(o => !o.disabled); if (f) sel.value = f.value; } }
-async function loadVoices() {
-  const cid = $('#dconn').value; if (!cid) { idle('Add a voice server first.'); return; }
-  busy('Loading voices…');
+async function loadVoices(quiet) {
+  const cid = $('#dconn').value; if (!cid) { if (!quiet) idle('Add a voice server first.'); return; }
+  if (!quiet) busy('Loading voices…');
   try {
     const d = await jpost('/voices', { connection_id: cid });
     voices = d.voices || [];
     fillVoices($('#voice'), voices, PREFS.default_voice);
-    $('#vfilter').value = ''; applyFilter();
-    idle(voices.length + ' voices loaded.');
+    if (!quiet) { $('#vfilter').value = ''; applyFilter(); }
+    if (!quiet) idle(voices.length + ' voices loaded.');
   } catch (e) { fail(e); }
 }
-$('#loadvoices').onclick = loadVoices;
+$('#loadvoices').onclick = () => loadVoices();
+if ($('#dconn')) $('#dconn').onchange = () => { VOICESFOR = ''; maybeLoadDefaultVoices(); };
 function applyFilter() { filterSel($('#voice'), $('#vfilter').value); }
 $('#vfilter').oninput = applyFilter;
 
@@ -2173,7 +2269,7 @@ async function loadBook(id) {
   player = { id: book.id, title: book.title, chapters: book.chapters };
   lastName = player.id; try { localStorage.setItem(LKEY, lastName); } catch (_) {}
   const voiced = book.chapters.filter(c => { const r = renditionFor(c); return r && r.audio_ref; });
-  if (!voiced.length) { renderPlay(); idle('Nothing voiced in this voice yet — convert the book first.'); return; }
+  if (!voiced.length) { renderPlay(); idle(nothingVoicedMsg()); return; }
   let idx = voiced[0].idx;
   try { const pos = await api('/position?user=' + encodeURIComponent(USER) + '&book=' + encodeURIComponent(id));
     if (pos && pos.chapter_index != null && voiced.some(c => c.idx === pos.chapter_index)) idx = pos.chapter_index;
@@ -2276,6 +2372,17 @@ function chapterVoices(c) {
   (c.renditions || []).forEach(r => { const k = rkey(r); if (!seen.has(k)) seen.set(k, r); });
   return [...seen.values()];
 }
+// The voice in play on this book, in words a person can read: the copy picked
+// on this book, else the default from Settings. Used only to name it in copy.
+function selVoiceName() {
+  const v = bookVoices().find(x => x.key === selVoice);
+  return v ? rlabel(v) : (vlabel(PREFS.default_voice) || '');
+}
+function nothingVoicedMsg(prefix) {
+  const n = selVoiceName();
+  return (prefix || 'Nothing voiced yet') + (n ? ' in ' + n : '')
+    + '. Use Convert on the book page to voice it.';
+}
 function chapterVoiceLabel(c) {
   const vs = chapterVoices(c);
   if (!vs.length) return 'not voiced yet';
@@ -2307,8 +2414,11 @@ function drawNote() {
   else if (state[cur] === 'avail') n.textContent = 'Still on the server. Fireside downloads and checks it before playing.';
   else if (state[cur] === 'todo') {
     const other = (c.renditions || []).length;
-    n.textContent = other ? 'Not converted in this voice yet. Pick another voice, or convert it in this one.'
-                          : 'Not voiced yet. Use Convert to voice first.';
+    const vn = selVoiceName();
+    n.textContent = other ? 'Not converted in this voice yet' + (vn ? ' (' + vn + ')' : '')
+                            + '. Pick another voice above, or convert it in this one.'
+                          : 'Not voiced yet. Use Convert to voice it'
+                            + (vn ? ' in ' + vn : '') + '.';
   }
 }
 async function loadText(idx) {
@@ -2611,7 +2721,8 @@ function renderCopies() {
   const vs = book ? bookVoices() : [];
   const note = $('#scopiesnote');
   if (!vs.length) {
-    note.textContent = 'Not voiced yet.';
+    note.textContent = 'Not voiced yet. Use Convert on this book to voice it'
+      + (vlabel(PREFS.default_voice) ? ' in your default voice, ' + vlabel(PREFS.default_voice) + '.' : '.');
     $('#scopiesall').hidden = true;
     return;
   }
@@ -2974,7 +3085,7 @@ $('#offline').onclick = async () => {
   const ready = [], notReady = [];
   book.chapters.forEach(c => { const r = renditionFor(c);
     if (r && r.audio_ref) ready.push({ c, r }); else notReady.push(c); });
-  if (!ready.length) { idle('Nothing voiced in this voice yet — convert the book first.'); return; }
+  if (!ready.length) { idle(nothingVoicedMsg()); return; }
   busy('Downloading ' + ready.length + ' chapter(s) for offline…');
   let done = 0;
   try {
@@ -3024,7 +3135,7 @@ async function sbLoadVoices() {
     SB_VOICES = []; sel.innerHTML = '<option value="">' + (e.message || 'voices failed') + '</option>'; return;
   }
   sel.innerHTML = '';
-  fillVoices(sel, SB_VOICES, null);
+  fillVoices(sel, SB_VOICES, PREFS.default_voice || null);   // hear your default first
   if (!SB_VOICES.length) sel.innerHTML = '<option value="">no voices on this server</option>';
   else sbStatus(SB_VOICES.length + ' voices.');
 }

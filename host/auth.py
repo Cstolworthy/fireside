@@ -569,6 +569,56 @@ def take_claim(conn, token):
     return row
 
 
+USERNAME_RX = r"^[a-z0-9._-]+$"
+
+
+def _check_username(conn, username):
+    """Validate a sign-in name for an account that has never had one."""
+    name = normalize_username(username)
+    if len(name) < 3 or len(name) > 64:
+        raise AuthError("pick a sign-in name: 3 to 64 characters")
+    if not re.match(USERNAME_RX, name):
+        raise AuthError("a sign-in name may use letters, digits, dot, dash or underscore")
+    if conn.execute("SELECT 1 FROM local_accounts WHERE username=?", (name,)).fetchone():
+        raise AuthError("that sign-in name is taken")
+    return name
+
+
+def set_password(conn, user_id, current_password, new_password, username=""):
+    """Set or change the signed-in account's own password.
+
+    A password account proves the old password first. A social-only account has
+    none to prove, so it picks a sign-in name instead and gets a password; from
+    then on either door works. Returns the sign-in name the account uses now, so
+    a social-only user is told what to type next time.
+    """
+    if not user_id:
+        raise AuthError("auth required")
+    if len(new_password or "") < 8:
+        raise AuthError("password must be at least 8 characters")
+    salt = secrets.token_hex(16)
+    if has_local_account(conn, user_id):
+        if not local_password_proof(conn, user_id, current_password or ""):
+            raise AuthError("current password is wrong")
+        row = conn.execute("SELECT username FROM local_accounts WHERE user_id=?",
+                           (user_id,)).fetchone()
+        conn.execute("UPDATE local_accounts SET digest=?,salt=? WHERE user_id=?",
+                     (_digest(new_password, salt), salt, user_id))
+        name = row["username"] if row is not None else ""
+    else:
+        name = _check_username(conn, username)
+        row = conn.execute("SELECT email FROM identities WHERE user_id=?"
+                           " AND email<>'' LIMIT 1", (user_id,)).fetchone()
+        email = (row["email"] if row is not None else "") or ""
+        conn.execute("INSERT INTO local_accounts"
+                     "(username,user_id,digest,salt,email,created_at)"
+                     " VALUES(?,?,?,?,?,?)",
+                     (name, user_id, _digest(new_password, salt), salt,
+                      email, _now()))
+    conn.commit()
+    return name
+
+
 def local_password_proof(conn, user_id, password):
     """True when `password` is the local account password for `user_id`.
 
