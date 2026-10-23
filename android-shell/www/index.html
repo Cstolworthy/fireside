@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fireside</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #14110f; color: #ece5dd; font: 16px/1.5 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+    padding: 24px;
+  }
+  .card { width: 100%; max-width: 420px; }
+  h1 { margin: 0 0 4px; font-size: 28px; letter-spacing: .3px; }
+  .sub { margin: 0 0 22px; color: #a89b8e; }
+  label { display: block; font-size: 13px; color: #a89b8e; margin-bottom: 6px; }
+  input {
+    width: 100%; padding: 14px 14px; font-size: 16px; border-radius: 10px;
+    border: 1px solid #3a332d; background: #1d1916; color: #ece5dd; outline: none;
+  }
+  input:focus { border-color: #c8763c; }
+  button {
+    margin-top: 14px; width: 100%; padding: 14px; font-size: 16px; font-weight: 600;
+    border: 0; border-radius: 10px; background: #c8763c; color: #14110f;
+  }
+  button:active { transform: translateY(1px); }
+  .err { color: #e2685a; min-height: 1.2em; margin: 10px 0 0; font-size: 14px; }
+  .hint { color: #6f655c; font-size: 13px; margin-top: 18px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Fireside</h1>
+    <p class="sub">Connect to a Fireside server to start listening.</p>
+    <label for="url">Server address</label>
+    <input id="url" autofocus type="url" inputmode="url" autocomplete="off" autocapitalize="off"
+           autocorrect="off" spellcheck="false" placeholder="https://your-server" value="https://readfireside.com">
+    <button id="go">Connect</button>
+    <p id="err" class="err"></p>
+    <p class="hint">Defaults to readfireside.com. Have your own server, or someone shared
+      one with you? Type its address above.</p>
+  </div>
+<script>
+  var inp = document.getElementById('url');
+  var err = document.getElementById('err');
+
+  function norm(v) {
+    v = (v || '').trim();
+    if (!v) return '';
+    if (!/^https?:\/\//i.test(v)) v = 'https://' + v;
+    return v.replace(/\/+$/, '');
+  }
+
+  function go() {
+    var u = norm(inp.value);
+    if (!u) { err.textContent = 'Enter a server address.'; return; }
+    try { new URL(u); } catch (e) { err.textContent = 'That does not look like an address.'; return; }
+    if (!window.NativeMedia || !window.NativeMedia.connect) {
+      err.textContent = 'Open this from the Fireside app.';
+      return;
+    }
+    err.textContent = '';
+    window.NativeMedia.connect(u);
+  }
+
+  document.getElementById('go').addEventListener('click', go);
+  inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') go(); });
+
+  // If a server is already saved (and native did not jump straight there), go.
+  try {
+    if (window.NativeMedia && window.NativeMedia.getServer) {
+      var saved = window.NativeMedia.getServer();
+      if (saved) window.NativeMedia.connect(saved);
+    }
+  } catch (e) {}
+</script>
+</body>
+</html>

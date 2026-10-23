@@ -1,0 +1,11 @@
+{
+  "appId": "com.stolworthy.fireside",
+  "appName": "Fireside",
+  "webDir": "www",
+  "server": {
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}
