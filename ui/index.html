@@ -953,6 +953,16 @@ async function loadConnections() {
   catch (_) { CONNS = []; }
   renderWelcome();
   renderConns(); renderDefaultPicker(); renderSandboxPicker();
+  // Show the saved default voice without making anyone press Load voices: the
+  // panel says "default voice", so it had better be showing one. One fetch per
+  // server, and quiet - opening Settings is not an event worth a toast.
+  maybeLoadDefaultVoices();
+}
+let VOICESFOR = '';
+function maybeLoadDefaultVoices() {
+  const cid = $('#dconn') && $('#dconn').value;
+  if (!cid || cid === VOICESFOR) return;
+  VOICESFOR = cid; loadVoices(true);
 }
 
 function renderConns() {
@@ -1125,7 +1135,7 @@ async function savePron() {
 async function testPron(text) {
   text = (text || '').trim();
   if (!text) { fail('type how it should sound first'); return; }
-  const cid = $('#dconn').value, v = $('#voice').value;
+  const cid = $('#dconn').value, v = $('#voice').value || PREFS.default_voice;
   if (!v) { fail('No default voice yet. Pick one under Settings, Voice, then Save, and this Test will use it.'); return; }
   busy('Hearing "' + text + '"...');
   try {
@@ -2040,18 +2050,19 @@ function filterSel(sel, q) {
   q = (q || '').trim().toLowerCase();
   [...sel.options].forEach(o => { const hit = !q || (o.value + ' ' + o.textContent).toLowerCase().includes(q); o.hidden = !hit; o.disabled = !hit; });
   const c = sel.selectedOptions[0]; if (!c || c.disabled) { const f = [...sel.options].find(o => !o.disabled); if (f) sel.value = f.value; } }
-async function loadVoices() {
-  const cid = $('#dconn').value; if (!cid) { idle('Add a voice server first.'); return; }
-  busy('Loading voices…');
+async function loadVoices(quiet) {
+  const cid = $('#dconn').value; if (!cid) { if (!quiet) idle('Add a voice server first.'); return; }
+  if (!quiet) busy('Loading voices…');
   try {
     const d = await jpost('/voices', { connection_id: cid });
     voices = d.voices || [];
     fillVoices($('#voice'), voices, PREFS.default_voice);
-    $('#vfilter').value = ''; applyFilter();
-    idle(voices.length + ' voices loaded.');
+    if (!quiet) { $('#vfilter').value = ''; applyFilter(); }
+    if (!quiet) idle(voices.length + ' voices loaded.');
   } catch (e) { fail(e); }
 }
-$('#loadvoices').onclick = loadVoices;
+$('#loadvoices').onclick = () => loadVoices();
+if ($('#dconn')) $('#dconn').onchange = () => { VOICESFOR = ''; maybeLoadDefaultVoices(); };
 function applyFilter() { filterSel($('#voice'), $('#vfilter').value); }
 $('#vfilter').oninput = applyFilter;
 
