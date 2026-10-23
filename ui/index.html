@@ -234,6 +234,8 @@
   .chaplist{max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
   .chap{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-size:13px}
   .chap:last-child{border-bottom:0}
+  .cvmark{margin-left:auto;color:var(--faint);white-space:nowrap}
+  .chap.voiced .cvmark{color:var(--ready)}
   .chap:hover{background:var(--raise)}
   .chap.cur{background:var(--raise)}
   .chap .chk{width:auto;padding:0;border:0;background:none;margin:0;flex:none;accent-color:var(--flame);cursor:pointer}
@@ -667,6 +669,7 @@
     <label>Voice</label>
     <input id="cvfilter" placeholder="filter, e.g. en-US or Heart" autocomplete="off">
     <select id="cvvoice"><option value="">load voices…</option></select>
+    <p class="small" id="cvvoiceinfo" style="margin-top:6px"></p>
     <label>Chapters</label>
     <div id="cvlist" class="chaplist" style="max-height:170px"></div>
     <div class="connrow">
@@ -2312,7 +2315,8 @@ function renderVoicePicker() {
   if (!book || vs.length < 2) { box.style.display = 'none'; box.innerHTML = ''; return; }
   box.style.display = 'flex';
   box.innerHTML = '';
-  const lab = document.createElement('span'); lab.className = 'small'; lab.textContent = 'Voice';
+  const lab = document.createElement('span'); lab.className = 'small';
+  lab.textContent = vs.length + ' voices:';
   const sel = document.createElement('select'); sel.id = 'npvoice';
   vs.forEach(v => { const o = document.createElement('option'); o.value = v.key; o.textContent = rlabel(v); sel.append(o); });
   if (vs.some(v => v.key === selVoice)) sel.value = selVoice;
@@ -2555,17 +2559,49 @@ async function loadCvVoices() {
   if (!cid) { vs.innerHTML = '<option value="">—</option>'; return; }
   try {
     const d = await jpost('/voices', { connection_id: cid });
-    // land on the voice already used on this book, else the default, else the
-    // last one picked anywhere, so a repeat conversion needs no hunting.
+    // Land on the default voice, because changing the default is how you ask
+    // for a second copy of a book you already voiced. Fall back to the voice
+    // this book already has, then the last voice picked anywhere.
     const cur = ((book && book.chapters.find(c => c.rendered && c.voice)) || {}).voice || '';
-    const pick = cur || PREFS.default_voice || localStorage.getItem('fs_lastvoice') || '';
+    const pick = PREFS.default_voice || cur || localStorage.getItem('fs_lastvoice') || '';
     fillVoices(vs, d.voices || [], pick);
     if (!vs.options.length) vs.innerHTML = '<option value="">no voices</option>';
     const f = $('#cvfilter'); if (f) { f.value = ''; filterSel(vs, ''); }
   } catch (e) { vs.innerHTML = '<option value="">could not load voices</option>'; }
+  cvMarkVoices();
   updateEstimate();
 }
+
+// What the chosen voice already covers on this book, chapter by chapter. A
+// second copy of a book is a normal thing to want, so the dialog says which
+// chapters are already done in this voice instead of quietly re-buying them.
+function cvVoiceId() { return $('#cvvoice') ? $('#cvvoice').value : ''; }
+function cvHasVoice(c, vid) {
+  return !!(c && vid && (c.renditions || []).some(r => r.voice === vid && r.audio_ref));
+}
+function cvMarkVoices() {
+  const vid = cvVoiceId(), info = $('#cvvoiceinfo');
+  if (!book) return;
+  let done = 0;
+  book.chapters.forEach(c => {
+    const row = document.querySelector('#cvlist input[data-idx="' + c.idx + '"]');
+    if (!row) return;
+    const lab = row.parentElement, has = cvHasVoice(c, vid);
+    if (has) done++;
+    row.parentElement.classList.toggle('voiced', has);
+    let tag = lab.querySelector('.cvmark');
+    if (!tag) { tag = document.createElement('span'); tag.className = 'cvmark small'; lab.append(tag); }
+    tag.textContent = !vid ? '' : (has ? 'already in this voice' : '');
+  });
+  if (!info) return;
+  const name = vlabel(vid) || vid;
+  info.textContent = !vid ? ''
+    : done === 0 ? 'This voice has no chapters of this book yet. Converting makes a new copy and keeps every other copy.'
+    : done === book.chapters.length ? 'You already have this whole book in ' + name + '. Converting again makes a second copy; both stay.'
+    : done + ' of ' + book.chapters.length + ' chapters are already in ' + name + '. Tick the rest, or convert all to redo it.';
+}
 $('#cvconn').onchange = loadCvVoices;
+if ($('#cvvoice')) $('#cvvoice').onchange = () => { cvMarkVoices(); updateEstimate(); };
 $('#cvfilter').oninput = () => filterSel($('#cvvoice'), $('#cvfilter').value);
 $('#cvcancel').onclick = () => { $('#convertdlg').hidden = true; };
 $('#cvall').onclick = () => { $('#convertdlg').hidden = true; runConvert(null, 'all ' + book.chapters.length); };
