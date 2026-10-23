@@ -169,6 +169,35 @@ def book_author(conn, book_id):
     return (row["author"] if row else "") or ""
 
 
+def _has_space(word):
+    return any(c.isspace() for c in (word or ""))
+
+
+def _prefix_amounts(text, rules):
+    """A unit written BEFORE its number, read the right way round.
+
+    Fics write money both ways: "50ʛ" (unit after) and "κ50" (unit before). A
+    single-word replacement that sits directly in front of a number is a unit,
+    so "κ50" becomes "fifty knut": the number said as words, then the unit. A
+    multi-word replacement is not a unit, so it is left to the plain rule.
+    """
+    if not text:
+        return text
+    for r in sorted(rules or [], key=lambda r: -len(r["from"])):
+        to = r["to"]
+        if _has_space(to) or not to.isalpha():
+            continue
+        frm = re.escape(r["from"])
+        if re.match(r"\w", r["from"][0]):
+            frm = r"(?<![^\W\d])" + frm
+        # directly adjacent only: "ʛ 30" is a glyph and a separate number, not
+        # a unit in front of one.
+        pat = re.compile(frm + r"(\d{1,3}(?:,\d{3})+|\d+)")
+        text = pat.sub(lambda m: number_words(int(m.group(1).replace(",", "")))
+                                + " " + to, text)
+    return text
+
+
 def _regex(rules):
     """One alternation, longest word first, whole-word where the word has edges."""
     alts = []
@@ -224,7 +253,7 @@ def spoken(text, rules):
     One entry point so a render, a cache tag and an estimate can never disagree
     about what is being said.
     """
-    return expand_numbers(apply(text, rules))
+    return expand_numbers(apply(_prefix_amounts(text, rules), rules))
 
 
 def token_for(text, rules):
