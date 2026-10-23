@@ -79,3 +79,30 @@ correction, not a second Play account.
   web page). `Settings > Account > Delete account` posting to the existing
   `/api/account/delete` route, with the confirmation phrase.
 - Play requires a privacy policy URL on the listing: `https://readfireside.com/privacy`.
+
+## Business address and registered agent (2026-10-23)
+
+Chris's decision: hire a registered agent and take the home address off every public
+business surface. This repo and the hosted site carry no street address today (privacy,
+terms and delete-account name only the LLC and fireside@readfireside.com); the address
+lives on the SCC filing, the DUNS record, and the Play developer listing.
+
+Order is fixed by the DUNS long pole. Google Play org verification matches the DUNS legal
+name and address character for character, so the address must not move before the DUNS
+number is issued.
+
+1. DUNS number issued, home address on record.
+2. Create the Play org account with that exact address.
+3. Hire the registered agent; file the VA Statement of Change of Registered Office /
+   Registered Agent (no filing fee).
+4. Update the DUNS record to the agent address, and tell Google the new address.
+5. Change the developer address in Play Console before the first release. The listing
+   contact address is not published until an app is live.
+
+Constraints that bite:
+- Play wants a street address. No PO boxes, and a bare virtual office is rejected. The
+  agent must supply a usable business address, not only a registered office.
+- Mail forwarding must be enabled: state annual report notices and any IRS letter go to
+  the registered office now, not to the house.
+- Open the business bank account before the change if it is not open yet; KYC after an
+  address move is avoidable pain. Bank and Stripe addresses are not public surfaces.
