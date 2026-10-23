@@ -1,0 +1,18 @@
+[run]
+source =
+    host
+    sources
+    providers
+omit =
+    */tests/*
+    */__pycache__/*
+    tools/*
+
+[report]
+# The floor Chris asked for (2026-10-22). Raise it, never lower it to pass.
+fail_under = 90
+skip_covered = False
+show_missing = True
+exclude_lines =
+    pragma: no cover
+    if __name__ == "__main__":
