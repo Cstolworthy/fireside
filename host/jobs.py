@@ -195,13 +195,22 @@ def render_chapter(conn, storage, speech, book_id, idx, voice="", model="", spee
         if hit:
             buf += storage.get(hit["audio_ref"])
             continue
-        audio = _synth(speech, pron.apply(ch, rules), voice, o, cred, should_stop=stop)
+        spoken = pron.apply(ch, rules)
+        if not chunks.has_speech(spoken):
+            # a scene break is not a sentence: nothing to say, nothing to ask.
+            # Sending it anyway is how a strict server kills a whole chapter.
+            continue
+        audio = _synth(speech, spoken, voice, o, cred, should_stop=stop)
         ref = storage.put(audio.data)
         conn.execute(
             "INSERT OR REPLACE INTO render_cache"
             "(`key`,audio_ref,audio_bytes,duration_s,provider,voice,model,created_at)"
             " VALUES(?,?,?,?,?,?,?,?)",
             (ckey, ref, len(audio.data), None, speech.id, voice, model, now()))
+        # commit per chunk: a chapter that fails on its last piece used to throw
+        # away every chunk it had already spoken, so each retry re-synthesised
+        # the whole chapter (and re-billed it, on a metered provider).
+        conn.commit()
         buf += audio.data
     data = bytes(buf)
     ref = storage.put(data)

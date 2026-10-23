@@ -9,7 +9,7 @@ import re
 import urllib.request
 
 from . import Audio, Field, Voice, report
-from ._text import chunk_text
+from ._text import chunk_text, parts_for_request
 
 PRICE_PER_1M_USD = 15.0
 
@@ -41,7 +41,9 @@ class Azure:
         opts = opts or {}
         rate = opts.get("rate", "0%")
         key, region = cred.get("key", ""), cred.get("region", "eastus")
-        parts = chunk_text(text)
+        parts = parts_for_request(text)
+        if not parts:
+            raise ValueError("nothing to say in that text")
         buf = bytearray()
         for n, p in enumerate(parts, 1):
             buf += synth_azure(p, voice, key, region, rate)

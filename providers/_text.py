@@ -23,3 +23,32 @@ def chunk_text(text, target=CHUNK_TARGET):
     if cur.strip():
         parts.append(cur.strip())
     return parts or [text]
+
+
+def has_speech(text):
+    """True when a chunk carries something an engine can actually say.
+
+    A scene break ("~*~*~*~*~*~", "***", "* * *") is punctuation and symbols
+    only. A strict speech server (Kokoro) answers 400 "input contains no
+    speakable text" instead of returning silence, and one 400 used to fail a
+    whole chapter - a 42k-char chapter of a real book sat unvoiced because of an
+    eleven-character line between scenes.
+    """
+    return any(ch.isalnum() for ch in (text or ""))
+
+
+def parts_for_request(text, target=CHUNK_TARGET):
+    """What one synth() should actually send, and nothing else.
+
+    The host already splits a chapter into request-sized chunks, so text at or
+    under the cap is one request, exactly as handed over. Re-splitting it can
+    only move the host's boundary: a pronunciation rule that lengthens a chunk
+    by two characters was enough to push a trailing scene break ("~*~*~*~*~*~")
+    into a request of its own, and a strict server answers that with 400 input
+    contains no speakable text - which failed the whole chapter.
+
+    Over the cap, split as before. Either way, pieces with nothing to say are
+    not requests.
+    """
+    parts = chunk_text(text, target) if len(text or "") > target else [text]
+    return [p for p in parts if has_speech(p)]
