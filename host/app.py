@@ -754,7 +754,8 @@ class App:
         # this exact voice (and rules) is a cache hit and costs the buyer
         # nothing. The whole-book estimate is the storage question, not the
         # money question, so the two are kept apart.
-        rules = pron.load(self.conn, user)
+        rules = pron.for_book(pron.load(self.conn, user), book_id,
+                              pron.book_author(self.conn, book_id))
         fresh = jobs.stale_book_chars(self.conn, self.storage, speech, book_id, todo,
                                       rules, voice, model, speed)
         res_id = None

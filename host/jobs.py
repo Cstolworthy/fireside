@@ -195,7 +195,7 @@ def render_chapter(conn, storage, speech, book_id, idx, voice="", model="", spee
         if hit:
             buf += storage.get(hit["audio_ref"])
             continue
-        spoken = pron.apply(ch, rules)
+        spoken = pron.spoken(ch, rules)
         if not chunks.has_speech(spoken):
             # a scene break is not a sentence: nothing to say, nothing to ask.
             # Sending it anyway is how a strict server kills a whole chapter.
@@ -340,7 +340,8 @@ def render_book(conn, storage, speech, user_id, book_id, voice="", model="",
     # pronunciation tag matches too, so a run restarted after a crash skips
     # what it finished while a changed rule makes just the affected chapters
     # redo. The tag covers only the rules that match each chapter's text.
-    rules = pron.load(conn, user_id)
+    rules = pron.for_book(pron.load(conn, user_id), book_id,
+                          pron.book_author(conn, book_id))
     tokens = {}
     for i in idxs:
         try:
