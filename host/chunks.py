@@ -32,6 +32,16 @@ def cache_key(text_ref, provider, voice, model, speed, extra=""):
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def has_speech(text):
+    """True when a chunk carries something an engine can actually say.
+
+    A scene break ("~*~*~*~*~*~", "***") is symbols only. The providers apply the
+    same rule to their own request parts; this is the host's copy, so a chapter
+    whose chunk is nothing but a scene break costs no request at all.
+    """
+    return any(ch.isalnum() for ch in (text or ""))
+
+
 def split(speech, text):
     """The request chunks a provider will make of `text`.
 

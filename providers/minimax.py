@@ -8,7 +8,7 @@ import urllib.parse
 import urllib.request
 
 from . import Audio, Field, Voice, report
-from ._text import chunk_text
+from ._text import chunk_text, parts_for_request
 
 DEFAULT_MODEL = "speech-02-hd"
 
@@ -40,7 +40,9 @@ class MiniMax:
         model = opts.get("model") or DEFAULT_MODEL
         speed = float(opts.get("speed", 1.0) or 1.0)
         key, group = cred.get("key", ""), cred.get("group", "")
-        parts = chunk_text(text)
+        parts = parts_for_request(text)
+        if not parts:
+            raise ValueError("nothing to say in that text")
         buf = bytearray()
         for n, p in enumerate(parts, 1):
             buf += synth_minimax(p, voice, key, group, model, speed)

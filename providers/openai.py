@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 
 from . import Audio, Field, Voice, report
-from ._text import chunk_text
+from ._text import chunk_text, parts_for_request
 
 DEFAULT_BASE = "http://127.0.0.1:8880"
 DEFAULT_VOICE = "af_heart"
@@ -112,7 +112,9 @@ class OpenAICompat:
         opts = opts or {}
         speed = float(opts.get("speed", 1.0) or 1.0)
         model = opts.get("model") or "kokoro"
-        parts = chunk_text(text)
+        parts = parts_for_request(text)
+        if not parts:
+            raise ValueError("nothing to say in that text")
         buf = bytearray()
         for n, p in enumerate(parts, 1):
             buf += self._one(p, voice or DEFAULT_VOICE, speed, model, cred)
