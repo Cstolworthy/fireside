@@ -1,0 +1,10 @@
+node_modules/
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+dist/
+*.apk
+*.log
+*.aab
+android_broken_20261020/
