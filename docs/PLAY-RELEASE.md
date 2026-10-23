@@ -1,0 +1,81 @@
+# Play release: what is built, what is waiting
+
+Status 2026-10-23. The app itself is ready to upload. Everything left is either
+paperwork or a Google login.
+
+## Built and verified
+
+- `android-shell/build_aab.sh` produces a signed release bundle:
+  `android/app/build/outputs/bundle/release/app-release.aab`, 2,976,467 bytes,
+  447 entries, versionCode 2, versionName 1.0.0.
+- Signing is injected by `android_src/patch_build_gradle.py` on every build,
+  because `npx cap sync` regenerates `android/app/build.gradle`. `build_aab.sh`
+  refuses to run without `FS_KEYSTORE`, so an unsigned bundle can't slip out.
+- The bundle is signed with the Play upload key, certificate
+  `CN=Magic Smoke Technologies LLC, O=Magic Smoke Technologies LLC, C=US`,
+  SHA-256 `EE:05:29:6E:84:C4:A7:04:47:E3:2F:FE:50:8A:F5:B6:43:88:12:EE:A4:05:9C:E6:E0:D4:9F:04:EB:49:19:F7`.
+  The same key and password live in Key Vault `fireside-kv`
+  (`fireside-android-upload-keystore`, `...-password`), and a copy of the
+  keystore is at `//10.32.1.6/fieldstone/android-keys/fireside-upload.jks` on
+  bench01. Back that up somewhere off this machine before the first upload:
+  losing it means the app id is dead.
+- targetSdk 35, minSdk 23, package `com.stolworthy.fireside`, no ads, no
+  in-app purchases, no billing permission.
+
+## The build, in full
+
+```
+export FS_KEYSTORE=/srv/bench/fieldstone/android-keys/fireside-upload.jks
+export FS_KS_PASS=<vault: fireside-android-upload-keystore-password>
+export FS_KEY_ALIAS=fireside-upload
+export FS_VERSION_CODE=2
+export FS_VERSION_NAME=1.0.0
+./android-shell/build_aab.sh
+```
+
+Every upload needs a larger `FS_VERSION_CODE`. Keep it in the commit message.
+
+## Blocked on the D-U-N-S number
+
+An organisation account skips the 12-tester / 14-day closed test that personal
+accounts must run. Google matches the legal name and address on the DUNS record
+exactly. Use these strings, no suite numbers, no trailing lines:
+
+- Legal name: `Magic Smoke Technologies LLC`
+- Address: the exact street address on the LLC registration
+- Country: `United States`
+- Phone: the number on the DUNS record
+- Website: `https://readfireside.com`
+
+If Google's verification says the name does not match, the fix is a DUNS record
+correction, not a second Play account.
+
+## Remaining, in order
+
+1. Create the org developer account, pay the one-time $25, accept the
+   agreement, complete identity verification.
+2. Create the app: name `Fireside`, default language English (US), app (free),
+   not a game.
+3. Store listing: short description, full description, 512x512 icon, 1024x500
+   feature graphic, at least 2 phone screenshots. Icon source is the cream-page
+   flame at 512 already in the repo.
+4. Data safety form. Draft answers: collects email address and name (account),
+   and user-supplied reading material (books, documents) uploaded by the user.
+   Data is encrypted in transit. Users can request deletion at
+   `https://readfireside.com/delete-account` and in Settings. No data sold, no
+   ad SDKs, no third-party analytics beyond what the server logs.
+5. Content rating questionnaire: no violence, no user-to-user communication,
+   user-generated content is private to the account. Expect "Everyone".
+6. Target audience: 18+ (an app that reads books aloud is not child-directed,
+   and declaring 13+ triggers Families policy obligations).
+7. Upload the `.aab`, opt in to Play App Signing (Google holds the app signing
+   key; the upload key above stays ours).
+8. Internal testing track first: install on a real device from Play, confirm the
+   first-run URL, login, and a book starts narrating.
+
+## Code still open before production
+
+- In-app account deletion (Play requires a delete path in the app, not only a
+  web page). `Settings > Account > Delete account` posting to the existing
+  `/api/account/delete` route, with the confirmation phrase.
+- Play requires a privacy policy URL on the listing: `https://readfireside.com/privacy`.
