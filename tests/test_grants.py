@@ -102,6 +102,35 @@ class TestGrantEnforcement(unittest.TestCase):
         self.assertEqual(s, 200)
         self.assertIn("job_id", out)
 
+    def test_storage_grant_lifts_the_import_refusal(self):
+        # An import goes through the same gate as every other write. It used to
+        # ask quota.check_room directly, which skipped the grant and refused a
+        # book to an account whose storage limit was already lifted.
+        from host import quota
+        saved = quota.PLAN_ALLOWANCE["free"]
+        quota.PLAN_ALLOWANCE["free"] = 10        # a shelf smaller than one book
+        try:
+            from host import billing
+            billing.upsert(self.app.conn, "u1", "free", "active")
+            s, out = self.app.import_book({}, {"user": "u1", "kind": "upload",
+                                               "filename": "x.epub"})
+            self.assertEqual(s, 507)
+            grants.set_grants(self.app.conn, "u1", storage=True)
+            s, out = self.app.import_book({}, {"user": "u1", "kind": "upload",
+                                               "filename": "x.epub"})
+            self.assertEqual(s, 200)
+        finally:
+            quota.PLAN_ALLOWANCE["free"] = saved
+
+    def test_storage_screen_says_unlimited(self):
+        s, out = self.app.storage_get({"user": "u1"}, {})
+        self.assertFalse(out["unlimited"])
+        self.assertIsNotNone(out["remaining_bytes"])
+        grants.set_grants(self.app.conn, "u1", storage=True)
+        s, out = self.app.storage_get({"user": "u1"}, {})
+        self.assertTrue(out["unlimited"])
+        self.assertIsNone(out["remaining_bytes"])
+
     def test_grants_route_is_admin_only(self):
         s, out = self.app.grants_list({"_user": "u1"}, {})
         self.assertEqual(s, 403)

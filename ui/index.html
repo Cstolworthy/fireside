@@ -1348,10 +1348,13 @@ async function loadPlan() {
   try { bill = await api('/billing'); } catch (e) {}
   PLAN_CAT = cat;
   const plan = s.plan || 'platform';
-  usage.textContent = fmtBytes(s.own_bytes) + ' of ' + fmtBytes(s.allowance_bytes) + ' used'
+  usage.textContent = s.unlimited
+    ? fmtBytes(s.own_bytes) + ' \u00b7 unlimited storage'
+    : fmtBytes(s.own_bytes) + ' of ' + fmtBytes(s.allowance_bytes) + ' used'
     + (s.storage_blocks ? ' \u00b7 ' + s.storage_blocks + ' storage block' + (s.storage_blocks > 1 ? 's' : '') : '')
     + (s.blobs ? ' \u00b7 ' + s.blobs + ' item' + (s.blobs > 1 ? 's' : '') : '');
-  const pct = s.allowance_bytes ? Math.min(100, Math.round(100 * (s.own_bytes || 0) / s.allowance_bytes)) : 0;
+  const pct = s.unlimited ? 0
+    : (s.allowance_bytes ? Math.min(100, Math.round(100 * (s.own_bytes || 0) / s.allowance_bytes)) : 0);
   const bar = $('#planbar');
   if (bar) { bar.style.display = ''; $('#planbarfill').style.width = pct + '%'; }
   const cards = $('#plancards');
