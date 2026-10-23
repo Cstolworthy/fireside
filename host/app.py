@@ -1617,6 +1617,31 @@ class App:
 
     # ---- erasing the account --------------------------------------------------
 
+    # ---- the account's own password --------------------------------------------
+
+    def account_password(self, q, body):
+        """Set or change the signed-in account's password.
+
+        A password account must give the current one. A social-only account has
+        none, so it names itself a sign-in name and gets a password. Either way
+        every OTHER session is revoked: a password change should end sessions
+        won under the old one, while the device doing the changing stays in.
+        """
+        uid = (q or {}).get("_user") or ""
+        if not uid:
+            return 401, {"error": "auth required"}
+        body = body or {}
+        try:
+            name = auth.set_password(self.conn, uid,
+                                     body.get("current") or "",
+                                     body.get("password") or "",
+                                     body.get("username") or "")
+        except auth.AuthError as e:
+            return 400, {"error": str(e)}
+        ended = auth.revoke_sessions(self.conn, uid, (q or {}).get("_token") or "")
+        return 200, {"ok": True, "username": name, "has_password": True,
+                     "ended": ended}
+
     def account_delete(self, q, body):
         """Erase the signed-in account for good: books, voiced audio, history,
         credentials, and sign-ins.
@@ -1675,6 +1700,7 @@ POST_ROUTES = {
     "/render": "render", "/voices": "voices",
     "/book/renditions/delete": "remove_renditions", "/book/delete": "delete_book",
     "/account/delete": "account_delete",
+    "/account/password": "account_password",
     "/speak": "speak",
     "/cover": "put_cover", "/cover/auto": "cover_auto", "/cover/clear": "clear_cover",
     "/book/details": "fetch_details",
