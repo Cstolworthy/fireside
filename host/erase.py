@@ -36,7 +36,7 @@ _LIVE_REF_SQL = (
 _USER_TABLES = (
     "jobs", "ledger", "balances", "reservations", "positions", "devices",
     "listens", "credentials", "sessions", "local_accounts", "identities",
-    "password_resets", "login_claims", "user_prefs", "subscriptions", "addons",
+    "password_resets", "login_claims", "app_handoffs", "user_prefs", "subscriptions", "addons",
     "user_grants", "connection_overrides",
 )
 

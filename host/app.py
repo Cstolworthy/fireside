@@ -1798,6 +1798,9 @@ def make_handler(app):
                 redirect_uri = self._base_url() + "/auth/%s/callback" % pid
                 if action == "start":
                     link = _truthy(q.get("link"))
+                    # ?app=1 means the browser tab was opened by the Android
+                    # shell, so the finished session has to be handed back.
+                    for_app = _truthy(q.get("app"))
                     claim = q.get("claim") or ""
                     uid = auth.session_user(app.conn, self._token()) or ""
                     if link and not uid:
@@ -1805,21 +1808,31 @@ def make_handler(app):
                     if claim:
                         auth.take_claim(app.conn, claim)   # expired/unknown -> AuthError
                     state = auth.new_state()
-                    url = app.auth.authorize_url(pid, redirect_uri, state)
+                    # PKCE providers (X) need a verifier kept for the callback.
+                    verifier, _challenge = auth.new_pkce()
+                    url = app.auth.authorize_url(pid, redirect_uri, state, verifier)
                     return self._redirect(url, [
                         self._cookie_str(auth.STATE_COOKIE, state, path="/auth", max_age=600),
                         self._cookie_str(auth.LINK_COOKIE, uid if link else "",
                                          path="/auth", max_age=600),
                         self._cookie_str(auth.CLAIM_COOKIE, claim,
+                                         path="/auth", max_age=600),
+                        self._cookie_str(auth.APP_COOKIE, "1" if for_app else "",
+                                         path="/auth", max_age=600),
+                        self._cookie_str(auth.PKCE_COOKIE, verifier,
                                          path="/auth", max_age=600)])
                 if action == "callback":
                     if q.get("error"):
                         return self.send_error(400, "oauth error: %s" % q["error"])
                     if not q.get("state") or q["state"] != self._cookie(auth.STATE_COOKIE):
                         return self.send_error(400, "bad oauth state")
+                    for_app = bool(self._cookie(auth.APP_COOKIE))
+                    verifier = self._cookie(auth.PKCE_COOKIE)
                     clear = [self._cookie_str(auth.STATE_COOKIE, "", path="/auth", max_age=0),
                              self._cookie_str(auth.LINK_COOKIE, "", path="/auth", max_age=0),
-                             self._cookie_str(auth.CLAIM_COOKIE, "", path="/auth", max_age=0)]
+                             self._cookie_str(auth.CLAIM_COOKIE, "", path="/auth", max_age=0),
+                             self._cookie_str(auth.APP_COOKIE, "", path="/auth", max_age=0),
+                             self._cookie_str(auth.PKCE_COOKIE, "", path="/auth", max_age=0)]
                     link_user = self._cookie(auth.LINK_COOKIE)
                     claim_tok = self._cookie(auth.CLAIM_COOKIE)
                     if link_user:
@@ -1828,7 +1841,8 @@ def make_handler(app):
                         cur = auth.session_user(app.conn, self._token()) or ""
                         if cur != link_user:
                             return self.send_error(401, "session changed during link")
-                        app.auth.link(pid, q.get("code", ""), redirect_uri, link_user)
+                        app.auth.link(pid, q.get("code", ""), redirect_uri, link_user,
+                                      verifier)
                         return self._redirect("/?linked=%s" % pid, clear)
                     if claim_tok:
                         # proving ownership of an account a social login collided
@@ -1836,7 +1850,7 @@ def make_handler(app):
                         # proof. Wrong provider / not this account -> do nothing.
                         try:
                             ident = app.auth.identity_from_code(pid, q.get("code", ""),
-                                                                redirect_uri)
+                                                                redirect_uri, verifier)
                             uid = auth.complete_claim_via_identity(app.conn, claim_tok,
                                                                    pid, ident)
                         except auth.AuthError as e:
@@ -1849,7 +1863,15 @@ def make_handler(app):
                         return self._redirect("/", clear + [self._cookie_str(
                             auth.SESSION_COOKIE, token, max_age=auth.SESSION_TTL)])
                     uid, token = app.auth.login(pid, q.get("code", ""), redirect_uri,
-                                                ua=self._ua(), ip=self._ip())
+                                                ua=self._ua(), ip=self._ip(),
+                                                verifier=verifier)
+                    if for_app:
+                        # The tab cannot set the webview's cookie. Hand back a
+                        # one-time token and let /auth/app/session finish the
+                        # job inside the app.
+                        hand = auth.mint_app_handoff(app.conn, uid)
+                        return self._redirect(
+                            "/auth/app/done?token=" + urllib.parse.quote(hand), clear)
                     return self._redirect("/", clear + [self._cookie_str(
                         auth.SESSION_COOKIE, token, max_age=auth.SESSION_TTL)])
             except auth.AccountExistsError as e:
@@ -1862,11 +1884,57 @@ def make_handler(app):
                 return self._json(401, {"error": str(e)})
             return self.send_error(404)
 
+        def _app_auth_route(self, path, u):
+            """The Android app's two ends of a browser-tab sign-in.
+
+            /auth/app/done runs in the browser tab (or Custom Tab): it offers the
+            one tap that hands the token back over the fireside:// scheme, and
+            tries it on load. Browsers often refuse a scheme hop without a user
+            gesture, so the button is the path that always works.
+            /auth/app/session runs inside the app's webview: it spends the token
+            once, sets the normal session cookie there, and lands on the library.
+            """
+            from urllib.parse import parse_qs
+            q = {k: v[0] for k, v in parse_qs(u.query).items()}
+            token = q.get("token") or ""
+            if path == "/auth/app/session":
+                try:
+                    uid = auth.take_app_handoff(app.conn, token)
+                except auth.AuthError:
+                    # expired or already spent: the honest next step is the door
+                    return self._redirect("/?app=again")
+                tok = auth.create_session(app.conn, uid, "app",
+                                          ua=self._ua(), ip=self._ip())
+                return self._redirect("/", [self._cookie_str(
+                    auth.SESSION_COOKIE, tok, max_age=auth.SESSION_TTL)])
+            hand = "fireside://auth?token=" + urllib.parse.quote(token)
+            page = (
+                "<!doctype html><meta charset=utf-8>"
+                "<meta name=viewport content='width=device-width,initial-scale=1'>"
+                "<title>Back to fireside</title>"
+                "<body style=\"margin:0;background:#14110f;color:#ece3d3;"
+                "font:16px system-ui,sans-serif;display:flex;min-height:100vh;"
+                "align-items:center;justify-content:center;text-align:center\">"
+                "<div style='padding:24px;max-width:420px'>"
+                "<p>You are signed in.</p>"
+                "<p style='color:#b3a794;font-size:14px'>Tap to go back to the app.</p>"
+                "<p style='margin-top:22px'><a href=\"" + hand + "\" "
+                "style=\"display:inline-block;background:#e3a857;color:#241808;"
+                "padding:14px 22px;border-radius:10px;text-decoration:none;"
+                "font-weight:600\">Open fireside</a></p></div>"
+                "<script>setTimeout(function(){try{location.replace(" +
+                json.dumps(hand) + ")}catch(e){}},120)</script>")
+            return self._json(200, {"_html": page})
+
         def _dispatch(self, routes):
             from urllib.parse import urlparse, parse_qs
             u = urlparse(self.path)
             path = u.path.rstrip("/") or "/"
             parts = path.strip("/").split("/")
+            # before the /auth/<provider>/<action> branch: "app" is not a provider
+            if self.command == "GET" and path in ("/auth/app/session",
+                                                  "/auth/app/done"):
+                return self._app_auth_route(path, u)
             if (self.command == "GET" and len(parts) == 3 and parts[0] == "auth"):
                 return self._auth_route(parts, u)
             if path == "/auth/logout" and self.command == "POST":

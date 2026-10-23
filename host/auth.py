@@ -16,6 +16,7 @@ Contract:
   revoke_sessions(user_id, keep)  -> log out the rest, or all when keep is empty
 """
 
+import base64
 import hashlib
 import json
 import os
@@ -58,11 +59,32 @@ PROVIDERS = {
         "scope": "openid email profile",
         "id_env": ("FIRESIDE_OAUTH_MICROSOFT_CLIENT_ID", "FIRESIDE_OAUTH_MICROSOFT_SECRET"),
     },
+    "facebook": {
+        "label": "Facebook",
+        "authorize": "https://www.facebook.com/v21.0/dialog/oauth",
+        "token": "https://graph.facebook.com/v21.0/oauth/access_token",
+        "identity": "https://graph.facebook.com/me?fields=id,name,email",
+        "scope": "email public_profile",
+        "id_env": ("FIRESIDE_OAUTH_FACEBOOK_CLIENT_ID", "FIRESIDE_OAUTH_FACEBOOK_SECRET"),
+    },
+    # X is OAuth 2.0 with PKCE, and it does NOT hand back an email address. An X
+    # account therefore proves an identity and nothing else: the login works,
+    # and the account has no address to be found by. That is the honest shape of
+    # it, so the login door makes no email-shaped promise here.
+    "x": {
+        "label": "X",
+        "authorize": "https://x.com/i/oauth2/authorize",
+        "token": "https://api.x.com/2/oauth2/token",
+        "identity": "https://api.x.com/2/users/me",
+        "scope": "users.read",
+        "pkce": True,
+        "id_env": ("FIRESIDE_OAUTH_X_CLIENT_ID", "FIRESIDE_OAUTH_X_SECRET"),
+    },
     # Proton has no consumer OAuth of its own; SimpleLogin (Proton-owned) is the
     # door. Its sign-in page carries a "Log in with Proton" button, and it hands
     # back a verified email. SimpleLogin documents the 'profile' scope only.
     "simplelogin": {
-        "label": "SimpleLogin",
+        "label": "Proton (SimpleLogin)",
         "authorize": "https://app.simplelogin.io/oauth2/authorize",
         "token": "https://app.simplelogin.io/oauth2/token",
         "identity": "https://app.simplelogin.io/oauth2/userinfo",
@@ -70,6 +92,19 @@ PROVIDERS = {
         "id_env": ("FIRESIDE_OAUTH_SIMPLELOGIN_CLIENT_ID", "FIRESIDE_OAUTH_SIMPLELOGIN_SECRET"),
     },
 }
+
+
+PKCE_COOKIE = "fireside_oauth_pkce"
+
+
+def _b64url(raw):
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def new_pkce():
+    """A verifier and its S256 challenge, for the providers that demand PKCE."""
+    verifier = secrets.token_urlsafe(64)[:96]
+    return verifier, _b64url(hashlib.sha256(verifier.encode("ascii")).digest())
 
 
 def _truthy(v):
@@ -248,6 +283,21 @@ def _identity(pid, data):
     email depends on it, so an unverified address links nothing.
     """
     verified = bool(data.get("email_verified"))
+    if pid == "x":
+        # {"data": {"id","name","username"}}, no email by design
+        d = data.get("data") or {}
+        return {"subject": str(d.get("id") or ""),
+                "name": d.get("name") or d.get("username") or "",
+                "email": "",
+                "email_verified": False}
+    if pid == "facebook":
+        # Facebook returns an address only when the account has one and the
+        # permission was granted; an address it does return is confirmed.
+        email = (data.get("email") or "").strip()
+        return {"subject": str(data.get("id") or ""),
+                "name": data.get("name") or "",
+                "email": email,
+                "email_verified": bool(email)}
     if pid == "github":
         return {"subject": str(data.get("id") or ""),
                 "name": data.get("name") or data.get("login") or "",
@@ -619,6 +669,52 @@ def set_password(conn, user_id, current_password, new_password, username=""):
     return name
 
 
+# --- signing in from the Android app ------------------------------------------
+# Google (and Apple, and Microsoft) refuse OAuth inside an embedded webview, so
+# the app hands the flow to a browser tab and needs the finished session back.
+# The tab cannot set the webview's cookie, so the callback mints a one-time
+# handoff: a token, short-lived, single use, redeemable once at
+# /auth/app/session. That URL is opened inside the webview and the cookie lands
+# there. The custom-scheme hop is the weak link, so the token is worth seconds,
+# not minutes, and it dies on first use.
+APP_COOKIE = "fireside_app_return"
+APP_HANDOFF_TTL = 120
+
+def mint_app_handoff(conn, user_id):
+    """A one-time token that turns into a session inside the app's webview."""
+    if not user_id:
+        raise AuthError("auth required")
+    token = secrets.token_urlsafe(32)
+    now = int(time.time())
+    conn.execute("DELETE FROM app_handoffs WHERE user_id=?", (user_id,))
+    conn.execute("INSERT INTO app_handoffs"
+                 "(token_hash,user_id,created_at,expires_at,used_at)"
+                 " VALUES(?,?,?,?,0)",
+                 (_hash_reset_token(token), user_id, now,
+                  now + APP_HANDOFF_TTL))
+    conn.commit()
+    return token
+
+
+def take_app_handoff(conn, token):
+    """Consume a handoff and return the user it was minted for.
+
+    Unknown, expired and already-used all read the same way: the app shows the
+    sign-in door again, which is the correct next step in every one of them.
+    """
+    h = _hash_reset_token(token or "")
+    row = conn.execute("SELECT user_id,expires_at,used_at FROM app_handoffs"
+                       " WHERE token_hash=?", (h,)).fetchone()
+    if row is None:
+        raise AuthError("that sign-in has expired; start again")
+    if int(row["used_at"] or 0) or int(row["expires_at"] or 0) < int(time.time()):
+        raise AuthError("that sign-in has expired; start again")
+    conn.execute("UPDATE app_handoffs SET used_at=? WHERE token_hash=?",
+                 (int(time.time()), h))
+    conn.commit()
+    return row["user_id"]
+
+
 def local_password_proof(conn, user_id, password):
     """True when `password` is the local account password for `user_id`.
 
@@ -751,27 +847,39 @@ class Auth:
                             "start": "/auth/%s/start" % pid})
         return out
 
-    def authorize_url(self, pid, redirect_uri, state):
+    def authorize_url(self, pid, redirect_uri, state, verifier=""):
         cfg = self.table[pid]
         cid, _ = self._creds(pid)
         if not cid:
             raise AuthError("provider %s is not configured" % pid)
         q = {"client_id": cid, "redirect_uri": redirect_uri, "scope": cfg["scope"],
              "state": state, "response_type": "code"}
+        if cfg.get("pkce"):
+            if not verifier:
+                raise AuthError("provider %s needs a pkce verifier" % pid)
+            digest = hashlib.sha256(verifier.encode("ascii")).digest()
+            q["code_challenge"] = _b64url(digest)
+            q["code_challenge_method"] = "S256"
         if pid == "google":
             q["access_type"] = "online"
             q["prompt"] = "select_account"
         return cfg["authorize"] + "?" + urllib.parse.urlencode(q)
 
-    def _exchange(self, pid, code, redirect_uri):
+    def _exchange(self, pid, code, redirect_uri, verifier=""):
         cfg = self.table[pid]
         cid, sec = self._creds(pid)
-        data = urllib.parse.urlencode({
-            "client_id": cid, "client_secret": sec, "code": code,
-            "redirect_uri": redirect_uri, "grant_type": "authorization_code"}).encode()
-        req = urllib.request.Request(cfg["token"], data=data, headers={
-            "Accept": "application/json",
-            "Content-Type": "application/x-www-form-urlencoded"})
+        body = {"client_id": cid, "client_secret": sec, "code": code,
+                "redirect_uri": redirect_uri, "grant_type": "authorization_code"}
+        headers = {"Accept": "application/json",
+                   "Content-Type": "application/x-www-form-urlencoded"}
+        if cfg.get("pkce"):
+            # X wants the verifier back, and the client proven per RFC 6749
+            # (HTTP Basic) instead of a secret in the body.
+            body["code_verifier"] = verifier or ""
+            headers["Authorization"] = "Basic " + _b64url(
+                ("%s:%s" % (cid, sec)).encode())
+        data = urllib.parse.urlencode(body).encode()
+        req = urllib.request.Request(cfg["token"], data=data, headers=headers)
         body = json.loads(self.fetch(req).decode("utf-8"))
         tok = body.get("access_token")
         if not tok:
@@ -808,7 +916,7 @@ class Auth:
             ident["email_verified"] = bool(ident.get("email"))
         return ident
 
-    def identity_from_code(self, pid, code, redirect_uri):
+    def identity_from_code(self, pid, code, redirect_uri, verifier=""):
         """Exchange a callback code and return the normalized identity, without
         touching users or sessions. Used by the claim-proof path, where the
         identity itself is the evidence."""
@@ -820,21 +928,21 @@ class Auth:
             raise AuthError("provider %s returned no subject" % pid)
         return ident
 
-    def login(self, pid, code, redirect_uri, ua="", ip=""):
+    def login(self, pid, code, redirect_uri, ua="", ip="", verifier=""):
         if pid not in self.table:
             raise AuthError("unknown provider %s" % pid)
-        access = self._exchange(pid, code, redirect_uri)
+        access = self._exchange(pid, code, redirect_uri, verifier)
         ident = self.identity(pid, access)
         if not ident["subject"]:
             raise AuthError("provider %s returned no subject" % pid)
         uid = upsert_user(self.conn, pid, ident)
         return uid, create_session(self.conn, uid, pid, ua=ua, ip=ip)
 
-    def link(self, pid, code, redirect_uri, user_id):
+    def link(self, pid, code, redirect_uri, user_id, verifier=""):
         """Finish a link flow: attach this provider to an existing user."""
         if pid not in self.table:
             raise AuthError("unknown provider %s" % pid)
-        access = self._exchange(pid, code, redirect_uri)
+        access = self._exchange(pid, code, redirect_uri, verifier)
         ident = self.identity(pid, access)
         if not ident["subject"]:
             raise AuthError("provider %s returned no subject" % pid)
