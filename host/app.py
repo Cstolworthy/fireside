@@ -247,7 +247,10 @@ class App:
         incoming = self._book_bytes(book)
         plan = (billing.get(self.conn, user) or {}).get("plan") or ""
         blocks = billing.blocks(self.conn, user)
-        if not quota.check_room(self.conn, self.storage, user, plan, incoming, blocks):
+        # The same gate every other write uses, so an admin storage grant lifts
+        # an import too. Asking quota.check_room directly here skipped the grant
+        # and refused a book to an account whose limit was already lifted.
+        if not self._storage_ok(user, incoming):
             left = max(0, quota.allowance_bytes(plan, blocks)
                        - quota.usage(self.conn, self.storage, user)["own_bytes"])
             return 507, {"error": "not enough storage",
@@ -915,10 +918,15 @@ class App:
         u = quota.usage(self.conn, self.storage, uid) if uid else {
             "user_id": uid, "own_bytes": 0, "total_bytes": 0, "blobs": 0}
         allowed = quota.allowance_bytes(plan, blocks)
+        unlimited = bool(uid) and grants.storage_unlimited(self.conn, uid)
         u.update({"plan": plan, "storage_blocks": blocks,
                   "block_bytes": quota.STORAGE_BLOCK_BYTES,
                   "allowance_bytes": allowed,
-                  "remaining_bytes": max(0, allowed - u["own_bytes"])})
+                  # An admin grant lifts the refusal; the screen says so instead
+                  # of showing a shelf that is over a limit nobody enforces.
+                  "unlimited": unlimited,
+                  "remaining_bytes": (None if unlimited
+                                      else max(0, allowed - u["own_bytes"]))})
         return 200, u
 
     def billing_checkout(self, q, body):
