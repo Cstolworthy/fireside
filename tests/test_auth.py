@@ -171,6 +171,70 @@ class TestAuth(unittest.TestCase):
         s, d = self._jget("/auth/linked")
         self.assertEqual(d["linked"], ["fake"])
 
+    # ---- signing in from the Android app ------------------------------------
+
+    def test_app_start_returns_the_token_instead_of_a_cookie(self):
+        self._wire_fake_provider()
+        r = self._get_no_redirect(
+            "http://127.0.0.1:%d/auth/fake/start?app=1" % self.port)
+        self.assertEqual(r.code, 302)
+        self.assertIn("http://id.test/authorize", r.headers.get("Location", ""))
+        cookies = {c.name: c.value for c in self.jar}
+        self.assertEqual(cookies.get(auth.APP_COOKIE), "1")
+
+    def test_app_callback_hands_back_a_one_time_token_and_no_session(self):
+        self._wire_fake_provider()
+        self._get_no_redirect("http://127.0.0.1:%d/auth/fake/start?app=1" % self.port)
+        before = {c.name for c in self.jar}
+        r = self._get_no_redirect(
+            "http://127.0.0.1:%d/auth/fake/callback?code=abc&state=%s"
+            % (self.port, self._state_cookie()))
+        self.assertEqual(r.code, 302)
+        self.assertIn("/auth/app/done?token=", r.headers.get("Location", ""))
+        # the tab is not signed in: no session cookie was set here
+        self.assertNotIn(auth.SESSION_COOKIE, {c.name for c in self.jar})
+        self.assertIn(auth.STATE_COOKIE, before)
+
+    def test_the_done_page_offers_the_app_link(self):
+        self._wire_fake_provider()
+        self._get_no_redirect("http://127.0.0.1:%d/auth/fake/start?app=1" % self.port)
+        r = self._get_no_redirect(
+            "http://127.0.0.1:%d/auth/fake/callback?code=abc&state=%s"
+            % (self.port, self._state_cookie()))
+        loc = r.headers["Location"]
+        page = self._get_no_redirect("http://127.0.0.1:%d%s" % (self.port, loc))
+        html = page.read().decode()
+        self.assertIn("fireside://auth?token=", html)
+        self.assertIn("Open fireside", html)
+
+    def test_the_webview_redeems_the_token_once(self):
+        self._wire_fake_provider()
+        self._get_no_redirect("http://127.0.0.1:%d/auth/fake/start?app=1" % self.port)
+        r = self._get_no_redirect(
+            "http://127.0.0.1:%d/auth/fake/callback?code=abc&state=%s"
+            % (self.port, self._state_cookie()))
+        hand = r.headers["Location"].split("token=")[1]
+        # a fresh jar stands in for the app's webview
+        self.jar.clear()
+        r2 = self._get_no_redirect(
+            "http://127.0.0.1:%d/auth/app/session?token=%s" % (self.port, hand))
+        self.assertEqual(r2.code, 302)
+        self.assertEqual(r2.headers["Location"], "/")
+        s, me = self._jget("/me")
+        self.assertTrue(me["authenticated"])
+        # the same token does not work twice
+        self.jar.clear()
+        again = self._get_no_redirect(
+            "http://127.0.0.1:%d/auth/app/session?token=%s" % (self.port, hand))
+        self.assertEqual(again.code, 302)
+        self.assertIn("app=again", again.headers["Location"])
+
+    def test_a_forged_token_lands_on_the_door(self):
+        r = self._get_no_redirect(
+            "http://127.0.0.1:%d/auth/app/session?token=nope" % self.port)
+        self.assertEqual(r.code, 302)
+        self.assertIn("app=again", r.headers["Location"])
+
     def test_a_bad_state_is_refused(self):
         self._post("/auth/local/register", {"username": "chris", "password": "longenough"})
         self._wire_fake_provider()

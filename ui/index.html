@@ -1280,6 +1280,17 @@ if ($('#pwsave')) $('#pwsave').onclick = async () => {
 // --- connected accounts: link a social login to this account ---------------
 // The link door, not the login door: you are already signed in, and the
 // provider gets attached to the account you are in.
+// --- social sign-in, from a browser or from the Android shell -------------
+// Google and the rest refuse OAuth inside an embedded webview, so in the app the
+// whole flow goes to a Custom Tab and comes back over the fireside:// scheme.
+// `app=1` is how the server knows to hand the finished session back instead of
+// setting a cookie in a tab that will be closed.
+const IN_APP = !!(window.NativeMedia && window.NativeMedia.openAuth);
+function socialStart(url) {
+  const full = url.startsWith('http') ? url : (location.origin + url);
+  if (IN_APP) { try { window.NativeMedia.openAuth(full + (full.includes('?') ? '&' : '?') + 'app=1'); return; } catch (_) {} }
+  location.href = full;
+}
 async function loadLinked() {
   const box = $('#oauthrows'); if (!box) return;
   box.innerHTML = '';
@@ -1301,7 +1312,7 @@ async function loadLinked() {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'btn quiet';
     b.textContent = on ? 'Connected' : 'Link ' + p.label;
     b.disabled = !!on;
-    b.onclick = () => { location.href = p.start + '?link=1'; };
+    b.onclick = () => socialStart(p.start + (p.start.includes('?') ? '&' : '?') + 'link=1');
     row.append(name, b); box.append(row);
   });
 }
@@ -1822,7 +1833,7 @@ function renderAuth() {
   AUTH.providers.filter(p => p.kind !== 'local' && p.start).forEach(p => {
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'btn ghost'; b.textContent = 'Continue with ' + p.label;
-    b.onclick = () => { location.href = p.start; };
+    b.onclick = () => socialStart(p.start);
     provs.append(b);
   });
 }
@@ -1932,6 +1943,11 @@ async function requireSession() {
     $('#lockpass').focus();
     return false;
   }
+  try {
+    // Back from a browser-tab sign-in that expired on the way home.
+    const back = new URLSearchParams(location.search).get('app');
+    if (back === 'again') setTimeout(() => fail('That sign-in expired before it reached the app. Try again.'), 300);
+  } catch (_) {}
   if (claim) {                      // a social login collided; prove the account
     AUTH.mode = 'claim'; AUTH.claim = claim;
     await renderClaim();
@@ -1976,7 +1992,7 @@ async function renderClaim() {
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'btn ghost';
       b.textContent = 'Continue with ' + p.label;
-      b.onclick = () => { location.href = p.start + '?claim=' + encodeURIComponent(AUTH.claim); };
+      b.onclick = () => socialStart(p.start + '?claim=' + encodeURIComponent(AUTH.claim));
       provs.append(b);
     });
     if (d.has_password) { pfield.focus(); }

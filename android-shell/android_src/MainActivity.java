@@ -1,6 +1,8 @@
 package com.stolworthy.fireside;
 
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.Uri;
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
@@ -66,6 +68,31 @@ public class MainActivity extends BridgeActivity {
             });
         }
 
+        /**
+         * Open a sign-in page outside the webview.
+         *
+         * Google (and Apple, and Microsoft) refuse OAuth inside an embedded
+         * webview, so the flow must happen in a real browser tab. It comes back
+         * over fireside://auth?token=... and onNewIntent() finishes it here.
+         */
+        @JavascriptInterface
+        public void openAuth(final String url) {
+            final String u = normalize(url);
+            if (u == null) return;
+            runOnUiThread(new Runnable() {
+                public void run() {
+                    try {
+                        new androidx.browser.customtabs.CustomTabsIntent.Builder()
+                            .build()
+                            .launchUrl(MainActivity.this, Uri.parse(u));
+                    } catch (Throwable t) {
+                        // no Custom Tabs provider on this device: any browser is fine
+                        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(u)));
+                    }
+                }
+            });
+        }
+
         /** Forget the server and return to the first-run screen. */
         @JavascriptInterface
         public void reset() {
@@ -78,6 +105,34 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    /**
+     * Turn a fireside://auth?token=... return into the one URL the webview must
+     * load: the server redeems that token once and sets the session cookie in
+     * the webview's own jar. Anything else here is not ours to handle.
+     */
+    private void handleAuthReturn(Intent intent) {
+        if (intent == null || intent.getData() == null) return;
+        Uri d = intent.getData();
+        if (!"fireside".equals(d.getScheme())) return;
+        String token = d.getQueryParameter("token");
+        String server = normalize(prefs().getString(KEY_URL, ""));
+        if (token == null || token.isEmpty() || server == null) return;
+        final String url = server.replaceAll("/+$", "") + "/auth/app/session?token="
+                + Uri.encode(token);
+        runOnUiThread(new Runnable() {
+            public void run() {
+                WebView wv = getBridge().getWebView();
+                if (wv != null) wv.loadUrl(url);
+            }
+        });
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        handleAuthReturn(intent);
+    }
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -88,6 +143,8 @@ public class MainActivity extends BridgeActivity {
             if (!saved.isEmpty()) {
                 webView.loadUrl(saved);
             }
+            // a signed-in return can also be the launch intent (app was cold)
+            handleAuthReturn(getIntent());
         }
     }
 }
