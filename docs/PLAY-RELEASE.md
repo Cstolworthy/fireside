@@ -73,12 +73,18 @@ correction, not a second Play account.
 8. Internal testing track first: install on a real device from Play, confirm the
    first-run URL, login, and a book starts narrating.
 
-## Code still open before production
+## Code status before production
 
-- In-app account deletion (Play requires a delete path in the app, not only a
-  web page). `Settings > Account > Delete account` posting to the existing
-  `/api/account/delete` route, with the confirmation phrase.
-- Play requires a privacy policy URL on the listing: `https://readfireside.com/privacy`.
+- In-app account deletion: DONE, and verified on production, not just in tests.
+  `Settings > Account > Delete account` posts to `/account/delete` with the
+  account's password (or the phrase `delete my account` for social-only
+  accounts). Live check 2026-10-23 18:00Z: registered a throwaway local account,
+  called the route, then `/me` returned `authenticated: false` and signing in
+  again with the same credentials returned `invalid username or password`. The
+  public web path `https://readfireside.com/delete-account` is up (200) and
+  names the email fallback for people who uninstalled the app. Play wants both
+  halves; both are real.
+- Privacy policy URL on the listing: `https://readfireside.com/privacy` (200).
 
 ## Business address and registered agent (2026-10-23)
 
