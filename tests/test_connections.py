@@ -195,3 +195,26 @@ class TestConnections(ConnBase):
         self.assertEqual(d["default_voice"], "vv")
         # the admin set nothing, so their default is untouched
         self.assertEqual(self.get(admin, "/connections")["default_voice"], "")
+    def test_reading_prefs_are_per_user_and_survive_a_voice_save(self):
+        admin, cid = self._admin_with_house()
+        u = self.browser()
+        self.signup(u, "cat")
+        # defaults before anything is saved
+        d = self.get(u, "/connections")["reading"]
+        self.assertEqual(d, {"highlight": True, "scroll": True, "mode": "follow"})
+        self.post(u, "/prefs", {"reading": {"highlight": True, "scroll": False, "mode": "center"}})
+        d = self.get(u, "/connections")["reading"]
+        self.assertEqual(d, {"highlight": True, "scroll": False, "mode": "center"})
+        # saving a default voice is a different row write; it must not wipe it
+        self.post(u, "/prefs", {"default_connection_id": cid, "default_voice": "vv"})
+        d = self.get(u, "/connections")["reading"]
+        self.assertEqual(d, {"highlight": True, "scroll": False, "mode": "center"})
+        # a partial update merges into what is stored
+        self.post(u, "/prefs", {"reading": {"scroll": True}})
+        self.assertEqual(self.get(u, "/connections")["reading"]["mode"], "center")
+        # a mode nobody offers falls back instead of sticking
+        self.post(u, "/prefs", {"reading": {"mode": "sideways", "highlight": False}})
+        d = self.get(u, "/connections")["reading"]
+        self.assertEqual(d, {"highlight": False, "scroll": True, "mode": "center"})
+        # and none of it reached the admin
+        self.assertEqual(self.get(admin, "/connections")["reading"]["mode"], "follow")

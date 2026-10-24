@@ -143,24 +143,54 @@ def resolve(conn, uid, conn_id):
     return merged
 
 
+# How the player reads along. Highlight is the sentence mark; scroll follows
+# it, either always (center) or only when it leaves the screen (follow).
+READING_DEFAULTS = {"highlight": True, "scroll": True, "mode": "follow"}
+READING_MODES = ("center", "follow")
+
+
+def reading_prefs(raw, base=None):
+    """One reading-preferences bag, defaults filled in.
+
+    Unknown keys are dropped and a mode nobody offers falls back, so a stored
+    value from an older or a hand-edited client cannot leave the player in a
+    state with no behaviour.
+    """
+    out = dict(READING_DEFAULTS if base is None else base)
+    if not isinstance(raw, dict):
+        return out
+    for k in ("highlight", "scroll"):
+        if k in raw:
+            out[k] = bool(raw[k])
+    if "mode" in raw:
+        out["mode"] = raw["mode"] if raw["mode"] in READING_MODES else out["mode"]
+    return out
+
+
 def get_prefs(conn, uid):
-    r = conn.execute("SELECT default_connection_id,default_voice FROM user_prefs "
+    r = conn.execute("SELECT default_connection_id,default_voice,reading FROM user_prefs "
                      "WHERE user_id=?", (uid,)).fetchone()
+    reading = _loads(r["reading"]) if r else {}
     return {"default_connection_id": (r["default_connection_id"] if r else "") or "",
-            "default_voice": (r["default_voice"] if r else "") or ""}
+            "default_voice": (r["default_voice"] if r else "") or "",
+            "reading": reading_prefs(reading)}
 
 
-def set_prefs(conn, uid, connection_id=None, voice=None):
+def set_prefs(conn, uid, connection_id=None, voice=None, reading=None):
     """None leaves a field alone; "" clears it."""
     cur = get_prefs(conn, uid)
     cid = cur["default_connection_id"] if connection_id is None else connection_id
     v = cur["default_voice"] if voice is None else voice
-    # carry `pron` through: INSERT OR REPLACE drops any column left out of
-    # the list, so saving a default voice must not wipe the pronunciation list.
-    row = conn.execute("SELECT pron FROM user_prefs WHERE user_id=?", (uid,)).fetchone()
+    # carry `pron` and `reading` through: INSERT OR REPLACE drops any column
+    # left out of the list, so saving a default voice must not wipe either.
+    row = conn.execute("SELECT pron,reading FROM user_prefs WHERE user_id=?", (uid,)).fetchone()
     bag = (row["pron"] if row and row["pron"] else "") or ""
+    rd = (row["reading"] if row and row["reading"] else "") or ""
+    if reading is not None:
+        rd = json.dumps(reading_prefs(reading, cur["reading"]))
     conn.execute(
         "INSERT OR REPLACE INTO user_prefs"
-        "(user_id,default_connection_id,default_voice,pron,updated_at) VALUES(?,?,?,?,?)",
-        (uid, cid or "", v or "", bag, now()))
+        "(user_id,default_connection_id,default_voice,pron,reading,updated_at) "
+        "VALUES(?,?,?,?,?,?)",
+        (uid, cid or "", v or "", bag, rd, now()))
     conn.commit()

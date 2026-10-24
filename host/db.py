@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS connection_overrides (
     PRIMARY KEY (user_id, connection_id));
 CREATE TABLE IF NOT EXISTS user_prefs (
     user_id VARCHAR(128) PRIMARY KEY, default_connection_id VARCHAR(128),
-    default_voice VARCHAR(255), pron TEXT, updated_at VARCHAR(32));
+    default_voice VARCHAR(255), pron TEXT, reading TEXT, updated_at VARCHAR(32));
 CREATE TABLE IF NOT EXISTS subscriptions (
     user_id VARCHAR(128) PRIMARY KEY, plan VARCHAR(64), status VARCHAR(32),
     provider VARCHAR(32), reference VARCHAR(191), current_period_end BIGINT DEFAULT 0,
@@ -251,6 +251,9 @@ _ADDED_COLUMNS = [
     ("books", "published", "VARCHAR(64) DEFAULT ''"),
     ("books", "description", "TEXT"),
     ("user_prefs", "pron", "TEXT"),
+    # how the player reads along: highlight, scroll, scroll mode. JSON, because
+    # it is one small bag of preferences and not a thing anything else queries.
+    ("user_prefs", "reading", "TEXT"),
     ("renditions", "pron", "VARCHAR(16) DEFAULT ''"),
     # device tracking on a session: a public id to name it, and what it is.
     ("sessions", "sid", "VARCHAR(32) DEFAULT ''"),
