@@ -542,6 +542,12 @@
     </div>
 
     <div class="setpanel" data-p="plan">
+      <h3 style="margin-top:24px">Characters</h3>
+      <p class="sub">A metered voice charges by the character. Voices you connect yourself are not metered and do not touch this number.</p>
+      <div id="creditsbox" class="small" style="margin-top:8px">Checking your character balance…</div>
+      <div id="creditsrate" class="sub" style="margin-top:6px"></div>
+      <div id="creditsbuy" style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap"></div>
+      <div id="creditsmsg" class="sub" style="margin-top:8px"></div>
       <h3 style="margin-top:24px">Plan &amp; storage</h3>
       <p class="sub">Your tier sets how much you can keep. Storage counts once per book you hold; delete a book and its bytes come back.</p>
       <div id="planusage" class="small" style="margin-top:8px">loading…</div>
@@ -843,6 +849,19 @@ function failure(msg, status, data) {
 }
 const jpost = (p, o) => api(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(o) });
 
+// A refusal that carries numbers is a different sentence from one that does not.
+// "insufficient balance" leaves a reader stuck; "needs 41,200, you have 12,400"
+// tells them what to do about it. The server sends the numbers, this formats them.
+function errorText(e) {
+  const d = (e && e.data) || {};
+  if (d.needed != null && d.available != null) {
+    return 'Not enough characters for this run: it needs ' + nchar(d.needed)
+      + ' and you have ' + nchar(d.available) + ' available.';
+  }
+  if (d.reason) return String(e.message) + ': ' + d.reason;
+  return String(e && e.message ? e.message : e);
+}
+
 // --- status ----------------------------------------------------------------
 // --- notices: one ribbon that persists, toasts that pass, and the bell -----
 // A voice run can take minutes and the page must stay usable: the ribbon is
@@ -867,7 +886,7 @@ function idle(t) { clearInterval(_tick); $('#rcancel').hidden = true; $('#rspin'
   _hideTimer = setTimeout(() => { _ribbon('', ''); }, 6000); }
 function fail(e) { clearInterval(_tick); $('#rcancel').hidden = true; $('#rspin').style.display = 'none'; $('#rtime').textContent = '';
   $('#rprog').style.display = 'none';
-  const msg = String(e && e.message ? e.message : e);
+  const msg = errorText(e);
   _ribbon('on bad', msg); $('#rdismiss').hidden = false; $('#err').textContent = msg;
   toast('bad', msg); bellRaise(); }
 function toast(kind, text) {
@@ -941,6 +960,7 @@ function setSetTab(p) {
   bar.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === btn));
   document.querySelectorAll('#v-set .setpanel').forEach(el => el.classList.toggle('on', el.dataset.p === p));
   try { localStorage.setItem(SETTAB_KEY, p); } catch (_) {}
+  if (p === 'plan') loadCredits();
 }
 if ($('#settabs')) document.querySelectorAll('#settabs button').forEach(b => b.onclick = () => setSetTab(b.dataset.p));
 
@@ -1501,6 +1521,105 @@ async function loadGrants() {
     row.append(mk('unlimited chars', 'credits_unlimited'));
     box.append(row);
   });
+}
+// --- characters: the balance, the rate, and the one buy button -------------
+// The server is the authority on what a character costs: /credits carries the
+// sale connection's own rate and bundles, and this panel formats what it is
+// handed. It computes nothing, so money has exactly one source of truth.
+// The states matter more than the happy path: nobody is selling, selling is off,
+// a run is holding part of the balance. Those are three different sentences.
+let CREDITS = null;
+function nchar(n) {
+  if (n == null) return '\u2014';
+  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+function money(n) { return '$' + (Math.round(n * 100) / 100).toFixed(2); }
+async function loadCredits() {
+  const box = $('#creditsbox'); if (!box) return;
+  if (!USER) {
+    box.textContent = 'Sign in to see your character balance.';
+    clearCredits(); $('#creditsrate').textContent = ''; return;
+  }
+  box.textContent = 'Checking your character balance\u2026';
+  let d;
+  try { d = await api('/credits'); }
+  catch (e) {
+    CREDITS = null;
+    box.textContent = e.status === 401
+      ? 'Sign in to see your character balance.'
+      : 'Couldn\u2019t reach the server. The number below may be out of date.';
+    $('#creditsrate').textContent = '';
+    clearCredits();
+    if (e.status !== 401) {
+      const again = document.createElement('button');
+      again.className = 'btn quiet'; again.type = 'button'; again.textContent = 'Retry';
+      again.onclick = loadCredits;
+      $('#creditsbuy').append(again);
+    }
+    return;
+  }
+  CREDITS = d;
+  const avail = d.available || 0, held = d.reserved || 0;
+  box.textContent = avail > 0
+    ? nchar(avail) + ' characters left.'
+    : '0 characters. A render through the metered voice will be refused until you buy capacity.';
+  if (held > 0) box.textContent += ' \u00b7 ' + nchar(held) + ' held by a run in progress.';
+  const sale = d.sale;
+  $('#creditsrate').textContent = !sale
+    ? 'No voice server is selling characters right now, so there is nothing to buy here. Your own connected voices still work.'
+    : (sale.rate_per_1m_chars == null
+      ? 'This voice server does not publish a rate, so the price is only known at checkout.'
+      : 'Characters cost ' + money(sale.rate_per_1m_chars) + ' per million.');
+  drawCreditsBuy(d);
+}
+function clearCredits() {
+  const b = $('#creditsbuy'); if (b) b.innerHTML = '';
+  const m = $('#creditsmsg'); if (m) m.textContent = '';
+}
+function drawCreditsBuy(d) {
+  const box = $('#creditsbuy'); if (!box) return;
+  box.innerHTML = '';
+  const sale = d.sale;
+  if (!sale) return;                  // never a button that can only 400
+  const can = !!d.payments_configured;
+  const msg = t => { const m = $('#creditsmsg'); if (m) m.textContent = t; };
+  const buy = usd => async () => {
+    msg('Charging\u2026');
+    try {
+      const r = await jpost('/credits/purchase', { usd: Number(usd) });
+      msg('+' + nchar(r.chars) + ' characters. Reference ' + r.reference + '.');
+      await loadCredits();
+    } catch (e) {
+      if (e.status === 503) msg('Buying is not switched on yet, so nothing was charged.');
+      else if (e.status === 402) msg('The payment was refused. Nothing was charged. ' + ((e.data || {}).detail || ''));
+      else if (e.status === 400) msg('That amount does not buy any characters. Try a larger one.');
+      else msg(e.message || 'could not buy characters');
+    }
+  };
+  const bundles = (sale.bundles || []).filter(b => b && b.usd != null);
+  if (bundles.length) {
+    bundles.forEach(b => {
+      const btn = document.createElement('button');
+      btn.className = 'btn'; btn.type = 'button';
+      btn.textContent = money(b.usd) + (b.chars ? ' \u00b7 ' + nchar(b.chars) + ' chars' : '');
+      btn.disabled = !can; if (!can) btn.title = 'Not for sale yet';
+      btn.onclick = buy(b.usd);
+      box.append(btn);
+    });
+  } else {
+    const inp = document.createElement('input');
+    inp.type = 'number'; inp.min = '1'; inp.value = '5'; inp.style.maxWidth = '90px';
+    const btn = document.createElement('button');
+    btn.className = 'btn'; btn.type = 'button'; btn.textContent = 'Buy characters';
+    btn.disabled = !can; if (!can) btn.title = 'Not for sale yet';
+    btn.onclick = () => buy(Math.max(1, parseFloat(inp.value || '0')));
+    box.append(inp, btn);
+  }
+  if (!can) {
+    const note = document.createElement('span'); note.className = 'small';
+    note.textContent = 'Buying is not switched on yet, so nothing can be charged.';
+    box.append(note);
+  }
 }
 // --- plan & storage --------------------------------------------------------
 function fmtBytes(n) { n = n || 0;
