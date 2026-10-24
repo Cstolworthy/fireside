@@ -173,6 +173,17 @@ def find_by_meta(conn, user_id, key, value):
 def list_books(conn, user_id):
     rows = conn.execute(
         "SELECT * FROM books WHERE user_id=? ORDER BY created_at DESC", (user_id,))
+    # The shelf is the one place a series has to be visible as a container, so
+    # memberships ride along with the books in two queries instead of two per
+    # book. Places are stored 0-based and reported 1-based, same as the panel.
+    mine = {}
+    for m in conn.execute(
+            "SELECT b.book_id, s.id, s.name, b.place FROM series_books b"
+            " JOIN series s ON s.id=b.series_id WHERE s.user_id=?", (user_id,)):
+        mine.setdefault(m["book_id"], []).append(
+            {"id": m["id"], "name": m["name"], "place": (m["place"] or 0) + 1})
+    counts = {r["id"]: r["c"] for r in conn.execute(
+        "SELECT series_id id, COUNT(*) c FROM series_books GROUP BY series_id")}
     out = []
     for r in rows:
         n = conn.execute("SELECT COUNT(*) c FROM chapters WHERE book_id=?",
@@ -183,7 +194,9 @@ def list_books(conn, user_id):
         out.append({"id": r["id"], "title": r["title"],
                     "author": (r["author"] or ""),
                     "created_at": r["created_at"], "chapters": n, "rendered": done,
-                    "cover": r["cover_ref"] or ""})
+                    "cover": r["cover_ref"] or "",
+                    "series": [dict(s, count=counts.get(s["id"], 1))
+                               for s in mine.get(r["id"], [])]})
     return out
 
 

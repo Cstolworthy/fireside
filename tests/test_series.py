@@ -239,6 +239,23 @@ class TestSeriesRoutes(unittest.TestCase):
         stuck = self._post("/series/move", {"series": sid, "book": self.books[1], "dir": -1})
         self.assertFalse(stuck["moved"])
 
+    def test_the_shelf_carries_the_series_place_and_count(self):
+        """The shelf is where a series has to be visible as a container, so
+        /library must say which series a book is in and where, or the client
+        can only find out one book at a time."""
+        sid = self._post("/series", {"op": "create", "name": "Saga"})["series"][0]["id"]
+        for b in self.books:
+            self._post("/book/series", {"book": b, "series": sid})
+        shelf = self._get("/library?user=u1")
+        by_id = {b["id"]: b for b in shelf}
+        self.assertEqual(by_id[self.books[0]]["series"][0]["name"], "Saga")
+        self.assertEqual(by_id[self.books[0]]["series"][0]["place"], 1)
+        self.assertEqual(by_id[self.books[1]]["series"][0]["place"], 2)
+        self.assertEqual(by_id[self.books[1]]["series"][0]["count"], 2)
+
+    def test_a_loose_book_says_no_series_on_the_shelf(self):
+        self.assertEqual(self._get("/library?user=u1")[0]["series"], [])
+
     def test_a_hand_edit_raises_user_edited_and_unlocks(self):
         got = self._post("/book/meta", {"book": self.books[0], "title": "Mine",
                                         "author": "Me"})
