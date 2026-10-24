@@ -102,6 +102,23 @@ WEB_MAIN = "<html><body><main><p>%s</p></main></body></html>" % ("main text " * 
 WEB_BARE = "<html><body><p>%s</p></body></html>" % ("bare body text " * 30)
 WEB_THIN = "<html><body><article><p>too short</p></article></body></html>"
 
+# Wordpress with a related-posts plugin: the real story sits in .entry-content,
+# then six tiny <article> widgets and a comment thread follow it. Taking the
+# first <article> on the page is how a 20k-word chapter read as "no readable
+# text" (quantumbang.org, 2026-10-23).
+_WP_STORY = "story words that must be read aloud " * 12
+_WP_RELATED = """<html><head><title>A Part</title></head><body>
+<div class="entry-content">
+  <div class="form-custom-fields-container above-content"></div>
+  <div class="inner"><p>%s</p></div>
+</div>
+<article class="post related"><h3><a href="/x">Related one</a></h3></article>
+<article class="post related"><h3><a href="/y">Related two</a></h3></article>
+<article class="post related"><h3><a href="/z">Related three</a></h3></article>
+<div id="comments"><h3>4 Comments:</h3><div class="comment-body"><p>Bravo!</p></div></div>
+<div id="respond"><h3>Leave a Reply</h3></div>
+</body></html>""" % _WP_STORY
+
 
 class TestWebParse(unittest.TestCase):
     def test_article_and_title(self):
@@ -113,6 +130,17 @@ class TestWebParse(unittest.TestCase):
     def test_main_and_body_fallbacks(self):
         self.assertIn("main text", web.parse_web(WEB_MAIN, "https://e.com")["chapters"][0]["text"])
         self.assertIn("bare body", web.parse_web(WEB_BARE, "https://e.com")["chapters"][0]["text"])
+
+    def test_biggest_container_wins_not_the_first_article(self):
+        b = web.parse_web(_WP_RELATED, "https://quantumbang.org/a/")
+        text = b["chapters"][0]["text"]
+        self.assertIn("must be read aloud", text)
+        for junk in ("Related one", "Related two", "Bravo!", "Leave a Reply", "4 Comments"):
+            self.assertNotIn(junk, text)
+
+    def test_nested_divs_do_not_truncate_the_container(self):
+        text = web.parse_web(_WP_RELATED, "https://e.com")["chapters"][0]["text"]
+        self.assertEqual(text.count("must be read aloud"), _WP_STORY.count("must be read aloud"))
 
     def test_thin_page_is_refused(self):
         with self.assertRaises(ValueError):
