@@ -162,3 +162,58 @@ owns the quirk of how the site wants to be fetched.
   is expansion, not revenue: do not let it eat the hosted-billing path.
 - Signed history and a hosted multi-user credential store (server-side,
   encrypted) for the credential that is browser-side today.
+
+
+## v2: the readers live in the plugins (2026-10-23)
+
+Chris's call, after two special cases had grown in-tree: pull the sources out
+into real plugin packages, not adapters over `sources/<site>.py`.
+
+    plugins/reader/epub/plugin.py         uploads
+    plugins/reader/ao3/plugin.py          AO3 works (browser transport + cookie)
+    plugins/reader/quantumbang/plugin.py  a story split across numbered pages
+    plugins/reader/web/plugin.py          any other http(s) link (fallback)
+
+Each folder carries its own matching, parsing, settings and transport, and
+imports no other plugin. Shared machinery moved to the host, where it belongs:
+
+- `host/egress.py` - the one socket, credential scope, transport policy
+  (was `sources/_fetch.py`)
+- `host/egress_backends.py` - plain / browser (was `sources/_backends.py`)
+- `host/textutil.py` - element -> text, and page -> the container worth reading
+  (was `sources/_text.py`; the page reader is generic HTML, not site knowledge,
+  so every reader that reads article pages shares it)
+- `host/contracts.py` - `Field` gained `placeholder` and `.dict()`, so a plugin
+  declares a settings row without shipping one
+
+`sources/__init__.py` is now a v1 shim only: the same registry, built by
+discovering the plugins, for the old `server.py` and the v1 tests. Adding a
+site = adding a folder under `plugins/reader/` + a `plugin.json`. Nothing in the
+host, nothing in `sources/`.
+
+## quantumbang: parts, not pages (2026-10-23)
+
+A Quantum Bang story is published as N pages whose slug carries the part:
+
+    hidden-resources-for-young-men-of-quality-1-5-meyarimcfarland
+                                              ^^^  part 1 of 5
+
+So a page's family key is its slug minus any `-N/M-` segment, and every page of
+one story shares it. The reader takes any page of the story (landing page or a
+part), collects the family from the page's own links, fetches each part once,
+and returns one book with chapters `Part 1 of N` ... in order.
+
+Two deliberate refusals:
+
+- **It does not follow `rel="next"`.** On this site that chain walks out of the
+  story into whatever else the tag links to (the reason part-chaining was
+  flagged as unsafe before). The slug family is the guard, so the crawl stops
+  where the story stops.
+- **It does not read the repeated metadata block.** Each part repeats
+  `Title: / Author: / Fandom: / ... / Summary:`. That block is parsed once into
+  the book's meta and dropped from every chapter, so warnings are not read
+  aloud between parts. A "header" needs at least three `Key: value` paragraphs,
+  so a story line containing a colon is never eaten.
+
+Comment threads and related-post widgets are dropped by the shared page reader,
+so a chapter never ends with "4 Comments: Bravo! Leave a Reply".
