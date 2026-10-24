@@ -287,6 +287,42 @@ class TestProviderIdentity(unittest.TestCase):
         ident = a.identity("simplelogin", "tok")
         self.assertTrue(ident["email_verified"])
 
+    def test_facebook_identity_with_an_address_is_verified(self):
+        a = self._auth({"https://graph.facebook.com/me?fields=id,name,email": {
+            "id": "1024", "name": "Sam", "email": "sam@example.com"}})
+        ident = a.identity("facebook", "tok")
+        self.assertEqual(ident["subject"], "1024")
+        self.assertEqual(ident["email"], "sam@example.com")
+        self.assertTrue(ident["email_verified"])
+
+    def test_facebook_without_an_address_links_nothing(self):
+        a = self._auth({"https://graph.facebook.com/me?fields=id,name,email": {
+            "id": "1024", "name": "Sam"}})
+        ident = a.identity("facebook", "tok")
+        self.assertEqual(ident["subject"], "1024")
+        self.assertFalse(ident["email_verified"])
+
+    def test_x_identity_is_the_nested_shape_and_has_no_email(self):
+        a = self._auth({"https://api.x.com/2/users/me": {
+            "data": {"id": "77", "name": "Sam", "username": "sam"}}})
+        ident = a.identity("x", "tok")
+        self.assertEqual(ident["subject"], "77")
+        self.assertEqual(ident["name"], "Sam")
+        self.assertEqual(ident["email"], "")
+        self.assertFalse(ident["email_verified"])
+
+    def test_x_authorize_url_carries_pkce_and_facebook_does_not(self):
+        os.environ["FIRESIDE_OAUTH_X_CLIENT_ID"] = "cid"
+        os.environ["FIRESIDE_OAUTH_X_SECRET"] = "sec"
+        a = auth.Auth(db.connect(":memory:"))
+        verifier, _ch = auth.new_pkce()
+        url = a.authorize_url("x", "https://readfireside.com/auth/x/callback",
+                              "st", verifier)
+        self.assertIn("code_challenge_method=S256", url)
+        self.assertIn("code_challenge=", url)
+        with self.assertRaises(auth.AuthError):
+            a.authorize_url("x", "https://readfireside.com/auth/x/callback", "st")
+
     def test_simplelogin_without_an_email_links_nothing(self):
         a = self._auth({"https://app.simplelogin.io/oauth2/userinfo": {
             "sub": "38", "name": "Sam"}})
@@ -318,7 +354,7 @@ class TestProviderIdentity(unittest.TestCase):
             a = auth.Auth(db.connect(":memory:"))
             p = {x["id"]: x for x in a.providers()}
             self.assertIn("simplelogin", p)
-            self.assertEqual(p["simplelogin"]["label"], "SimpleLogin")
+            self.assertEqual(p["simplelogin"]["label"], "Proton (SimpleLogin)")
         finally:
             del os.environ["FIRESIDE_OAUTH_SIMPLELOGIN_CLIENT_ID"]
             del os.environ["FIRESIDE_OAUTH_SIMPLELOGIN_SECRET"]

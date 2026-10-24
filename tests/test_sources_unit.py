@@ -9,8 +9,11 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from sources import _backends, _fetch, ao3, describe, ingest, request_key, web
-from sources.epub import Epub
+from host import egress as _fetch, egress_backends as _backends
+from plugins.reader.ao3 import plugin as ao3
+from plugins.reader.web import plugin as web
+from sources import describe, ingest, request_key
+from plugins.reader.epub.plugin import Epub
 
 
 AO3_PAGE = """
@@ -90,10 +93,10 @@ class TestAo3Parse(unittest.TestCase):
         self.assertFalse(s.matches({"kind": "upload"}))
         book = s.read({"url": "https://archiveofourown.org/works/1"},
                       lambda url, cred=None, credential_hosts=(): AO3_PAGE)
-        self.assertEqual(book["meta"]["source"], "ao3")
+        self.assertEqual(book.meta["source"], "ao3")
         self.assertEqual(s.credential_hosts(), ["archiveofourown.org"])
         self.assertEqual(s.transport()["backend"], "browser")
-        self.assertEqual([f.key for f in s.settings()], ["cookie"])
+        self.assertEqual([f.name for f in s.settings()], ["cookie"])
 
 
 WEB_PAGE = """<html><head><title>  A Page Title </title></head><body>
@@ -101,6 +104,23 @@ WEB_PAGE = """<html><head><title>  A Page Title </title></head><body>
 WEB_MAIN = "<html><body><main><p>%s</p></main></body></html>" % ("main text " * 30)
 WEB_BARE = "<html><body><p>%s</p></body></html>" % ("bare body text " * 30)
 WEB_THIN = "<html><body><article><p>too short</p></article></body></html>"
+
+# Wordpress with a related-posts plugin: the real story sits in .entry-content,
+# then six tiny <article> widgets and a comment thread follow it. Taking the
+# first <article> on the page is how a 20k-word chapter read as "no readable
+# text" (quantumbang.org, 2026-10-23).
+_WP_STORY = "story words that must be read aloud " * 12
+_WP_RELATED = """<html><head><title>A Part</title></head><body>
+<div class="entry-content">
+  <div class="form-custom-fields-container above-content"></div>
+  <div class="inner"><p>%s</p></div>
+</div>
+<article class="post related"><h3><a href="/x">Related one</a></h3></article>
+<article class="post related"><h3><a href="/y">Related two</a></h3></article>
+<article class="post related"><h3><a href="/z">Related three</a></h3></article>
+<div id="comments"><h3>4 Comments:</h3><div class="comment-body"><p>Bravo!</p></div></div>
+<div id="respond"><h3>Leave a Reply</h3></div>
+</body></html>""" % _WP_STORY
 
 
 class TestWebParse(unittest.TestCase):
@@ -114,6 +134,17 @@ class TestWebParse(unittest.TestCase):
         self.assertIn("main text", web.parse_web(WEB_MAIN, "https://e.com")["chapters"][0]["text"])
         self.assertIn("bare body", web.parse_web(WEB_BARE, "https://e.com")["chapters"][0]["text"])
 
+    def test_biggest_container_wins_not_the_first_article(self):
+        b = web.parse_web(_WP_RELATED, "https://quantumbang.org/a/")
+        text = b["chapters"][0]["text"]
+        self.assertIn("must be read aloud", text)
+        for junk in ("Related one", "Related two", "Bravo!", "Leave a Reply", "4 Comments"):
+            self.assertNotIn(junk, text)
+
+    def test_nested_divs_do_not_truncate_the_container(self):
+        text = web.parse_web(_WP_RELATED, "https://e.com")["chapters"][0]["text"]
+        self.assertEqual(text.count("must be read aloud"), _WP_STORY.count("must be read aloud"))
+
     def test_thin_page_is_refused(self):
         with self.assertRaises(ValueError):
             web.parse_web(WEB_THIN, "https://e.com")
@@ -124,7 +155,7 @@ class TestWebParse(unittest.TestCase):
         self.assertFalse(s.matches({"kind": "url", "url": "ftp://e.com"}))
         self.assertFalse(s.matches({"kind": "upload"}))
         book = s.read({"url": "https://e.com"}, lambda url, cred=None, credential_hosts=(): WEB_PAGE)
-        self.assertEqual(book["meta"]["url"], "https://e.com")
+        self.assertEqual(book.meta["url"], "https://e.com")
         self.assertEqual(s.settings(), [])
         self.assertEqual(s.credential_hosts(), [])
 
@@ -248,7 +279,7 @@ class TestRegistry(unittest.TestCase):
     def test_describe_covers_every_source(self):
         d = describe()
         ids = [s["id"] for s in d]
-        self.assertEqual(ids, ["epub", "ao3", "web"])
+        self.assertEqual(ids, ["epub", "ao3", "quantumbang", "web"])
         for s in d:
             self.assertIn("settings", s)
             self.assertIn("credential_hosts", s)
@@ -264,7 +295,7 @@ class TestRegistry(unittest.TestCase):
         s, key, book = ingest({"kind": "url", "url": "https://archiveofourown.org/works/9"},
                               fetcher=lambda url, cred=None, credential_hosts=(),
                               transport=None: AO3_PAGE)
-        self.assertIsInstance(s, ao3.Ao3)
+        self.assertEqual(s.id, "ao3")  # loaded by the plugin host under its own module name
         self.assertEqual(book["meta"]["source"], "ao3")
         self.assertTrue(key)
 

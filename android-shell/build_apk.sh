@@ -17,6 +17,7 @@ mkdir -p android/app/src/main/java/com/stolworthy/fireside
 cp android_src/MainActivity.java android_src/MediaPlaybackService.java \
    android/app/src/main/java/com/stolworthy/fireside/
 python3 android_src/patch_manifest.py android/app/src/main/AndroidManifest.xml
+python3 android_src/patch_gradle_deps.py android/app/build.gradle
 
 [ -f android/local.properties ] || echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 cd android

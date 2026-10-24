@@ -16,7 +16,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from ._backends import BACKENDS, DEFAULT_BACKEND
+from host.egress_backends import BACKENDS, DEFAULT_BACKEND
 
 UA = "Mozilla/5.0 (compatible; reader-local/1.0; personal read-aloud)"
 DEFAULT_LIMIT = 8 * 1024 * 1024

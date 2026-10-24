@@ -37,8 +37,8 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
-from host import accounting, auth, billing, connections, credentials, db, erase, example, grants, jobs, library, mailer, payments, playback, plans, pron, quota, stats
-from sources._fetch import fetch as _fetch
+from host import accounting, auth, billing, connections, credentials, db, erase, example, grants, jobs, library, mailer, payments, playback, plans, pron, quota, reading, stats
+from host.egress import fetch as _fetch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UI_DIR = os.path.join(BASE_DIR, "ui")
@@ -244,18 +244,47 @@ class App:
             return 400, {"error": "no reader matched"}
         cred = self._source_cred(user, plugin.id, body.get("cred"))
         book = plugin.obj.read(req, self._make_fetch(plugin.obj, cred), cred)
+        # Whatever identity the reader named, this account either already holds
+        # that work or it does not. Importing again is a replace, not a second
+        # copy: two of the same book on one shelf is a mistake, not a collection.
+        existing = library.find_same(self.conn, user,
+                                     getattr(book, "meta", None) or {}, plugin.obj)
+        if existing and _truthy(body.get("keep_both")):
+            existing = None
+        elif existing and not _truthy(body.get("replace")):
+            held = library.get_book(self.conn, existing) or {}
+            chs = library.chapters(self.conn, existing)
+            return 409, {
+                "error": "you already have this book",
+                "detail": "this is already on your shelf as \"%s\""
+                          % (held.get("title") or ""),
+                "existing": {"book_id": existing,
+                             "title": held.get("title") or "",
+                             "chapters": len(chs),
+                             "rendered": sum(1 for c in chs if c["audio_ref"])}}
         incoming = self._book_bytes(book)
+        # A replace only needs room for the difference: the chapter text and
+        # audio it is about to displace are already counted against this plan.
+        already = library.shelf_bytes(self.conn, existing) if existing else 0
         plan = (billing.get(self.conn, user) or {}).get("plan") or ""
         blocks = billing.blocks(self.conn, user)
         # The same gate every other write uses, so an admin storage grant lifts
         # an import too. Asking quota.check_room directly here skipped the grant
         # and refused a book to an account whose limit was already lifted.
-        if not self._storage_ok(user, incoming):
+        if not self._storage_ok(user, max(0, incoming - already)):
             left = max(0, quota.allowance_bytes(plan, blocks)
                        - quota.usage(self.conn, self.storage, user)["own_bytes"])
             return 507, {"error": "not enough storage",
                          "detail": "this book needs about %d bytes; %d left in your plan"
-                                   % (incoming, left)}
+                                   % (max(0, incoming - already), left)}
+        if existing:
+            swapped = library.replace_book(self.conn, self.storage, existing, book)
+            self._maybe_cover(existing, book)
+            out = {"book_id": existing, "title": getattr(book, "title", ""),
+                   "chapters": len(getattr(book, "chapters", [])),
+                   "replaced": True}
+            out.update(swapped)
+            return 200, out
         bid = library.add_book(self.conn, self.storage, user, book)
         self._maybe_cover(bid, book)
         return 200, {"book_id": bid, "title": getattr(book, "title", ""),
@@ -754,7 +783,8 @@ class App:
         # this exact voice (and rules) is a cache hit and costs the buyer
         # nothing. The whole-book estimate is the storage question, not the
         # money question, so the two are kept apart.
-        rules = pron.load(self.conn, user)
+        rules = pron.for_book(pron.load(self.conn, user), book_id,
+                              pron.book_author(self.conn, book_id))
         fresh = jobs.stale_book_chars(self.conn, self.storage, speech, book_id, todo,
                                       rules, voice, model, speed)
         res_id = None
@@ -769,7 +799,13 @@ class App:
                     res_id = accounting.reserve(self.conn, user, price,
                                                 getattr(quote, "currency", "USD"))
                 except accounting.Insufficient as e:
-                    return 402, {"error": "insufficient balance", "detail": str(e)}
+                    # The numbers travel with the refusal. The two words on their
+                    # own leave a reader with no idea how far short they are, and
+                    # the screen can only print what it is sent.
+                    return 402, {"error": "insufficient balance",
+                                 "needed": price,
+                                 "available": accounting.available(self.conn, user),
+                                 "detail": str(e)}
         jid = jobs.start_job(self.conn, user, book_id, speech.id, voice, model,
                              total=len(todo), status="queued")
         opts = {"model": model, "speed": speed}
@@ -1145,7 +1181,15 @@ class App:
         except (KeyError, ValueError):
             return 404, {"error": "no chapter"}
         rows = [c for c in library.chapters(self.conn, q["book"]) if c["idx"] == idx]
-        return 200, {"text": t, "title": rows[0]["title"] if rows else ""}
+        # Reading blocks: the same text cut into sentences, each weighted by how
+        # long the voice takes to say it, so the player can mark the one it is
+        # speaking. Weights use the pronounced text, because that is what was
+        # recorded. A client that does not know this field renders `text`.
+        uid = self._uid(q, body)
+        rules = pron.load(self.conn, uid) if uid else []
+        blocks = reading.sentences(t, weigh=lambda s: len(pron.spoken(s, rules)))
+        return 200, {"text": t, "title": rows[0]["title"] if rows else "",
+                     "sentences": blocks}
 
     def chapter(self, q, body):
         idx = int(q["idx"])
@@ -1343,7 +1387,8 @@ class App:
         prefs = connections.get_prefs(self.conn, uid)
         return 200, {"connections": out, "admin": is_admin,
                      "default_connection_id": prefs["default_connection_id"],
-                     "default_voice": prefs["default_voice"]}
+                     "default_voice": prefs["default_voice"],
+                     "reading": prefs["reading"]}
 
     def _writable_fields(self, provider, uid, is_admin):
         """The field-name -> kind map for a provider (who may write what is
@@ -1408,6 +1453,8 @@ class App:
             kw["connection_id"] = body.get("default_connection_id") or ""
         if "default_voice" in body:
             kw["voice"] = body.get("default_voice") or ""
+        if "reading" in body and isinstance(body.get("reading"), dict):
+            kw["reading"] = body.get("reading")
         connections.set_prefs(self.conn, uid, **kw)
         return 200, {"ok": True}
 
@@ -1617,6 +1664,31 @@ class App:
 
     # ---- erasing the account --------------------------------------------------
 
+    # ---- the account's own password --------------------------------------------
+
+    def account_password(self, q, body):
+        """Set or change the signed-in account's password.
+
+        A password account must give the current one. A social-only account has
+        none, so it names itself a sign-in name and gets a password. Either way
+        every OTHER session is revoked: a password change should end sessions
+        won under the old one, while the device doing the changing stays in.
+        """
+        uid = (q or {}).get("_user") or ""
+        if not uid:
+            return 401, {"error": "auth required"}
+        body = body or {}
+        try:
+            name = auth.set_password(self.conn, uid,
+                                     body.get("current") or "",
+                                     body.get("password") or "",
+                                     body.get("username") or "")
+        except auth.AuthError as e:
+            return 400, {"error": str(e)}
+        ended = auth.revoke_sessions(self.conn, uid, (q or {}).get("_token") or "")
+        return 200, {"ok": True, "username": name, "has_password": True,
+                     "ended": ended}
+
     def account_delete(self, q, body):
         """Erase the signed-in account for good: books, voiced audio, history,
         credentials, and sign-ins.
@@ -1675,6 +1747,7 @@ POST_ROUTES = {
     "/render": "render", "/voices": "voices",
     "/book/renditions/delete": "remove_renditions", "/book/delete": "delete_book",
     "/account/delete": "account_delete",
+    "/account/password": "account_password",
     "/speak": "speak",
     "/cover": "put_cover", "/cover/auto": "cover_auto", "/cover/clear": "clear_cover",
     "/book/details": "fetch_details",
@@ -1772,6 +1845,9 @@ def make_handler(app):
                 redirect_uri = self._base_url() + "/auth/%s/callback" % pid
                 if action == "start":
                     link = _truthy(q.get("link"))
+                    # ?app=1 means the browser tab was opened by the Android
+                    # shell, so the finished session has to be handed back.
+                    for_app = _truthy(q.get("app"))
                     claim = q.get("claim") or ""
                     uid = auth.session_user(app.conn, self._token()) or ""
                     if link and not uid:
@@ -1779,21 +1855,31 @@ def make_handler(app):
                     if claim:
                         auth.take_claim(app.conn, claim)   # expired/unknown -> AuthError
                     state = auth.new_state()
-                    url = app.auth.authorize_url(pid, redirect_uri, state)
+                    # PKCE providers (X) need a verifier kept for the callback.
+                    verifier, _challenge = auth.new_pkce()
+                    url = app.auth.authorize_url(pid, redirect_uri, state, verifier)
                     return self._redirect(url, [
                         self._cookie_str(auth.STATE_COOKIE, state, path="/auth", max_age=600),
                         self._cookie_str(auth.LINK_COOKIE, uid if link else "",
                                          path="/auth", max_age=600),
                         self._cookie_str(auth.CLAIM_COOKIE, claim,
+                                         path="/auth", max_age=600),
+                        self._cookie_str(auth.APP_COOKIE, "1" if for_app else "",
+                                         path="/auth", max_age=600),
+                        self._cookie_str(auth.PKCE_COOKIE, verifier,
                                          path="/auth", max_age=600)])
                 if action == "callback":
                     if q.get("error"):
                         return self.send_error(400, "oauth error: %s" % q["error"])
                     if not q.get("state") or q["state"] != self._cookie(auth.STATE_COOKIE):
                         return self.send_error(400, "bad oauth state")
+                    for_app = bool(self._cookie(auth.APP_COOKIE))
+                    verifier = self._cookie(auth.PKCE_COOKIE)
                     clear = [self._cookie_str(auth.STATE_COOKIE, "", path="/auth", max_age=0),
                              self._cookie_str(auth.LINK_COOKIE, "", path="/auth", max_age=0),
-                             self._cookie_str(auth.CLAIM_COOKIE, "", path="/auth", max_age=0)]
+                             self._cookie_str(auth.CLAIM_COOKIE, "", path="/auth", max_age=0),
+                             self._cookie_str(auth.APP_COOKIE, "", path="/auth", max_age=0),
+                             self._cookie_str(auth.PKCE_COOKIE, "", path="/auth", max_age=0)]
                     link_user = self._cookie(auth.LINK_COOKIE)
                     claim_tok = self._cookie(auth.CLAIM_COOKIE)
                     if link_user:
@@ -1802,7 +1888,8 @@ def make_handler(app):
                         cur = auth.session_user(app.conn, self._token()) or ""
                         if cur != link_user:
                             return self.send_error(401, "session changed during link")
-                        app.auth.link(pid, q.get("code", ""), redirect_uri, link_user)
+                        app.auth.link(pid, q.get("code", ""), redirect_uri, link_user,
+                                      verifier)
                         return self._redirect("/?linked=%s" % pid, clear)
                     if claim_tok:
                         # proving ownership of an account a social login collided
@@ -1810,7 +1897,7 @@ def make_handler(app):
                         # proof. Wrong provider / not this account -> do nothing.
                         try:
                             ident = app.auth.identity_from_code(pid, q.get("code", ""),
-                                                                redirect_uri)
+                                                                redirect_uri, verifier)
                             uid = auth.complete_claim_via_identity(app.conn, claim_tok,
                                                                    pid, ident)
                         except auth.AuthError as e:
@@ -1823,7 +1910,15 @@ def make_handler(app):
                         return self._redirect("/", clear + [self._cookie_str(
                             auth.SESSION_COOKIE, token, max_age=auth.SESSION_TTL)])
                     uid, token = app.auth.login(pid, q.get("code", ""), redirect_uri,
-                                                ua=self._ua(), ip=self._ip())
+                                                ua=self._ua(), ip=self._ip(),
+                                                verifier=verifier)
+                    if for_app:
+                        # The tab cannot set the webview's cookie. Hand back a
+                        # one-time token and let /auth/app/session finish the
+                        # job inside the app.
+                        hand = auth.mint_app_handoff(app.conn, uid)
+                        return self._redirect(
+                            "/auth/app/done?token=" + urllib.parse.quote(hand), clear)
                     return self._redirect("/", clear + [self._cookie_str(
                         auth.SESSION_COOKIE, token, max_age=auth.SESSION_TTL)])
             except auth.AccountExistsError as e:
@@ -1836,11 +1931,57 @@ def make_handler(app):
                 return self._json(401, {"error": str(e)})
             return self.send_error(404)
 
+        def _app_auth_route(self, path, u):
+            """The Android app's two ends of a browser-tab sign-in.
+
+            /auth/app/done runs in the browser tab (or Custom Tab): it offers the
+            one tap that hands the token back over the fireside:// scheme, and
+            tries it on load. Browsers often refuse a scheme hop without a user
+            gesture, so the button is the path that always works.
+            /auth/app/session runs inside the app's webview: it spends the token
+            once, sets the normal session cookie there, and lands on the library.
+            """
+            from urllib.parse import parse_qs
+            q = {k: v[0] for k, v in parse_qs(u.query).items()}
+            token = q.get("token") or ""
+            if path == "/auth/app/session":
+                try:
+                    uid = auth.take_app_handoff(app.conn, token)
+                except auth.AuthError:
+                    # expired or already spent: the honest next step is the door
+                    return self._redirect("/?app=again")
+                tok = auth.create_session(app.conn, uid, "app",
+                                          ua=self._ua(), ip=self._ip())
+                return self._redirect("/", [self._cookie_str(
+                    auth.SESSION_COOKIE, tok, max_age=auth.SESSION_TTL)])
+            hand = "fireside://auth?token=" + urllib.parse.quote(token)
+            page = (
+                "<!doctype html><meta charset=utf-8>"
+                "<meta name=viewport content='width=device-width,initial-scale=1'>"
+                "<title>Back to fireside</title>"
+                "<body style=\"margin:0;background:#14110f;color:#ece3d3;"
+                "font:16px system-ui,sans-serif;display:flex;min-height:100vh;"
+                "align-items:center;justify-content:center;text-align:center\">"
+                "<div style='padding:24px;max-width:420px'>"
+                "<p>You are signed in.</p>"
+                "<p style='color:#b3a794;font-size:14px'>Tap to go back to the app.</p>"
+                "<p style='margin-top:22px'><a href=\"" + hand + "\" "
+                "style=\"display:inline-block;background:#e3a857;color:#241808;"
+                "padding:14px 22px;border-radius:10px;text-decoration:none;"
+                "font-weight:600\">Open fireside</a></p></div>"
+                "<script>setTimeout(function(){try{location.replace(" +
+                json.dumps(hand) + ")}catch(e){}},120)</script>")
+            return self._json(200, {"_html": page})
+
         def _dispatch(self, routes):
             from urllib.parse import urlparse, parse_qs
             u = urlparse(self.path)
             path = u.path.rstrip("/") or "/"
             parts = path.strip("/").split("/")
+            # before the /auth/<provider>/<action> branch: "app" is not a provider
+            if self.command == "GET" and path in ("/auth/app/session",
+                                                  "/auth/app/done"):
+                return self._app_auth_route(path, u)
             if (self.command == "GET" and len(parts) == 3 and parts[0] == "auth"):
                 return self._auth_route(parts, u)
             if path == "/auth/logout" and self.command == "POST":

@@ -6,8 +6,17 @@ appears in the text; `to` is how it should sound, spelled out for the engine
 the chapter text before any speech engine sees it, so every engine gets the fix,
 including the local one that cannot take phonemes.
 
-Rules are per user and global across their books, stored as JSON in
-user_prefs.pron.
+A rule is global (every book this user has), or scoped to an author, or to one
+book, because a fic's money glyphs are usually the author's own convention and
+sometimes just one story's. Global is the default. Rules live as JSON in
+user_prefs.pron: `book` holds a book id, `author` an author name, both empty for
+a global rule. Most specific wins.
+
+Numbers are handled here too, since it is the same problem: text a voice would
+misread. A comma-grouped number ("50,000") makes most engines say the commas
+("five zero comma zero zero zero"), so a spoken-form pass turns those into
+words. Only grouped numbers are touched: a bare year or chapter number is left
+exactly as the author wrote it.
 """
 
 import hashlib
@@ -15,6 +24,58 @@ import json
 import re
 
 from host.db import now
+
+
+_ONES = ("", "one", "two", "three", "four", "five", "six", "seven", "eight",
+         "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+         "sixteen", "seventeen", "eighteen", "nineteen")
+_TENS = ("", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+         "eighty", "ninety")
+_SCALES = ((10 ** 9, "billion"), (10 ** 6, "million"), (1000, "thousand"))
+
+
+def _below_thousand(n):
+    out = []
+    if n >= 100:
+        out.append(_ONES[n // 100] + " hundred")
+        n %= 100
+    if n >= 20:
+        t = _TENS[n // 10]
+        r = n % 10
+        out.append(t + ("-" + _ONES[r] if r else ""))
+    elif n:
+        out.append(_ONES[n])
+    return " ".join(out)
+
+
+def number_words(n):
+    """An integer in English, up to billions. 50000 -> fifty thousand."""
+    if n == 0:
+        return "zero"
+    parts = []
+    for size, name in _SCALES:
+        if n >= size:
+            parts.append(_below_thousand(n // size) + " " + name)
+            n %= size
+    if n:
+        parts.append(_below_thousand(n))
+    return " ".join(p for p in parts if p)
+
+
+GROUPED = re.compile(r"(?<![\d.,])\d{1,3}(?:,\d{3})+(?![\d,])")
+
+
+def expand_numbers(text):
+    """Say a comma-grouped number as words: 50,000 -> fifty thousand.
+
+    Only numbers that came with group separators are converted. A year, a
+    chapter number, a page reference: the author's own digits are left alone,
+    because "one thousand nine hundred ninety nine" is a worse reading of a
+    date than the engine's own.
+    """
+    if not text:
+        return text
+    return GROUPED.sub(lambda m: number_words(int(m.group(0).replace(",", ""))), text)
 
 
 def load(conn, uid):
@@ -37,8 +98,17 @@ def load(conn, uid):
         frm = str((r or {}).get("from", "")).strip()
         to = str((r or {}).get("to", "")).strip()
         if frm and to:
-            out.append({"from": frm, "to": to})
+            out.append(_rule(frm, to, (r or {}).get("book"), (r or {}).get("author")))
     return out
+
+
+def _rule(frm, to, book="", author=""):
+    """A rule's stored shape. One scope at a time: book, else author, else all."""
+    book = str(book or "").strip()
+    author = str(author or "").strip()
+    if book:
+        return {"from": frm, "to": to, "book": book, "author": ""}
+    return {"from": frm, "to": to, "book": "", "author": author}
 
 
 def save(conn, uid, rules):
@@ -51,9 +121,11 @@ def save(conn, uid, rules):
     for r in rules or []:
         frm = str((r or {}).get("from", "")).strip()
         to = str((r or {}).get("to", "")).strip()
-        if frm and to and frm.lower() not in seen:
-            seen.add(frm.lower())
-            clean.append({"from": frm, "to": to})
+        one = _rule(frm, to, (r or {}).get("book"), (r or {}).get("author"))
+        key = (one["book"], one["author"].lower(), frm.lower())
+        if frm and to and key not in seen:
+            seen.add(key)
+            clean.append(one)
     blob = json.dumps(clean, ensure_ascii=False)
     row = conn.execute("SELECT user_id FROM user_prefs WHERE user_id=?",
                        (uid,)).fetchone()
@@ -68,6 +140,64 @@ def save(conn, uid, rules):
     return clean
 
 
+def for_book(rules, book_id="", author=""):
+    """The rules that apply to one book: global, then this author's, then its own.
+
+    A more specific rule wins for the same word, because that is the narrower
+    statement and the user typed it on purpose.
+    """
+    bid = book_id or ""
+    who = (author or "").strip().lower()
+    out = [r for r in (rules or []) if not r.get("book") and not r.get("author")]
+    if who:
+        mine = [r for r in (rules or []) if r.get("author")
+                and (r.get("author") or "").strip().lower() == who]
+        if mine:
+            words = {r["from"].lower() for r in mine}
+            out = [r for r in out if r["from"].lower() not in words] + mine
+    if bid:
+        local = [r for r in (rules or []) if r.get("book") == bid]
+        if local:
+            words = {r["from"].lower() for r in local}
+            out = [r for r in out if r["from"].lower() not in words] + local
+    return out
+
+
+def book_author(conn, book_id):
+    """The author string stored on a book, for author-scoped rules."""
+    row = conn.execute("SELECT author FROM books WHERE id=?", (book_id or "",)).fetchone()
+    return (row["author"] if row else "") or ""
+
+
+def _has_space(word):
+    return any(c.isspace() for c in (word or ""))
+
+
+def _prefix_amounts(text, rules):
+    """A unit written BEFORE its number, read the right way round.
+
+    Fics write money both ways: "50ʛ" (unit after) and "κ50" (unit before). A
+    single-word replacement that sits directly in front of a number is a unit,
+    so "κ50" becomes "fifty knut": the number said as words, then the unit. A
+    multi-word replacement is not a unit, so it is left to the plain rule.
+    """
+    if not text:
+        return text
+    for r in sorted(rules or [], key=lambda r: -len(r["from"])):
+        to = r["to"]
+        if _has_space(to) or not to.isalpha():
+            continue
+        frm = re.escape(r["from"])
+        if re.match(r"\w", r["from"][0]):
+            frm = r"(?<![^\W\d])" + frm
+        # directly adjacent only: "ʛ 30" is a glyph and a separate number, not
+        # a unit in front of one.
+        pat = re.compile(frm + r"(\d{1,3}(?:,\d{3})+|\d+)")
+        text = pat.sub(lambda m: number_words(int(m.group(1).replace(",", "")))
+                                + " " + to, text)
+    return text
+
+
 def _regex(rules):
     """One alternation, longest word first, whole-word where the word has edges."""
     alts = []
@@ -75,9 +205,16 @@ def _regex(rules):
         frm = r["from"]
         e = re.escape(frm)
         if re.match(r"\w", frm[0]):
-            e = r"(?<!\w)" + e
+            # a letter may not precede it, but a digit may: "50\u029b" is the
+            # amount symbol written after the number, which is the other half of
+            # how these fics write money.
+            e = r"(?<![^\W\d])" + e
         if re.match(r"\w", frm[-1]):
-            e = e + r"(?!\w)"
+            # Whole-word, except that a digit may follow: a currency glyph glued
+            # to an amount ("\u029b50,000") is still that glyph, and that is the
+            # shape this rule exists for. A letter may not follow, so "cat" stays
+            # out of "cats".
+            e = e + r"(?![^\W\d])"
         alts.append(e)
     return re.compile("|".join(alts), re.I) if alts else None
 
@@ -89,7 +226,34 @@ def apply(text, rules):
     if not text or pat is None:
         return text
     repl = {r["from"].lower(): r["to"] for r in rules}
-    return pat.sub(lambda m: repl.get(m.group(0).lower(), m.group(0)), text)
+
+    def _swap(m):
+        word = m.group(0)
+        to = repl.get(word.lower(), word)
+        if to is word or to == word:
+            return word
+        nxt = text[m.end():m.end() + 1]
+        prv = text[m.start() - 1:m.start()]
+        # A replacement glued to a number needs its own space on either side, or
+        # the amount is said as part of the word: "galleonfifty thousand",
+        # "fiftygalleon". Digits on both sides ("50ʛ") get both spaces.
+        out = to
+        if prv.isdigit() and to[:1].isalpha():
+            out = " " + out
+        if nxt.isdigit() and to[-1:].isalpha():
+            out = out + " "
+        return out
+
+    return pat.sub(_swap, text)
+
+
+def spoken(text, rules):
+    """The text a voice is actually given: rules first, then numbers.
+
+    One entry point so a render, a cache tag and an estimate can never disagree
+    about what is being said.
+    """
+    return expand_numbers(apply(_prefix_amounts(text, rules), rules))
 
 
 def token_for(text, rules):
@@ -129,8 +293,8 @@ def impact(conn, storage, user_id, book_id=None, split_for=None):
     """
     from host import library, jobs
 
-    rules = load(conn, user_id)
-    q = "SELECT id,title FROM books WHERE user_id=?"
+    all_rules = load(conn, user_id)
+    q = "SELECT id,title,author FROM books WHERE user_id=?"
     args = [user_id]
     if book_id:
         q += " AND id=?"
@@ -140,6 +304,9 @@ def impact(conn, storage, user_id, book_id=None, split_for=None):
     chars_to_synth = 0
     est_seconds = 0.0
     for b in conn.execute(q, tuple(args)).fetchall():
+        # a rule scoped to one book only invalidates that book's audio
+        who = b["author"] if "author" in b.keys() else book_author(conn, b["id"])
+        rules = for_book(all_rules, b["id"], who)
         chapters = library.chapters(conn, b["id"])
         by_idx = {c["idx"]: c for c in chapters}
         rends = {}

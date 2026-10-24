@@ -109,10 +109,10 @@ def unit_tests():
     import sources
     from sources import (ORDER, REGISTRY, get_source, choose, request_key,
                          ingest, Field, describe)
-    from sources._fetch import host_allowed, fetch, bind_transport
-    from sources.web import parse_web
-    from sources.epub import parse_epub
-    from sources.ao3 import parse_ao3, is_work_url, full_work_url
+    from host.egress import host_allowed, fetch, bind_transport
+    from plugins.reader.web.plugin import parse_web
+    from plugins.reader.epub.plugin import parse_epub
+    from plugins.reader.ao3.plugin import parse_ao3, is_work_url, full_work_url
 
     ck("registry has epub/ao3/web", set(REGISTRY) == {"epub", "ao3", "web"}, set(REGISTRY))
     ck("unknown source -> None", get_source("bogus") is None)
@@ -154,7 +154,7 @@ def unit_tests():
     # one. The egress core must carry no vendor vocabulary; a client library lives
     # behind a named backend in _backends.py.
     import inspect
-    from sources import _fetch as _fmod, _backends as _bmod
+    from host import egress as _fmod, egress_backends as _bmod
     fsrc = inspect.getsource(_fmod)
     ck("core egress names no vendor", not any(w in fsrc for w in ("curl_cffi", "impersonate")))
     ck("backends registry is generic", set(_bmod.BACKENDS) == {"plain", "browser"}, set(_bmod.BACKENDS))

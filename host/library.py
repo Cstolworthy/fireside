@@ -38,6 +38,121 @@ def add_book(conn, storage, user_id, book):
     return book_id
 
 
+def find_same(conn, user_id, incoming, plugin=None):
+    """The id of this user's book that holds the same work as `incoming` meta.
+
+    Two ways to be the same book: the reader named a stable identity on both
+    sides, or the reader's own `same()` says so. The second covers books that
+    were imported before readers named an identity at all (a web page fetched by
+    the generic reader, its URL since claimed by a site reader), which is why it
+    is asked even when the stored row has no identity.
+    """
+    want = (incoming or {}).get("identity") or ""
+    same = getattr(plugin, "same", None) if plugin is not None else None
+    for r in conn.execute("SELECT id,source_json FROM books WHERE user_id=?",
+                          (user_id,)).fetchall():
+        try:
+            meta = json.loads(r["source_json"] or "{}")
+        except ValueError:
+            meta = {}
+        if not isinstance(meta, dict):
+            continue
+        if want and meta.get("identity") == want:
+            return r["id"]
+        if callable(same):
+            try:
+                if same(meta, incoming or {}):
+                    return r["id"]
+            except Exception:
+                continue
+    return None
+
+
+def shelf_bytes(conn, book_id):
+    """Upper-bound bytes this shelf row already accounts for: its chapter text,
+    its voiced audio, and its cover. Used to ask whether a replacement needs
+    room, without refusing a swap that is roughly the same size."""
+    total = 0
+    for c in chapters(conn, book_id):
+        total += c["chars"] or 0
+        total += c["audio_bytes"] or 0
+    for r in renditions(conn, book_id):
+        total += r["audio_bytes"] or 0
+    b = conn.execute("SELECT cover_ref FROM books WHERE id=?", (book_id,)).fetchone()
+    if b and b["cover_ref"]:
+        total += 4096  # a cover is a small image; this only needs the order of magnitude
+    return total
+
+
+def replace_book(conn, storage, book_id, book):
+    """Re-import over a book already on the shelf, in place.
+
+    The id stays, so playback positions, device stops and listen stats still
+    point at this book, and a voice whose chapter text is byte-identical is
+    kept: chapter text is content-addressed, so the same ref means the audio
+    still matches the words and there is nothing to re-synthesise. A chapter
+    whose text changed loses its voice, because that audio belongs to the old
+    text. A chapter the reader no longer returns is removed with its voices.
+    """
+    meta = dict(book.meta or {})
+    old = {c["idx"]: c for c in chapters(conn, book_id)}
+    refs, kept, dropped = [], 0, 0
+    new_idx = set()
+    for i, ch in enumerate(book.chapters):
+        new_idx.add(i)
+        text = ch.text if isinstance(ch.text, str) else str(ch.text)
+        ref = storage.put(text.encode("utf-8"))
+        o = old.get(i)
+        if o is not None and o["text_ref"] == ref and o["audio_ref"]:
+            conn.execute(
+                "INSERT OR REPLACE INTO chapters(book_id,idx,title,chars,text_ref,"
+                "audio_ref,audio_bytes,duration_s,provider,voice,model,speed)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (book_id, i, ch.title, len(text), ref, o["audio_ref"],
+                 o["audio_bytes"], o["duration_s"], o["provider"], o["voice"],
+                 o["model"], o["speed"]))
+            kept += 1
+            continue
+        conn.execute(
+            "INSERT OR REPLACE INTO chapters(book_id,idx,title,chars,text_ref)"
+            " VALUES(?,?,?,?,?)", (book_id, i, ch.title, len(text), ref))
+        if o is not None:
+            # The row is replaced wholesale above, so the text blob it named is
+            # about to be unnamed; gc keeps it if any other shelf still reads it.
+            refs.append(o["text_ref"])
+            if o["audio_ref"]:
+                refs.append(o["audio_ref"])
+        gone = [r for r in renditions(conn, book_id) if r["idx"] == i]
+        for r in gone:
+            conn.execute("DELETE FROM renditions WHERE rk=?", (r["rk"],))
+            if r["audio_ref"]:
+                refs.append(r["audio_ref"])
+            dropped += 1
+    for i, o in old.items():
+        if i in new_idx:
+            continue
+        conn.execute("DELETE FROM chapters WHERE book_id=? AND idx=?", (book_id, i))
+        if o["text_ref"]:
+            refs.append(o["text_ref"])
+        if o["audio_ref"]:
+            refs.append(o["audio_ref"])
+        for r in [r for r in renditions(conn, book_id) if r["idx"] == i]:
+            conn.execute("DELETE FROM renditions WHERE rk=?", (r["rk"],))
+            if r["audio_ref"]:
+                refs.append(r["audio_ref"])
+            dropped += 1
+    # Title: the shelf already belongs to this account and may have been
+    # renamed from the book page, so an empty title is the only one the import
+    # fills. The rest of the description is the reader's to bring.
+    row = conn.execute("SELECT title FROM books WHERE id=?", (book_id,)).fetchone()
+    title = (row["title"] if row and row["title"] else book.title) or "Untitled"
+    conn.execute("UPDATE books SET title=?,source_json=? WHERE id=?",
+                 (title, json.dumps(meta), book_id))
+    conn.commit()
+    freed = gc_blobs(conn, storage, refs)
+    return {"kept_renditions": kept, "dropped_renditions": dropped, "freed": freed}
+
+
 def find_by_meta(conn, user_id, key, value):
     """The id of this user's book whose source meta[key] == value, or None.
 

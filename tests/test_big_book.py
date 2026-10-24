@@ -13,7 +13,7 @@ import time
 import unittest
 
 from host.app import App
-from sources.epub import parse_epub
+from plugins.reader.epub.plugin import parse_epub
 from tools.make_big_epub import build
 
 CHARS = 1_800_000

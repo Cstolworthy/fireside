@@ -71,10 +71,12 @@ class TestPron(unittest.TestCase):
     def test_prefs_and_pron_do_not_clobber(self):
         pron.save(self.conn, "u2", [{"from": "A", "to": "B"}])
         connections.set_prefs(self.conn, "u2", voice="v")
-        self.assertEqual(pron.load(self.conn, "u2"), [{"from": "A", "to": "B"}])
+        self.assertEqual(pron.load(self.conn, "u2"),
+                         [{"from": "A", "to": "B", "book": "", "author": ""}])
         self.assertEqual(connections.get_prefs(self.conn, "u2")["default_voice"], "v")
         connections.set_prefs(self.conn, "u2", connection_id="c1")
-        self.assertEqual(pron.load(self.conn, "u2"), [{"from": "A", "to": "B"}])
+        self.assertEqual(pron.load(self.conn, "u2"),
+                         [{"from": "A", "to": "B", "book": "", "author": ""}])
 
 
 class TestRenderAppliesPron(unittest.TestCase):
@@ -247,14 +249,95 @@ class TestPronRoutes(unittest.TestCase):
         st, out = app.pron_set({"user": "u1"},
                                {"rules": [{"from": "Qui-Gon", "to": "Kwai-Gon"}]})
         self.assertEqual(st, 200)
-        self.assertEqual(out["rules"], [{"from": "Qui-Gon", "to": "Kwai-Gon"}])
+        self.assertEqual(out["rules"], [{"from": "Qui-Gon", "to": "Kwai-Gon",
+                                         "book": "", "author": ""}])
         st, out = app.pron_get({"user": "u1"}, {})
         self.assertEqual(st, 200)
-        self.assertEqual(out["rules"], [{"from": "Qui-Gon", "to": "Kwai-Gon"}])
+        self.assertEqual(out["rules"], [{"from": "Qui-Gon", "to": "Kwai-Gon",
+                                         "book": "", "author": ""}])
         st, out = app.pron_impact({"user": "u1"}, {})
         self.assertEqual(st, 200)
         self.assertEqual(out["chapters_affected"], 0)
         self.assertEqual(out["books"], [])
+
+
+class TestGlyphsAndNumbers(unittest.TestCase):
+    """A fic's own money symbols, and the numbers they sit next to."""
+
+    RULES = [{"from": "\u029b", "to": "galleon", "book": "", "author": ""},
+             {"from": "\u03b4", "to": "sickle", "book": "", "author": ""},
+             {"from": "\u03ba", "to": "knut", "book": "", "author": ""}]
+
+    def test_symbol_after_the_number_is_read(self):
+        self.assertEqual(pron.spoken("50\u029b 30\u03b4 and 20\u03ba", self.RULES),
+                         "50 galleon 30 sickle and 20 knut")
+
+    def test_symbol_before_the_number_is_read(self):
+        # a unit in front of its number reads number-first: fifty thousand galleon
+        self.assertEqual(pron.spoken("\u029b50,000", self.RULES),
+                         "fifty thousand galleon")
+
+    def test_a_grouped_number_becomes_words(self):
+        self.assertEqual(pron.expand_numbers("50,000"), "fifty thousand")
+        self.assertEqual(pron.expand_numbers("1,250,000"),
+                         "one million two hundred fifty thousand")
+
+    def test_an_ungrouped_number_is_left_alone(self):
+        self.assertEqual(pron.expand_numbers("chapter 12 in 1999"),
+                         "chapter 12 in 1999")
+        self.assertEqual(pron.expand_numbers("50000"), "50000")
+
+    def test_a_unit_in_front_of_a_number_reads_number_first(self):
+        self.assertEqual(pron.spoken("\u03ba50", self.RULES), "fifty knut")
+        self.assertEqual(pron.spoken("\u029b50,000", self.RULES),
+                         "fifty thousand galleon")
+
+    def test_a_glyph_and_a_separate_number_are_not_one_amount(self):
+        self.assertEqual(pron.spoken("50\u029b 30\u03b4", self.RULES),
+                         "50 galleon 30 sickle")
+
+    def test_a_multi_word_replacement_is_not_treated_as_a_unit(self):
+        rules = [{"from": "\u03ba", "to": "knut piece", "book": "", "author": ""}]
+        self.assertEqual(pron.spoken("\u03ba50", rules), "knut piece 50")
+
+    def test_a_rule_still_keeps_out_of_longer_words(self):
+        rules = [{"from": "cat", "to": "kat", "book": "", "author": ""}]
+        self.assertEqual(pron.spoken("cats", rules), "cats")
+        self.assertEqual(pron.spoken("cat", rules), "kat")
+
+
+class TestScopes(unittest.TestCase):
+    """Global, by author, by book: the narrowest wins."""
+
+    def setUp(self):
+        self.rules = [
+            {"from": "\u029b", "to": "galleon", "book": "", "author": ""},
+            {"from": "\u029b", "to": "coin", "book": "", "author": "mira"},
+            {"from": "\u029b", "to": "crown", "book": "b1", "author": ""},
+        ]
+
+    def test_a_book_with_no_scope_gets_the_global_rule(self):
+        got = pron.for_book(self.rules, "b9", "someone else")
+        self.assertEqual([r["to"] for r in got], ["galleon"])
+
+    def test_the_author_rule_wins_over_global(self):
+        got = pron.for_book(self.rules, "b9", "Mira")
+        self.assertEqual([r["to"] for r in got], ["coin"])
+
+    def test_the_book_rule_wins_over_both(self):
+        got = pron.for_book(self.rules, "b1", "mira")
+        self.assertEqual([r["to"] for r in got], ["crown"])
+
+    def test_a_rule_scoped_to_a_book_does_not_touch_another(self):
+        rules = [{"from": "\u029b", "to": "crown", "book": "b1", "author": ""}]
+        self.assertEqual(pron.for_book(rules, "b2", ""), [])
+        self.assertEqual(len(pron.for_book(rules, "b1", "")), 1)
+
+    def test_a_scoped_rule_only_tags_the_book_it_applies_to(self):
+        rules = [{"from": "\u029b", "to": "crown", "book": "b1", "author": ""}]
+        text = "\u029b50"
+        self.assertTrue(pron.token_for(text, pron.for_book(rules, "b1", "")))
+        self.assertEqual(pron.token_for(text, pron.for_book(rules, "b2", "")), "")
 
 
 if __name__ == "__main__":

@@ -4,6 +4,6 @@
   "label": "Web page",
   "version": "1.0",
   "entry": "plugin.py",
-  "class": "Reader",
+  "class": "Web",
   "order": 1000
 }

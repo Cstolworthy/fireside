@@ -27,6 +27,13 @@
   header p{margin:0;color:var(--faint);font-size:13px}
   #ver{color:var(--faint);font-variant-numeric:tabular-nums;font-size:12px}
   #who{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--faint)}
+  /* the balance rides in the header so it is never a surprise: it is a button
+     because the place it acts on is Settings > Plan, not a page of its own */
+  .balchip{background:none;border:1px solid var(--line);border-radius:999px;color:var(--soft);
+    font:12px/1 var(--ui);padding:6px 10px;cursor:pointer;white-space:nowrap;
+    font-variant-numeric:tabular-nums}
+  .balchip:hover{color:var(--text);border-color:var(--flame)}
+  .balchip.zero{color:var(--warn);border-color:var(--warn)}
   nav.tabs{display:flex;gap:2px;margin-top:12px;overflow-x:auto}
   nav.tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:9px 12px;color:var(--soft);font-size:14px;cursor:pointer;white-space:nowrap}
   nav.tabs button.on{color:var(--text);border-color:var(--flame)}
@@ -49,6 +56,10 @@
   .btn:disabled{opacity:.45;cursor:default}
   .link{background:none;border:0;color:var(--soft);text-decoration:underline;text-underline-offset:3px;cursor:pointer;font-size:13px;padding:0}
   .hint{color:var(--faint);font-size:12px;margin-top:8px}
+  .rdopt{display:flex;align-items:center;gap:10px;margin-top:14px}
+  .rdopt input{width:auto;margin:0}
+  .rdopt label{margin:0;text-transform:none;letter-spacing:0;font-size:15px;color:var(--text)}
+  .rdopt.off{opacity:.45}
   .drop{border:1.5px dashed var(--line);border-radius:14px;padding:26px;text-align:center;color:var(--soft);cursor:pointer}
   .drop.hot{border-color:var(--flame);color:var(--text);background:var(--surface)}
   /* spine: solid only after a download is verified, on this device */
@@ -82,6 +93,10 @@
   .story p{font:19px/1.75 var(--serif);color:var(--soft);margin-top:18px;max-width:62ch}
   .story p:first-child{margin-top:0}
   .story .lead{color:var(--text)}
+  /* reading along: the sentence the voice is on right now */
+  .story .sent{border-radius:4px;transition:background-color .2s ease,color .2s ease;
+    -webkit-box-decoration-break:clone;box-decoration-break:clone;padding:1px 0}
+  .story .sent.hl{background:rgba(227,168,87,.17);color:var(--text);box-shadow:0 0 0 3px rgba(227,168,87,.09)}
   .prog{height:4px;background:var(--raise);border-radius:2px;position:relative;margin:16px 0 4px;cursor:pointer}
   .prog i{position:absolute;inset:0 auto 0 0;background:var(--flame);border-radius:2px;width:0}
   .times{display:flex;justify-content:space-between;font-size:13px;color:var(--faint);font-variant-numeric:tabular-nums}
@@ -194,8 +209,12 @@
   .qrow .qi{color:var(--faint);font-variant-numeric:tabular-nums;font-size:12px}
   .qrow button{background:none;border:1px solid var(--line);border-radius:7px;color:var(--soft);cursor:pointer;font-size:12px;padding:2px 7px;line-height:1.4}
   @media(max-width:600px){ #transport .tnow{display:none} #transport .vol input{width:64px} }
-  .toast{background:var(--raise);border:1px solid var(--line);border-left:3px solid var(--flame);border-radius:9px;padding:10px 12px;font-size:13px;box-shadow:0 10px 30px #0007}
+  .toast{background:var(--raise);border:1px solid var(--line);border-left:3px solid var(--flame);border-radius:9px;padding:10px 12px;font-size:13px;box-shadow:0 10px 30px #0007;display:flex;gap:10px;align-items:flex-start}
+  .toast span{flex:1 1 auto;min-width:0;line-height:1.45;user-select:text;-webkit-user-select:text;cursor:text}
+  .toast .x{flex:0 0 auto;background:none;border:0;color:var(--soft);font-size:16px;line-height:1;padding:0 2px;cursor:pointer}
   .toast.bad{border-left-color:var(--warn)}.toast.ok{border-left-color:var(--ready)}
+  /* an error stays until it is read: it is the only copy of what went wrong */
+  .toast.bad{box-shadow:0 10px 30px #0007, 0 0 0 1px #e2917f33}
   /* add belongs on the library screen */
   .addpanel{margin-top:16px;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--surface)}
   .addpanel[hidden]{display:none}
@@ -230,6 +249,8 @@
   .chaplist{max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
   .chap{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--line);cursor:pointer;font-size:13px}
   .chap:last-child{border-bottom:0}
+  .cvmark{margin-left:auto;color:var(--faint);white-space:nowrap}
+  .chap.voiced .cvmark{color:var(--ready)}
   .chap:hover{background:var(--raise)}
   .chap.cur{background:var(--raise)}
   .chap .chk{width:auto;padding:0;border:0;background:none;margin:0;flex:none;accent-color:var(--flame);cursor:pointer}
@@ -328,6 +349,7 @@
     <h1>fireside</h1>
     <p>Books and web stories, voiced. <span id="ver">v__HOST_VERSION__</span></p>
     <div class="topright" id="who">
+      <button class="balchip" id="balchip" type="button" title="Characters left" hidden>—</button>
       <button class="bell" id="bell" type="button" aria-label="Alerts">🔔<span class="dot"></span></button>
       <button class="avatar" id="avatar" type="button" aria-label="Account menu">?</button>
       <div class="menu" id="usermenu" hidden>
@@ -367,6 +389,14 @@
         <input type="file" id="file" accept=".epub,application/epub+zip" hidden></div>
       <label>Or paste a story link</label>
       <div style="display:flex;gap:8px"><input id="url" placeholder="https://…" autocomplete="off"><button id="loadurl" class="btn" style="flex:0 0 96px">Load</button></div>
+      <div class="addpanel" id="dupnote" hidden style="margin-top:12px;border-color:var(--flame);background:transparent">
+        <p class="sub" id="duptext"></p>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <button class="btn" id="dupgo" type="button">Replace it</button>
+          <button class="btn quiet" id="dupkeep" type="button">Keep both</button>
+          <button class="btn quiet" id="dupcancel" type="button">Cancel</button>
+        </div>
+      </div>
       <p class="hint">A locked AO3 work needs your cookie under Settings, or drop the work's EPUB.</p>
       <p class="hint" style="margin-top:14px">New here? <button class="btn quiet" id="exbtn" type="button">Add the free example book</button></p>
     </div>
@@ -453,6 +483,7 @@
     <p class="sub">Voice servers and source logins live on this server. Keys never reach your browser.</p>
     <nav class="tabs settabs" id="settabs">
       <button data-p="voice" class="on">Voice</button>
+      <button data-p="reading">Reading</button>
       <button data-p="words">Words</button>
       <button data-p="plan">Plan &amp; storage</button>
       <button data-p="account">Account</button>
@@ -475,7 +506,7 @@
         </div>
       </div>
       <h3 style="margin-top:30px">Default voice</h3>
-      <p class="sub">Which server and voice a new book uses.</p>
+      <p class="sub">The voice a new conversion starts on, and the voice the sandbox opens on. A book already voiced keeps the voice it has until you convert it again.</p>
       <label>Server</label>
       <select id="dconn"></select>
       <label>Voice</label>
@@ -492,9 +523,24 @@
       </div>
     </div>
 
+    <div class="setpanel" data-p="reading">
+      <h3 style="margin-top:24px">Reading along</h3>
+      <p class="sub">While a chapter plays, the page marks the sentence being read and can follow it down the page. Timing is estimated from how long the chapter takes to say, so a long pause or a scene break can put it a sentence off. It never changes the audio.</p>
+      <div class="rdopt"><input type="checkbox" id="rdhighlight"><label for="rdhighlight">Highlight the sentence being read</label></div>
+      <div class="rdopt"><input type="checkbox" id="rdscroll"><label for="rdscroll">Scroll the page to follow it</label></div>
+      <label for="rdmode">Where it scrolls to</label>
+      <select id="rdmode" style="max-width:360px">
+        <option value="follow">Follow along: only when the sentence leaves the screen</option>
+        <option value="center">Always keep it near the middle of the screen</option>
+      </select>
+      <p class="hint" id="rdnote">Saved to your account, so it follows you to the phone.</p>
+    </div>
+
     <div class="setpanel" data-p="words">
       <h3 style="margin-top:24px">Pronunciations</h3>
-      <p class="sub">Words the voice says wrong. Left: the word as it appears. Right: how it should sound, spelled out (Qui-Gon → Kwai-Gon). Applies to every book.</p>
+      <p class="sub">Words and symbols the voice says wrong. Left: exactly what appears in the text. Right: how it should sound, spelled out (Qui-Gon → Kwai-Gon, ʛ → galleon). Works when the symbol is glued to a number too: 50ʛ and ʛ50,000 both read right.</p>
+      <p class="sub" style="margin-top:4px">Scope: all books, one author, or one book. A writer's own money glyphs usually belong to the author; a single story's belong to the book. The same word in a narrower scope wins.</p>
+      <p class="sub" style="margin-top:4px">Numbers written with commas (50,000) are read as words (fifty thousand) automatically. A plain 1999 or Chapter 12 is left as the author wrote it.</p>
       <div id="pronrows"></div>
       <div style="display:flex;gap:8px;margin-top:10px">
         <button class="btn quiet" id="pronadd" type="button">＋ Add a word</button>
@@ -504,6 +550,12 @@
     </div>
 
     <div class="setpanel" data-p="plan">
+      <h3 style="margin-top:24px">Characters</h3>
+      <p class="sub">A metered voice charges by the character. Voices you connect yourself are not metered and do not touch this number.</p>
+      <div id="creditsbox" class="small" style="margin-top:8px">Checking your character balance…</div>
+      <div id="creditsrate" class="sub" style="margin-top:6px"></div>
+      <div id="creditsbuy" style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap"></div>
+      <div id="creditsmsg" class="sub" style="margin-top:8px"></div>
       <h3 style="margin-top:24px">Plan &amp; storage</h3>
       <p class="sub">Your tier sets how much you can keep. Storage counts once per book you hold; delete a book and its bytes come back.</p>
       <div id="planusage" class="small" style="margin-top:8px">loading…</div>
@@ -515,7 +567,27 @@
     </div>
 
     <div class="setpanel" data-p="account">
-      <h3 style="margin-top:24px">Connected accounts</h3>
+      <h3 style="margin-top:24px">Password</h3>
+      <p class="sub" id="pwsub">The password you sign in with.</p>
+      <div id="pwcurrentrow">
+        <label for="pwcurrent">Current password</label>
+        <input type="password" id="pwcurrent" autocomplete="current-password" style="max-width:320px">
+      </div>
+      <div id="pwuserrow" hidden>
+        <label for="pwusername">Sign-in name</label>
+        <input type="text" id="pwusername" autocomplete="username" style="max-width:320px"
+               placeholder="e.g. cat">
+        <p class="hint" style="margin-top:2px">Your password signs in with this name. Letters, digits, dot, dash or underscore.</p>
+      </div>
+      <label for="pwnew">New password</label>
+      <input type="password" id="pwnew" autocomplete="new-password" style="max-width:320px">
+      <label for="pwnew2">New password again</label>
+      <input type="password" id="pwnew2" autocomplete="new-password" style="max-width:320px">
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn" id="pwsave" type="button">Save password</button>
+      </div>
+      <div id="pwmsg" class="sub" style="margin-top:8px"></div>
+      <h3 style="margin-top:30px">Connected accounts</h3>
       <p class="sub">Sign in with Google, GitHub, Microsoft or SimpleLogin instead of a password. Link one here while you are signed in.</p>
       <div id="oauthrows"></div>
       <h3 style="margin-top:30px">Devices &amp; sessions</h3>
@@ -643,6 +715,7 @@
     <label>Voice</label>
     <input id="cvfilter" placeholder="filter, e.g. en-US or Heart" autocomplete="off">
     <select id="cvvoice"><option value="">load voices…</option></select>
+    <p class="small" id="cvvoiceinfo" style="margin-top:6px"></p>
     <label>Chapters</label>
     <div id="cvlist" class="chaplist" style="max-height:170px"></div>
     <div class="connrow">
@@ -770,13 +843,32 @@ async function api(path, opts) {
   const ct = r.headers.get('content-type') || '';
   if (ct.includes('application/json')) {
     const d = await r.json();
-    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    if (!r.ok) throw failure(d.error || ('HTTP ' + r.status), r.status, d);
     return d;
   }
-  if (!r.ok) throw new Error('HTTP ' + r.status);
+  if (!r.ok) throw failure('HTTP ' + r.status, r.status, null);
   return r;
 }
+// An error carries its status and its whole body, so a caller can act on a
+// refusal instead of only printing it: a duplicate import is a question, not a
+// failure. The message is unchanged for every caller that only wants the text.
+function failure(msg, status, data) {
+  const e = new Error(msg); e.status = status; e.data = data || {}; return e;
+}
 const jpost = (p, o) => api(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(o) });
+
+// A refusal that carries numbers is a different sentence from one that does not.
+// "insufficient balance" leaves a reader stuck; "needs 41,200, you have 12,400"
+// tells them what to do about it. The server sends the numbers, this formats them.
+function errorText(e) {
+  const d = (e && e.data) || {};
+  if (d.needed != null && d.available != null) {
+    return 'Not enough characters for this run: it needs ' + nchar(d.needed)
+      + ' and you have ' + nchar(d.available) + ' available.';
+  }
+  if (d.reason) return String(e.message) + ': ' + d.reason;
+  return String(e && e.message ? e.message : e);
+}
 
 // --- status ----------------------------------------------------------------
 // --- notices: one ribbon that persists, toasts that pass, and the bell -----
@@ -802,11 +894,21 @@ function idle(t) { clearInterval(_tick); $('#rcancel').hidden = true; $('#rspin'
   _hideTimer = setTimeout(() => { _ribbon('', ''); }, 6000); }
 function fail(e) { clearInterval(_tick); $('#rcancel').hidden = true; $('#rspin').style.display = 'none'; $('#rtime').textContent = '';
   $('#rprog').style.display = 'none';
-  const msg = String(e && e.message ? e.message : e);
+  const msg = errorText(e);
   _ribbon('on bad', msg); $('#rdismiss').hidden = false; $('#err').textContent = msg;
   toast('bad', msg); bellRaise(); }
-function toast(kind, text) { const t = document.createElement('div');
-  t.className = 'toast ' + (kind || ''); t.textContent = text; $('#toasts').append(t);
+function toast(kind, text) {
+  const t = document.createElement('div'); t.className = 'toast ' + (kind || '');
+  const s = document.createElement('span'); s.textContent = text; t.append(s);
+  const x = document.createElement('button'); x.type = 'button'; x.className = 'x';
+  x.textContent = '×'; x.title = 'Dismiss'; x.setAttribute('aria-label', 'Dismiss');
+  x.onclick = () => t.remove(); t.append(x);
+  $('#toasts').append(t);
+  // An error is the only copy of what went wrong, so it stays until it is
+  // dismissed. A confirmation can pass on its own.
+  if (kind === 'bad') { const box = $('#toasts');
+    while (box.children.length > 3 && box.firstElementChild !== t) box.firstElementChild.remove();
+    return; }
   setTimeout(() => { t.style.transition = 'opacity .4s'; t.style.opacity = '0';
     setTimeout(() => t.remove(), 420); }, 5200); }
 function bellRaise() { ALERTS.unshift({ kind: 'bad', text: $('#rtext').textContent, at: Date.now() });
@@ -848,7 +950,7 @@ function needUser() { if (!USER) { fail('set your name first (top right)'); thro
 function show(v) {
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
-  if (v === 'set') { loadPron(); loadLinked(); loadSessions(); loadPlan();
+  if (v === 'set') { loadPron(); loadLinked(); loadSessions(); loadPlan(); loadPasswordPanel();
     loadDanger(); setSetTab(localStorage.getItem(SETTAB_KEY)); }
   if (v === 'plans') loadPlansPage();
   if (v === 'lib') renderActiveJobs();
@@ -866,6 +968,7 @@ function setSetTab(p) {
   bar.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === btn));
   document.querySelectorAll('#v-set .setpanel').forEach(el => el.classList.toggle('on', el.dataset.p === p));
   try { localStorage.setItem(SETTAB_KEY, p); } catch (_) {}
+  if (p === 'plan') loadCredits();
 }
 if ($('#settabs')) document.querySelectorAll('#settabs button').forEach(b => b.onclick = () => setSetTab(b.dataset.p));
 
@@ -875,7 +978,7 @@ if ($('#settabs')) document.querySelectorAll('#settabs button').forEach(b => b.o
 // only whether a secret is set. A user may override the non-secret fields and
 // switch a shared server off for themselves, and may add their own.
 let saved = {}; try { saved = JSON.parse(localStorage.getItem(SKEY) || '{}'); } catch (_) {}
-let CONNS = [], PREFS = { default_connection_id: '', default_voice: '' };
+let CONNS = [], PREFS = { default_connection_id: '', default_voice: '', reading: null };
 let SOURCES = [];
 function _srcInputs(sid) { const o = {}; document.querySelectorAll(`#sources [data-src="${sid}"][data-field]`).forEach(el => { if (el.value) o[el.dataset.field] = el.value; }); return o; }
 async function loadSources() {
@@ -917,8 +1020,19 @@ function connById(id) { return CONNS.find(c => c.id === id); }
 async function loadConnections() {
   try { const d = await api('/connections'); CONNS = d.connections || []; PREFS = d; }
   catch (_) { CONNS = []; }
+  applyReadingUI();
   renderWelcome();
   renderConns(); renderDefaultPicker(); renderSandboxPicker();
+  // Show the saved default voice without making anyone press Load voices: the
+  // panel says "default voice", so it had better be showing one. One fetch per
+  // server, and quiet - opening Settings is not an event worth a toast.
+  maybeLoadDefaultVoices();
+}
+let VOICESFOR = '';
+function maybeLoadDefaultVoices() {
+  const cid = $('#dconn') && $('#dconn').value;
+  if (!cid || cid === VOICESFOR) return;
+  VOICESFOR = cid; loadVoices(true);
 }
 
 function renderConns() {
@@ -1048,29 +1162,60 @@ $('#save').onclick = async () => {
 // Left is the word as it appears; right is the respelling the engine will read.
 // Test speaks the respelling in the default voice, so you hear it before saving.
 let PRON = [];
-function pronRow(frm, to) {
+// A rule applies to all books, to one author, or to one book. Author is the
+// usual answer for a fic writer's private money glyphs; a single story's
+// convention is the narrow case, and it wins for the same word.
+let SCOPEBOOKS = [], SCOPEAUTHORS = [];
+async function loadScopeOptions() {
+  try { const d = await api('/library'); SCOPEBOOKS = d.books || [];
+        SCOPEAUTHORS = [...new Set(SCOPEBOOKS.map(b => (b.author || '').trim()).filter(Boolean))].sort(); }
+  catch (_) { SCOPEBOOKS = []; SCOPEAUTHORS = []; }
+}
+function scopeValue(r) {
+  if (r && r.book) return 'book:' + r.book;
+  if (r && r.author) return 'author:' + r.author;
+  return '';
+}
+function scopeSelect(val) {
+  const sel = document.createElement('select');
+  sel.className = 'pscope'; sel.style.flex = '0 0 40%';
+  const add = (v, t) => { const o = document.createElement('option'); o.value = v; o.textContent = t; sel.append(o); };
+  add('', 'All books');
+  SCOPEAUTHORS.forEach(a => add('author:' + a, 'By ' + a));
+  SCOPEBOOKS.forEach(b => add('book:' + b.id, 'Only: ' + (b.title || b.id).slice(0, 40)));
+  if (val && ![...sel.options].some(o => o.value === val)) add(val, val.startsWith('book:') ? 'Only: ' + val.slice(5) : 'By ' + val.slice(7));
+  sel.value = val || '';
+  return sel;
+}
+function pronRow(frm, to, scope) {
   const row = document.createElement('div');
-  row.className = 'prow'; row.style.cssText = 'display:flex;gap:6px;margin-top:6px';
+  row.className = 'prow'; row.style.cssText = 'display:flex;gap:6px;margin-top:6px;flex-wrap:wrap';
   const a = document.createElement('input'); a.value = frm || ''; a.placeholder = 'word in the text'; a.style.flex = '1 1 0';
   const b = document.createElement('input'); b.value = to || ''; b.placeholder = 'how it should sound'; b.style.flex = '1.4 1 0';
+  const s = scopeSelect(scope || '');
   const t = document.createElement('button'); t.type = 'button'; t.className = 'btn quiet'; t.textContent = 'Test';
   t.onclick = () => { collectPron(); testPron(b.value || a.value); };
   const x = document.createElement('button'); x.type = 'button'; x.className = 'btn quiet'; x.textContent = '\u2715';
   x.onclick = () => { row.remove(); collectPron(); };
-  row.append(a, b, t, x);
+  row.append(a, b, s, t, x);
   $('#pronrows').append(row);
 }
 function collectPron() {
   PRON = [...$('#pronrows').querySelectorAll('.prow')].map(r => {
     const i = r.querySelectorAll('input');
-    return { from: i[0].value.trim(), to: i[1].value.trim() };
+    const sc = (r.querySelector('.pscope') || {}).value || '';
+    const out = { from: i[0].value.trim(), to: i[1].value.trim(), book: '', author: '' };
+    if (sc.startsWith('book:')) out.book = sc.slice(5);
+    else if (sc.startsWith('author:')) out.author = sc.slice(7);
+    return out;
   }).filter(r => r.from && r.to);
 }
 function showPron(rules) {
   $('#pronrows').innerHTML = '';
-  (rules && rules.length ? rules : [{ from: '', to: '' }]).forEach(r => pronRow(r.from, r.to));
+  (rules && rules.length ? rules : [{ from: '', to: '' }]).forEach(r => pronRow(r.from, r.to, scopeValue(r)));
 }
 async function loadPron() {
+  await loadScopeOptions();
   try { const d = await api('/pron'); PRON = d.rules || []; showPron(PRON); }
   catch (e) { showPron([]); }
 }
@@ -1091,8 +1236,8 @@ async function savePron() {
 async function testPron(text) {
   text = (text || '').trim();
   if (!text) { fail('type how it should sound first'); return; }
-  const cid = $('#dconn').value, v = $('#voice').value;
-  if (!v) { fail('pick a default voice first'); return; }
+  const cid = $('#dconn').value, v = $('#voice').value || PREFS.default_voice;
+  if (!v) { fail('No default voice yet. Pick one under Settings, Voice, then Save, and this Test will use it.'); return; }
   busy('Hearing "' + text + '"...');
   try {
     const r = await api('/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1188,9 +1333,62 @@ async function reencodePronImpact() {
     + (failed ? '  ' + failed + ' could not be re-encoded - open those books and convert.' : ''));
   if (book) await openBook(book.id);
 }
+// --- the account's own password -------------------------------------------
+// One form for both cases. An account that has a password must give it before
+// it changes: that is what stops a borrowed session from locking the owner out.
+// An account that only ever signed in with Google has no password to give, so
+// it picks a sign-in name instead and the current-password box is disabled with
+// the reason on it, rather than hidden or left to fail on submit.
+let PWHAS = null;      // null until /me answers, then whether a password exists
+async function loadPasswordPanel() {
+  const cur = $('#pwcurrent'), nameRow = $('#pwuserrow'), sub = $('#pwsub');
+  if (!cur) return;
+  try { const d = await api('/me'); PWHAS = !!d.has_password; } catch (_) { PWHAS = null; }
+  const have = PWHAS !== false;
+  cur.disabled = !have; cur.value = '';
+  $('#pwcurrentrow').style.opacity = have ? '1' : '.55';
+  cur.title = have ? '' : 'You sign in with Google or SimpleLogin, so there is no password to confirm.';
+  nameRow.hidden = have;
+  sub.textContent = have
+    ? 'Change the password you sign in with. Saving signs out every other device.'
+    : 'You sign in with a social login. Set a password here and you can sign in with a name and password too.';
+  $('#pwmsg').textContent = '';
+  $('#pwnew').value = ''; $('#pwnew2').value = ''; $('#pwusername').value = '';
+}
+if ($('#pwsave')) $('#pwsave').onclick = async () => {
+  const msg = $('#pwmsg'); msg.style.color = '';
+  const cur = $('#pwcurrent').value, pw = $('#pwnew').value, pw2 = $('#pwnew2').value;
+  const uname = ($('#pwusername').value || '').trim();
+  if (pw.length < 8) { msg.textContent = 'A password needs at least 8 characters.'; return; }
+  if (pw !== pw2) { msg.textContent = 'The two new passwords do not match.'; return; }
+  if (PWHAS === false && !uname) { msg.textContent = 'Pick a sign-in name first.'; return; }
+  busy('Saving the password...');
+  try {
+    const d = await jpost('/account/password', PWHAS === false
+      ? { password: pw, username: uname }
+      : { current: cur, password: pw });
+    PWHAS = true;
+    idle('Password saved. Other devices were signed out.');
+    await loadPasswordPanel();
+    $('#pwmsg').textContent = 'Saved. Sign in with the name "' + (d.username || uname)
+      + '" and your new password.';
+  } catch (e) { msg.textContent = ''; fail(e); }
+};
+
 // --- connected accounts: link a social login to this account ---------------
 // The link door, not the login door: you are already signed in, and the
 // provider gets attached to the account you are in.
+// --- social sign-in, from a browser or from the Android shell -------------
+// Google and the rest refuse OAuth inside an embedded webview, so in the app the
+// whole flow goes to a Custom Tab and comes back over the fireside:// scheme.
+// `app=1` is how the server knows to hand the finished session back instead of
+// setting a cookie in a tab that will be closed.
+const IN_APP = !!(window.NativeMedia && window.NativeMedia.openAuth);
+function socialStart(url) {
+  const full = url.startsWith('http') ? url : (location.origin + url);
+  if (IN_APP) { try { window.NativeMedia.openAuth(full + (full.includes('?') ? '&' : '?') + 'app=1'); return; } catch (_) {} }
+  location.href = full;
+}
 async function loadLinked() {
   const box = $('#oauthrows'); if (!box) return;
   box.innerHTML = '';
@@ -1212,7 +1410,7 @@ async function loadLinked() {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'btn quiet';
     b.textContent = on ? 'Connected' : 'Link ' + p.label;
     b.disabled = !!on;
-    b.onclick = () => { location.href = p.start + '?link=1'; };
+    b.onclick = () => socialStart(p.start + (p.start.includes('?') ? '&' : '?') + 'link=1');
     row.append(name, b); box.append(row);
   });
 }
@@ -1331,6 +1529,137 @@ async function loadGrants() {
     row.append(mk('unlimited chars', 'credits_unlimited'));
     box.append(row);
   });
+}
+// --- characters: the balance, the rate, and the one buy button -------------
+// The server is the authority on what a character costs: /credits carries the
+// sale connection's own rate and bundles, and this panel formats what it is
+// handed. It computes nothing, so money has exactly one source of truth.
+// The states matter more than the happy path: nobody is selling, selling is off,
+// a run is holding part of the balance. Those are three different sentences.
+let CREDITS = null;
+function nchar(n) {
+  if (n == null) return '\u2014';
+  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+function money(n) { return '$' + (Math.round(n * 100) / 100).toFixed(2); }
+async function loadCredits() {
+  const box = $('#creditsbox'); if (!box) return;
+  if (!USER) {
+    box.textContent = 'Sign in to see your character balance.';
+    clearCredits(); $('#creditsrate').textContent = ''; return;
+  }
+  box.textContent = 'Checking your character balance\u2026';
+  let d;
+  try { d = await api('/credits'); }
+  catch (e) {
+    CREDITS = null;
+    box.textContent = e.status === 401
+      ? 'Sign in to see your character balance.'
+      : 'Couldn\u2019t reach the server. The number below may be out of date.';
+    $('#creditsrate').textContent = '';
+    clearCredits();
+    if (e.status !== 401) {
+      const again = document.createElement('button');
+      again.className = 'btn quiet'; again.type = 'button'; again.textContent = 'Retry';
+      again.onclick = loadCredits;
+      $('#creditsbuy').append(again);
+    }
+    return;
+  }
+  CREDITS = d;
+  const avail = d.available || 0, held = d.reserved || 0;
+  box.textContent = avail > 0
+    ? nchar(avail) + ' characters left.'
+    : '0 characters. A render through the metered voice will be refused until you buy capacity.';
+  if (held > 0) box.textContent += ' \u00b7 ' + nchar(held) + ' held by a run in progress.';
+  const sale = d.sale;
+  $('#creditsrate').textContent = !sale
+    ? 'No voice server is selling characters right now, so there is nothing to buy here. Your own connected voices still work.'
+    : (sale.rate_per_1m_chars == null
+      ? 'This voice server does not publish a rate, so the price is only known at checkout.'
+      : 'Characters cost ' + money(sale.rate_per_1m_chars) + ' per million.');
+  drawCreditsBuy(d);
+  drawChip(d);
+}
+function clearCredits() {
+  const b = $('#creditsbuy'); if (b) b.innerHTML = '';
+  const m = $('#creditsmsg'); if (m) m.textContent = '';
+}
+// --- the balance in the header ---------------------------------------------
+// One number, always where the tabs are, because a refusal you did not see
+// coming is a worse product than a number you did. It formats; it does not
+// compute. Signed out, or the request failed, it stays out of the way.
+function drawChip(d) {
+  const c = $('#balchip'); if (!c) return;
+  if (!USER) { c.hidden = true; return; }
+  c.hidden = false;
+  if (!d) { c.textContent = '\u2014 chars'; c.classList.remove('zero'); return; }
+  const avail = d.available || 0;
+  c.textContent = nchar(avail) + ' chars';
+  // Red only when characters are the currency here: nobody is selling and you
+  // still have none is not a problem, a metered voice is just not an option yet.
+  c.classList.toggle('zero', avail <= 0 && !!d.sale);
+  c.title = avail > 0 ? 'Characters left \u00b7 opens Plan & storage'
+    : d.sale ? 'No characters left \u00b7 a metered render will be refused'
+    : 'No characters here \u00b7 nothing is being sold, and your own voice servers are not metered';
+}
+let _balAt = 0;
+async function refreshBalance() {
+  if (!USER) { drawChip(null); return; }
+  _balAt = Date.now();
+  try { drawChip(await api('/credits')); }
+  catch (_) { drawChip(null); }
+}
+if ($('#balchip')) $('#balchip').onclick = () => { show('set'); setSetTab('plan'); };
+// Another tab may be rendering, which spends characters. Coming back to this
+// one is the moment worth re-asking, and no more often than once a minute.
+window.addEventListener('focus', () => {
+  if (USER && Date.now() - _balAt > 60000) refreshBalance();
+});
+function drawCreditsBuy(d) {
+  const box = $('#creditsbuy'); if (!box) return;
+  box.innerHTML = '';
+  const sale = d.sale;
+  if (!sale) return;                  // never a button that can only 400
+  const can = !!d.payments_configured;
+  const msg = t => { const m = $('#creditsmsg'); if (m) m.textContent = t; };
+  const buy = usd => async () => {
+    msg('Charging\u2026');
+    try {
+      const r = await jpost('/credits/purchase', { usd: Number(usd) });
+      msg('+' + nchar(r.chars) + ' characters. Reference ' + r.reference + '.');
+      await loadCredits();
+    } catch (e) {
+      if (e.status === 503) msg('Buying is not switched on yet, so nothing was charged.');
+      else if (e.status === 402) msg('The payment was refused. Nothing was charged. ' + ((e.data || {}).detail || ''));
+      else if (e.status === 400) msg('That amount does not buy any characters. Try a larger one.');
+      else msg(e.message || 'could not buy characters');
+    }
+  };
+  const bundles = (sale.bundles || []).filter(b => b && b.usd != null);
+  if (bundles.length) {
+    bundles.forEach(b => {
+      const btn = document.createElement('button');
+      btn.className = 'btn'; btn.type = 'button';
+      btn.textContent = money(b.usd) + (b.chars ? ' \u00b7 ' + nchar(b.chars) + ' chars' : '');
+      btn.disabled = !can; if (!can) btn.title = 'Not for sale yet';
+      btn.onclick = buy(b.usd);
+      box.append(btn);
+    });
+  } else {
+    const inp = document.createElement('input');
+    inp.type = 'number'; inp.min = '1'; inp.value = '5'; inp.style.maxWidth = '90px';
+    const btn = document.createElement('button');
+    btn.className = 'btn'; btn.type = 'button'; btn.textContent = 'Buy characters';
+    btn.disabled = !can; if (!can) btn.title = 'Not for sale yet';
+    btn.onclick = () => buy(Math.max(1, parseFloat(inp.value || '0')));
+    box.append(inp, btn);
+  }
+  if (!can) {
+    const note = document.createElement('span'); note.className = 'small';
+    note.textContent = 'Buying is not switched on yet, so nothing can be charged.';
+    box.append(note);
+  }
 }
 // --- plan & storage --------------------------------------------------------
 function fmtBytes(n) { n = n || 0;
@@ -1733,7 +2062,7 @@ function renderAuth() {
   AUTH.providers.filter(p => p.kind !== 'local' && p.start).forEach(p => {
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'btn ghost'; b.textContent = 'Continue with ' + p.label;
-    b.onclick = () => { location.href = p.start; };
+    b.onclick = () => socialStart(p.start);
     provs.append(b);
   });
 }
@@ -1823,6 +2152,7 @@ async function requireSession() {
     };
     $('#lock').hidden = true;
     document.body.classList.remove('locked');
+    refreshBalance();
     return true;
   }
   AUTH.mode = AUTH.hasAccounts ? 'sign' : 'create';
@@ -1843,6 +2173,11 @@ async function requireSession() {
     $('#lockpass').focus();
     return false;
   }
+  try {
+    // Back from a browser-tab sign-in that expired on the way home.
+    const back = new URLSearchParams(location.search).get('app');
+    if (back === 'again') setTimeout(() => fail('That sign-in expired before it reached the app. Try again.'), 300);
+  } catch (_) {}
   if (claim) {                      // a social login collided; prove the account
     AUTH.mode = 'claim'; AUTH.claim = claim;
     await renderClaim();
@@ -1887,7 +2222,7 @@ async function renderClaim() {
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'btn ghost';
       b.textContent = 'Continue with ' + p.label;
-      b.onclick = () => { location.href = p.start + '?claim=' + encodeURIComponent(AUTH.claim); };
+      b.onclick = () => socialStart(p.start + '?claim=' + encodeURIComponent(AUTH.claim));
       provs.append(b);
     });
     if (d.has_password) { pfield.focus(); }
@@ -1948,25 +2283,35 @@ function enFirst(list) {
 }
 function fillVoices(sel, list, pick) {
   const sorted = enFirst(list); sel.innerHTML = '';
-  sorted.forEach(v => { const o = document.createElement('option'); o.value = v.id; o.textContent = v.label || v.id; sel.append(o); });
+  sorted.forEach(v => { const o = document.createElement('option'); o.value = v.id; o.textContent = v.label || v.id; sel.append(o);
+    VLABELS[v.id] = v.label || v.id; });
   if (pick && sorted.some(v => v.id === pick)) sel.value = pick;
+}
+// A voice id means nothing to a person, so every list we load teaches the page
+// its label. Then a message can name the default voice, not spell its id.
+let VLABELS = {};
+function vlabel(id) { return VLABELS[id] || ''; }
+function defVoiceNote() {
+  const n = vlabel(PREFS.default_voice);
+  return n ? ('your default voice, ' + n) : 'your default voice';
 }
 function filterSel(sel, q) {
   q = (q || '').trim().toLowerCase();
   [...sel.options].forEach(o => { const hit = !q || (o.value + ' ' + o.textContent).toLowerCase().includes(q); o.hidden = !hit; o.disabled = !hit; });
   const c = sel.selectedOptions[0]; if (!c || c.disabled) { const f = [...sel.options].find(o => !o.disabled); if (f) sel.value = f.value; } }
-async function loadVoices() {
-  const cid = $('#dconn').value; if (!cid) { idle('Add a voice server first.'); return; }
-  busy('Loading voices…');
+async function loadVoices(quiet) {
+  const cid = $('#dconn').value; if (!cid) { if (!quiet) idle('Add a voice server first.'); return; }
+  if (!quiet) busy('Loading voices…');
   try {
     const d = await jpost('/voices', { connection_id: cid });
     voices = d.voices || [];
     fillVoices($('#voice'), voices, PREFS.default_voice);
-    $('#vfilter').value = ''; applyFilter();
-    idle(voices.length + ' voices loaded.');
+    if (!quiet) { $('#vfilter').value = ''; applyFilter(); }
+    if (!quiet) idle(voices.length + ' voices loaded.');
   } catch (e) { fail(e); }
 }
-$('#loadvoices').onclick = loadVoices;
+$('#loadvoices').onclick = () => loadVoices();
+if ($('#dconn')) $('#dconn').onchange = () => { VOICESFOR = ''; maybeLoadDefaultVoices(); };
 function applyFilter() { filterSel($('#voice'), $('#vfilter').value); }
 $('#vfilter').oninput = applyFilter;
 
@@ -1979,21 +2324,52 @@ $('#file').onchange = e => e.target.files[0] && ingestFile(e.target.files[0]);
 $('#drop').addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) ingestFile(f); });
 function fileB64(f) { return new Promise((res, rej) => { const r = new FileReader();
   r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(f); }); }
-async function ingestFile(f) {
-  needUser(); $('#err').textContent = ''; busy('Reading ' + f.name + '…');
-  try { const b64 = await fileB64(f);
-    const d = await jpost('/import', { user: USER, kind: 'upload', filename: f.name, data_b64: b64 });
+// One import path, whatever the source. A book this account already holds
+// comes back as a question (409 plus the copy on the shelf), never as a second
+// copy and never as a dead end: the answer re-sends the same payload with
+// replace or keep_both.
+let PENDING_IMPORT = null;
+function clearDup() { PENDING_IMPORT = null; const n = $('#dupnote'); if (n) n.hidden = true; }
+async function doImport(payload, note) {
+  clearDup();
+  if (note) busy(note);
+  try {
+    const d = await jpost('/import', Object.assign({ user: USER }, payload));
     await loadLibrary(); await openBook(d.book_id, true);
+    if (d.replaced) {
+      const kept = d.kept_renditions || 0;
+      idle('Replaced. ' + (kept ? kept + ' chapter' + (kept === 1 ? ' voice' : ' voices') + ' kept, text unchanged.'
+                                 : 'The words changed, so it needs voicing again.'));
+    } else { idle(''); }
+  } catch (e) {
+    if (e.status === 409 && e.data && e.data.existing) { askReplace(payload, e.data.existing); return; }
+    fail(e);
+  }
+}
+function askReplace(payload, ex) {
+  PENDING_IMPORT = payload;
+  const n = ex.rendered ? ' ' + ex.rendered + ' of them already voiced; a voice stays as long as its words did not change.' : '';
+  $('#duptext').textContent = 'Already on your shelf as "' + ex.title + '" (' + ex.chapters + ' chapter' + (ex.chapters === 1 ? '' : 's') + ').' + n;
+  $('#dupnote').hidden = false;
+  idle('That book is already in your library.');
+  $('#dupnote').scrollIntoView({ block: 'nearest' });
+}
+$('#dupgo').onclick = () => { if (!PENDING_IMPORT) return; const p = PENDING_IMPORT;
+  doImport(Object.assign({}, p, { replace: true }), 'Replacing it, keeping what still matches…'); };
+$('#dupkeep').onclick = () => { if (!PENDING_IMPORT) return; const p = PENDING_IMPORT;
+  doImport(Object.assign({}, p, { keep_both: true }), 'Adding a second copy…'); };
+$('#dupcancel').onclick = () => { clearDup(); idle(''); };
+async function ingestFile(f) {
+  needUser(); $('#err').textContent = '';
+  try { const b64 = await fileB64(f);
+    await doImport({ kind: 'upload', filename: f.name, data_b64: b64 }, 'Reading ' + f.name + '…');
   } catch (e) { fail(e); }
 }
 $('#loadurl').onclick = loadUrl;
 $('#url').addEventListener('keydown', e => { if (e.key === 'Enter') loadUrl(); });
 async function loadUrl() {
   const url = $('#url').value.trim(); if (!url) return; needUser(); $('#err').textContent = '';
-  busy('Fetching the page and pulling the story out…');
-  try { const d = await jpost('/import', { user: USER, kind: 'url', url });
-    await loadLibrary(); await openBook(d.book_id, true);
-  } catch (e) { fail(e); }
+  await doImport({ kind: 'url', url }, 'Fetching the page and pulling the story out…');
 }
 
 // --- library ---------------------------------------------------------------
@@ -2173,7 +2549,7 @@ async function loadBook(id) {
   player = { id: book.id, title: book.title, chapters: book.chapters };
   lastName = player.id; try { localStorage.setItem(LKEY, lastName); } catch (_) {}
   const voiced = book.chapters.filter(c => { const r = renditionFor(c); return r && r.audio_ref; });
-  if (!voiced.length) { renderPlay(); idle('Nothing voiced in this voice yet — convert the book first.'); return; }
+  if (!voiced.length) { renderPlay(); idle(nothingVoicedMsg()); return; }
   let idx = voiced[0].idx;
   try { const pos = await api('/position?user=' + encodeURIComponent(USER) + '&book=' + encodeURIComponent(id));
     if (pos && pos.chapter_index != null && voiced.some(c => c.idx === pos.chapter_index)) idx = pos.chapter_index;
@@ -2216,7 +2592,8 @@ function renderVoicePicker() {
   if (!book || vs.length < 2) { box.style.display = 'none'; box.innerHTML = ''; return; }
   box.style.display = 'flex';
   box.innerHTML = '';
-  const lab = document.createElement('span'); lab.className = 'small'; lab.textContent = 'Voice';
+  const lab = document.createElement('span'); lab.className = 'small';
+  lab.textContent = vs.length + ' voices:';
   const sel = document.createElement('select'); sel.id = 'npvoice';
   vs.forEach(v => { const o = document.createElement('option'); o.value = v.key; o.textContent = rlabel(v); sel.append(o); });
   if (vs.some(v => v.key === selVoice)) sel.value = selVoice;
@@ -2276,6 +2653,17 @@ function chapterVoices(c) {
   (c.renditions || []).forEach(r => { const k = rkey(r); if (!seen.has(k)) seen.set(k, r); });
   return [...seen.values()];
 }
+// The voice in play on this book, in words a person can read: the copy picked
+// on this book, else the default from Settings. Used only to name it in copy.
+function selVoiceName() {
+  const v = bookVoices().find(x => x.key === selVoice);
+  return v ? rlabel(v) : (vlabel(PREFS.default_voice) || '');
+}
+function nothingVoicedMsg(prefix) {
+  const n = selVoiceName();
+  return (prefix || 'Nothing voiced yet') + (n ? ' in ' + n : '')
+    + '. Use Convert on the book page to voice it.';
+}
 function chapterVoiceLabel(c) {
   const vs = chapterVoices(c);
   if (!vs.length) return 'not voiced yet';
@@ -2307,19 +2695,155 @@ function drawNote() {
   else if (state[cur] === 'avail') n.textContent = 'Still on the server. Fireside downloads and checks it before playing.';
   else if (state[cur] === 'todo') {
     const other = (c.renditions || []).length;
-    n.textContent = other ? 'Not converted in this voice yet. Pick another voice, or convert it in this one.'
-                          : 'Not voiced yet. Use Convert to voice first.';
+    const vn = selVoiceName();
+    n.textContent = other ? 'Not converted in this voice yet' + (vn ? ' (' + vn + ')' : '')
+                            + '. Pick another voice above, or convert it in this one.'
+                          : 'Not voiced yet. Use Convert to voice it'
+                            + (vn ? ' in ' + vn : '') + '.';
   }
 }
 async function loadText(idx) {
   try { const d = await api('/text?book=' + encodeURIComponent(book.id) + '&idx=' + idx);
     const box = $('#nptext'); box.innerHTML = '';
-    (d.text || '').split(/\n\s*\n/).forEach((para, i) => {
-      const p = document.createElement('p'); if (i === 0) p.className = 'lead';
-      p.textContent = para.replace(/\s+/g, ' ').trim(); if (p.textContent) box.append(p);
-    });
-  } catch (e) { $('#nptext').innerHTML = '<p class="small">No text for this chapter.</p>'; }
+    readingReset();
+    const blocks = Array.isArray(d.sentences) ? d.sentences : null;
+    if (blocks && blocks.length) {
+      // One <span class=sent> per reading block, grouped into paragraphs by the
+      // block's `p`. Sentence spans are what the marker moves between, so the
+      // page can be marked without touching the audio or the text.
+      let pno = null, para = null;
+      blocks.forEach((b, i) => {
+        if (!para || b.p !== pno) {
+          para = document.createElement('p'); if (i === 0) para.className = 'lead';
+          box.append(para); pno = b.p;
+        }
+        const sp = document.createElement('span'); sp.className = 'sent';
+        sp.textContent = b.t || '';
+        para.append(sp, document.createTextNode(' '));
+      });
+      readingMap(blocks);
+    } else {
+      // An older server, or a text too broken to cut. Read it plain.
+      (d.text || '').split(/\n\s*\n/).forEach((para, i) => {
+        const p = document.createElement('p'); if (i === 0) p.className = 'lead';
+        p.textContent = para.replace(/\s+/g, ' ').trim(); if (p.textContent) box.append(p);
+      });
+    }
+    readingTick(true);
+  } catch (e) { readingReset(); $('#nptext').innerHTML = '<p class="small">No text for this chapter.</p>'; }
 }
+
+// --- reading along: mark the sentence being spoken, and follow it -----------
+// Stage one of a longer idea. The chapter is one audio file and the render does
+// not keep its chunk boundaries, so the map is an estimate: blocks laid end to
+// end by spoken length, the audio clock walked across them. Sentence level, so
+// a pause that runs long costs a sentence, not the chapter. Stage two stores
+// the real offsets at render time and calls readingMap with those instead.
+const RDKEY = 'fireside.reading';
+const RD_DEFAULT = { highlight: true, scroll: true, mode: 'follow' };
+let BMAP = null;        // [{i, el, start, end}] by cumulative spoken characters
+let BTOTAL = 0;         // spoken characters in the chapter
+let HL = -1;            // the marked block, -1 for none
+let HLPIN = 0;          // no auto-scroll before this time: you scrolled away
+let lastTick = 0;
+
+function readingPrefs() {
+  let local = null;
+  try { local = JSON.parse(localStorage.getItem(RDKEY) || 'null'); } catch (_) {}
+  const r = Object.assign({}, RD_DEFAULT, local || {}, (PREFS && PREFS.reading) || {});
+  if (r.mode !== 'center' && r.mode !== 'follow') r.mode = RD_DEFAULT.mode;
+  return { highlight: !!r.highlight, scroll: !!r.scroll, mode: r.mode };
+}
+function applyReadingUI() {
+  const R = readingPrefs();
+  const h = $('#rdhighlight'), sc = $('#rdscroll'), md = $('#rdmode');
+  if (!h) return;
+  h.checked = R.highlight; sc.checked = R.scroll; md.value = R.mode;
+  // Scrolling follows the mark; with no mark there is nothing to follow.
+  sc.disabled = md.disabled = !R.highlight;
+  const srow = sc.closest('.rdopt'); if (srow) srow.classList.toggle('off', !R.highlight);
+  const mlab = md.parentElement && md.parentElement.querySelector('label[for="rdmode"]');
+  if (mlab) mlab.style.opacity = R.highlight ? '' : '.45';
+  if (!R.highlight) clearMark();
+  else readingTick(true);
+}
+async function setReading(patch) {
+  const next = Object.assign(readingPrefs(), patch);
+  PREFS.reading = next;
+  try { localStorage.setItem(RDKEY, JSON.stringify(next)); } catch (_) {}
+  applyReadingUI();
+  try { await jpost('/prefs', { reading: next }); } catch (e) { fail(e); }
+}
+function readingReset() { BMAP = null; BTOTAL = 0; HL = -1; HLPIN = 0; }
+function readingMap(blocks) {
+  const els = [...document.querySelectorAll('#nptext .sent')];
+  if (els.length !== blocks.length) { BMAP = null; return; }   // shapes disagree: no mark, no lie
+  let run = 0; const map = [];
+  blocks.forEach((b, i) => {
+    const c = Math.max(0, parseInt(b.c, 10) || 0);
+    if (c > 0) map.push({ i, el: els[i], start: run, end: run + c });
+    run += c;
+  });
+  if (!run) { BMAP = null; return; }
+  BMAP = map; BTOTAL = run; HL = -1;
+}
+// The audio and the text are only the same thing when the chapter playing is
+// the chapter on the page.
+function readingLive() {
+  return !!(book && player.id && book.id === player.id && cur >= 0 && cur === pcur);
+}
+function blockAt(frac) {
+  if (!BMAP || !BMAP.length || !(BTOTAL > 0)) return null;
+  const at = Math.max(0, Math.min(0.999999999, frac)) * BTOTAL;
+  let lo = 0, hi = BMAP.length - 1, best = BMAP.length - 1;
+  while (lo <= hi) { const mid = (lo + hi) >> 1;
+    if (BMAP[mid].end > at) { best = mid; hi = mid - 1; } else { lo = mid + 1; } }
+  return BMAP[best];
+}
+function clearMark() {
+  if (HL >= 0 && BMAP) { const b = BMAP.find(x => x.i === HL); if (b) b.el.classList.remove('hl'); }
+  HL = -1;
+}
+function followSentence(el, R) {
+  if (!R.scroll || Date.now() < HLPIN) return;
+  const vh = window.innerHeight || 0, r = el.getBoundingClientRect();
+  if (!vh || !r.height && !r.width) return;
+  const top = vh * 0.30, bot = vh * 0.70;
+  let delta = 0;
+  if (R.mode === 'center') delta = (r.top + r.height / 2) - vh / 2;
+  else if (r.top < top) delta = r.top - top;
+  else if (r.bottom > bot) delta = r.bottom - bot;
+  if (Math.abs(delta) > 6) window.scrollBy({ top: Math.round(delta), behavior: 'smooth' });
+}
+function readingTick(force) {
+  if (!BMAP) return;
+  const R = readingPrefs();
+  if (!R.highlight) { clearMark(); return; }
+  if (!readingLive()) { clearMark(); return; }
+  const d = $a.duration || 0, t = $a.currentTime || 0;
+  if (!d || !isFinite(d)) return;
+  const now = Date.now();
+  if (!force && now - lastTick < 200) return;
+  lastTick = now;
+  const hit = blockAt(t / d);
+  const idx = hit ? hit.i : -1;
+  if (idx === HL) return;
+  clearMark();
+  if (!hit) return;
+  HL = idx; hit.el.classList.add('hl');
+  followSentence(hit.el, R);
+}
+// You scrolled away on purpose: leave the page alone for a while rather than
+// yanking it back. A seek clears it, because seeking is about the audio.
+['wheel', 'touchmove'].forEach(ev => window.addEventListener(ev, () => {
+  if (BMAP) HLPIN = Date.now() + 7000;
+}, { passive: true }));
+$('#rdhighlight').onchange = () => setReading({ highlight: $('#rdhighlight').checked });
+$('#rdscroll').onchange = () => setReading({ scroll: $('#rdscroll').checked });
+$('#rdmode').onchange = () => setReading({ mode: $('#rdmode').value });
+// applyReadingUI paints the panel from what the server holds; loadConnections
+// calls it once that answer is in, and the boot sequence calls it once here so
+// the panel is never blank on the way there.
 
 // --- play from a text selection ("continue listening from here") -------------
 // Right-here is cheap: the start of the selection is that fraction of the
@@ -2445,17 +2969,49 @@ async function loadCvVoices() {
   if (!cid) { vs.innerHTML = '<option value="">—</option>'; return; }
   try {
     const d = await jpost('/voices', { connection_id: cid });
-    // land on the voice already used on this book, else the default, else the
-    // last one picked anywhere, so a repeat conversion needs no hunting.
+    // Land on the default voice, because changing the default is how you ask
+    // for a second copy of a book you already voiced. Fall back to the voice
+    // this book already has, then the last voice picked anywhere.
     const cur = ((book && book.chapters.find(c => c.rendered && c.voice)) || {}).voice || '';
-    const pick = cur || PREFS.default_voice || localStorage.getItem('fs_lastvoice') || '';
+    const pick = PREFS.default_voice || cur || localStorage.getItem('fs_lastvoice') || '';
     fillVoices(vs, d.voices || [], pick);
     if (!vs.options.length) vs.innerHTML = '<option value="">no voices</option>';
     const f = $('#cvfilter'); if (f) { f.value = ''; filterSel(vs, ''); }
   } catch (e) { vs.innerHTML = '<option value="">could not load voices</option>'; }
+  cvMarkVoices();
   updateEstimate();
 }
+
+// What the chosen voice already covers on this book, chapter by chapter. A
+// second copy of a book is a normal thing to want, so the dialog says which
+// chapters are already done in this voice instead of quietly re-buying them.
+function cvVoiceId() { return $('#cvvoice') ? $('#cvvoice').value : ''; }
+function cvHasVoice(c, vid) {
+  return !!(c && vid && (c.renditions || []).some(r => r.voice === vid && r.audio_ref));
+}
+function cvMarkVoices() {
+  const vid = cvVoiceId(), info = $('#cvvoiceinfo');
+  if (!book) return;
+  let done = 0;
+  book.chapters.forEach(c => {
+    const row = document.querySelector('#cvlist input[data-idx="' + c.idx + '"]');
+    if (!row) return;
+    const lab = row.parentElement, has = cvHasVoice(c, vid);
+    if (has) done++;
+    row.parentElement.classList.toggle('voiced', has);
+    let tag = lab.querySelector('.cvmark');
+    if (!tag) { tag = document.createElement('span'); tag.className = 'cvmark small'; lab.append(tag); }
+    tag.textContent = !vid ? '' : (has ? 'already in this voice' : '');
+  });
+  if (!info) return;
+  const name = vlabel(vid) || vid;
+  info.textContent = !vid ? ''
+    : done === 0 ? 'This voice has no chapters of this book yet. Converting makes a new copy and keeps every other copy.'
+    : done === book.chapters.length ? 'You already have this whole book in ' + name + '. Converting again makes a second copy; both stay.'
+    : done + ' of ' + book.chapters.length + ' chapters are already in ' + name + '. Tick the rest, or convert all to redo it.';
+}
 $('#cvconn').onchange = loadCvVoices;
+if ($('#cvvoice')) $('#cvvoice').onchange = () => { cvMarkVoices(); updateEstimate(); };
 $('#cvfilter').oninput = () => filterSel($('#cvvoice'), $('#cvfilter').value);
 $('#cvcancel').onclick = () => { $('#convertdlg').hidden = true; };
 $('#cvall').onclick = () => { $('#convertdlg').hidden = true; runConvert(null, 'all ' + book.chapters.length); };
@@ -2507,7 +3063,7 @@ async function runConvert(list, label) {
     idle('Converted ' + r.total + ' chapter' + (r.total === 1 ? '' : 's') + '.');
   } catch (e) { fail(e); }
   finally { RENDERJOB = null; $('#rcancel').hidden = true; SELECT.clear();
-            await openBook(book.id); renderActiveJobs(); }
+            await openBook(book.id); renderActiveJobs(); refreshBalance(); }
 }
 
 // --- cancel a conversion ---------------------------------------------------
@@ -2611,7 +3167,8 @@ function renderCopies() {
   const vs = book ? bookVoices() : [];
   const note = $('#scopiesnote');
   if (!vs.length) {
-    note.textContent = 'Not voiced yet.';
+    note.textContent = 'Not voiced yet. Use Convert on this book to voice it'
+      + (vlabel(PREFS.default_voice) ? ' in your default voice, ' + vlabel(PREFS.default_voice) + '.' : '.');
     $('#scopiesall').hidden = true;
     return;
   }
@@ -2827,7 +3384,10 @@ $a.addEventListener('timeupdate', () => {
   $('#tcur').textContent = mmss($a.currentTime);
   $('#tleft').textContent = '−' + mmss(Math.max(0, d - $a.currentTime));
   const tt = $('#ttimes'); if (tt) tt.textContent = mmss($a.currentTime) + (d ? ' / ' + mmss(d) : '');
+  readingTick();
 });
+$a.addEventListener('seeked', () => { HLPIN = 0; readingTick(true); });
+$a.addEventListener('loadedmetadata', () => { HLPIN = 0; readingTick(true); });
 $('#prog').onclick = e => { const d = $a.duration || 0; if (!d) return;
   const r = $('#prog').getBoundingClientRect(); $a.currentTime = d * Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)); };
 
@@ -2974,7 +3534,7 @@ $('#offline').onclick = async () => {
   const ready = [], notReady = [];
   book.chapters.forEach(c => { const r = renditionFor(c);
     if (r && r.audio_ref) ready.push({ c, r }); else notReady.push(c); });
-  if (!ready.length) { idle('Nothing voiced in this voice yet — convert the book first.'); return; }
+  if (!ready.length) { idle(nothingVoicedMsg()); return; }
   busy('Downloading ' + ready.length + ' chapter(s) for offline…');
   let done = 0;
   try {
@@ -3024,7 +3584,7 @@ async function sbLoadVoices() {
     SB_VOICES = []; sel.innerHTML = '<option value="">' + (e.message || 'voices failed') + '</option>'; return;
   }
   sel.innerHTML = '';
-  fillVoices(sel, SB_VOICES, null);
+  fillVoices(sel, SB_VOICES, PREFS.default_voice || null);   // hear your default first
   if (!SB_VOICES.length) sel.innerHTML = '<option value="">no voices on this server</option>';
   else sbStatus(SB_VOICES.length + ' voices.');
 }
@@ -3228,6 +3788,7 @@ window.addEventListener('load', async () => {
   renderQueue();
   applyVolume();
   syncTog();
+  applyReadingUI();
   // A cart started before sign-up: bring it back so the purchase can finish.
   try { if (readCart().tier) show('plans'); } catch (_) {}
   try {

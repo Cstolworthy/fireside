@@ -238,6 +238,10 @@ class TestApp(unittest.TestCase):
         self.assertEqual(s, 200)
         self.assertEqual(tx["text"], "hello world")
         self.assertEqual(tx["title"], "c0")
+        # the same text as reading blocks, so the player can mark the sentence
+        # it is speaking. one block here: "hello world" has no sentence end.
+        self.assertEqual([b["t"] for b in tx["sentences"]], ["hello world"])
+        self.assertEqual(tx["sentences"][0]["p"], 0)
         import urllib.error
         with self.assertRaises(urllib.error.HTTPError) as cm:
             self._get("/text?book=%s&idx=99" % bid)

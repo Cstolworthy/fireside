@@ -13,6 +13,16 @@ PERMS = [
     "android.permission.POST_NOTIFICATIONS",
 ]
 
+# fireside://auth?token=... is the return trip from a browser-tab sign-in.
+# No host: the app only cares that the scheme is ours.
+AUTH_INTENT = """        <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="fireside" />
+        </intent-filter>
+"""
+
 SERVICE = """        <service
             android:name=".MediaPlaybackService"
             android:exported="false"
@@ -29,6 +39,12 @@ def main(path):
         line = '    <uses-permission android:name="%s" />\n' % p
         if p not in text:
             text = text.replace("<application", line + "\n    <application", 1)
+
+    if "android:scheme=\"fireside\"" not in text:
+        # inside the main <activity>, after its existing filters
+        i = text.index("<activity")
+        j = text.index("</activity>", i)
+        text = text[:j] + AUTH_INTENT + "        " + text[j:]
 
     if "MediaPlaybackService" not in text:
         text = text.replace("    </application>", SERVICE + "    </application>", 1)
