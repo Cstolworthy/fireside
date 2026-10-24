@@ -88,6 +88,11 @@
   .bk{cursor:pointer;max-width:170px}
   .bk .cover{aspect-ratio:2/3;font-size:14px;margin-bottom:8px;max-width:170px}
   .bk .spine{margin:8px 0 6px}
+  /* a series on the shelf: a name over its books, in your order */
+  .serieshd{grid-column:1/-1;display:flex;align-items:baseline;gap:10px;border-bottom:1px solid var(--line);padding-bottom:8px;margin:18px 0 0}
+  .serieshd .sname{font:600 15px/1.2 var(--serif);color:var(--text)}
+  .serieshd .sbtn{margin-left:0;opacity:.85}
+  .serieshd .sbtn:first-of-type{margin-left:auto}
   /* playing */
   .np{display:grid;grid-template-columns:1fr 260px;gap:40px}
   .story p{font:19px/1.75 var(--serif);color:var(--soft);margin-top:18px;max-width:62ch}
@@ -2401,6 +2406,41 @@ function spineEl(states, curIdx) {
   states.forEach((s, i) => { const it = document.createElement('i'); it.className = s + (i === curIdx ? ' cur' : ''); d.append(it); });
   return d;
 }
+function shelfCell(b) {
+  const cell = document.createElement('div'); cell.className = 'bk'; cell.onclick = () => { openBook(b.id); show('play'); };
+  const cover = document.createElement('div'); cover.className = 'cover'; fillCover(cover, b.id, b.title, b.cover);
+  const t = document.createElement('div'); t.style.cssText = 'font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; t.textContent = b.title;
+  const states = Array.from({ length: b.chapters }, (_, i) => i < b.rendered ? 'avail' : 'todo');
+  const sp = spineEl(states, -1);
+  const s = document.createElement('div'); s.className = 'small'; s.textContent = b.rendered + ' of ' + b.chapters + ' voiced';
+  cell.append(cover, t, sp, s);
+  return cell;
+}
+// A series you can see, not just a field in one book's settings: its name over
+// its books in your order, and the loose books after it. Rename and delete live
+// here because this is where the container is a thing rather than a dropdown.
+function seriesHead(g) {
+  const hd = document.createElement('div'); hd.className = 'serieshd';
+  const name = document.createElement('div'); name.className = 'sname'; name.textContent = g.name;
+  const n = document.createElement('div'); n.className = 'small';
+  n.textContent = g.count === 1 ? '1 book' : g.count + ' books';
+  const ren = document.createElement('button'); ren.type = 'button'; ren.className = 'btn quiet sbtn'; ren.textContent = 'Rename';
+  ren.onclick = async (ev) => {
+    ev.stopPropagation();
+    const v = (prompt('Rename the series', g.name) || '').trim(); if (!v || v === g.name) return;
+    try { await jpost('/series', { op: 'rename', id: g.id, name: v, user: USER }); await loadLibrary(); }
+    catch (e) { fail(e); }
+  };
+  const del = document.createElement('button'); del.type = 'button'; del.className = 'btn quiet sbtn'; del.textContent = 'Delete';
+  del.onclick = async (ev) => {
+    ev.stopPropagation();
+    if (!confirm('Delete the series “' + g.name + '”? The books stay on your shelf.')) return;
+    try { await jpost('/series', { op: 'delete', id: g.id, user: USER }); await loadLibrary(); }
+    catch (e) { fail(e); }
+  };
+  hd.append(name, n, ren, del);
+  return hd;
+}
 async function loadLibrary() {
   if (!USER) return;
   try {
@@ -2409,15 +2449,21 @@ async function loadLibrary() {
     $('#shelflabel').style.display = books.length ? 'block' : 'none';
     $('#libempty').style.display = books.length ? 'none' : 'block';
     $('#legend').style.display = books.length ? 'flex' : 'none';
+    const groups = [], loose = [];
     books.forEach(b => {
-      const cell = document.createElement('div'); cell.className = 'bk'; cell.onclick = () => { openBook(b.id); show('play'); };
-      const cover = document.createElement('div'); cover.className = 'cover'; fillCover(cover, b.id, b.title, b.cover);
-      const t = document.createElement('div'); t.style.cssText = 'font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; t.textContent = b.title;
-      const states = Array.from({ length: b.chapters }, (_, i) => i < b.rendered ? 'avail' : 'todo');
-      const sp = spineEl(states, -1);
-      const s = document.createElement('div'); s.className = 'small'; s.textContent = b.rendered + ' of ' + b.chapters + ' voiced';
-      cell.append(cover, t, sp, s); shelf.append(cell);
+      const s = (b.series || [])[0];
+      if (!s) { loose.push(b); return; }
+      let g = groups.find(x => x.id === s.id);
+      if (!g) { g = { id: s.id, name: s.name, count: s.count || 1, items: [] }; groups.push(g); }
+      g.items.push({ b, place: s.place || 1 });
     });
+    groups.sort((a, b) => a.name.localeCompare(b.name));
+    groups.forEach(g => {
+      g.items.sort((x, y) => x.place - y.place);
+      shelf.append(seriesHead(g));
+      g.items.forEach(it => shelf.append(shelfCell(it.b)));
+    });
+    loose.forEach(b => shelf.append(shelfCell(b)));
     renderResume();
     renderWelcome();
   } catch (e) { /* library is optional until a name is set */ }
