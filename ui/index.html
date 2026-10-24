@@ -381,6 +381,14 @@
         <input type="file" id="file" accept=".epub,application/epub+zip" hidden></div>
       <label>Or paste a story link</label>
       <div style="display:flex;gap:8px"><input id="url" placeholder="https://…" autocomplete="off"><button id="loadurl" class="btn" style="flex:0 0 96px">Load</button></div>
+      <div class="addpanel" id="dupnote" hidden style="margin-top:12px;border-color:var(--flame);background:transparent">
+        <p class="sub" id="duptext"></p>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <button class="btn" id="dupgo" type="button">Replace it</button>
+          <button class="btn quiet" id="dupkeep" type="button">Keep both</button>
+          <button class="btn quiet" id="dupcancel" type="button">Cancel</button>
+        </div>
+      </div>
       <p class="hint">A locked AO3 work needs your cookie under Settings, or drop the work's EPUB.</p>
       <p class="hint" style="margin-top:14px">New here? <button class="btn quiet" id="exbtn" type="button">Add the free example book</button></p>
     </div>
@@ -821,11 +829,17 @@ async function api(path, opts) {
   const ct = r.headers.get('content-type') || '';
   if (ct.includes('application/json')) {
     const d = await r.json();
-    if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+    if (!r.ok) throw failure(d.error || ('HTTP ' + r.status), r.status, d);
     return d;
   }
-  if (!r.ok) throw new Error('HTTP ' + r.status);
+  if (!r.ok) throw failure('HTTP ' + r.status, r.status, null);
   return r;
+}
+// An error carries its status and its whole body, so a caller can act on a
+// refusal instead of only printing it: a duplicate import is a question, not a
+// failure. The message is unchanged for every caller that only wants the text.
+function failure(msg, status, data) {
+  const e = new Error(msg); e.status = status; e.data = data || {}; return e;
 }
 const jpost = (p, o) => api(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(o) });
 
@@ -2150,21 +2164,52 @@ $('#file').onchange = e => e.target.files[0] && ingestFile(e.target.files[0]);
 $('#drop').addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) ingestFile(f); });
 function fileB64(f) { return new Promise((res, rej) => { const r = new FileReader();
   r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(f); }); }
-async function ingestFile(f) {
-  needUser(); $('#err').textContent = ''; busy('Reading ' + f.name + '…');
-  try { const b64 = await fileB64(f);
-    const d = await jpost('/import', { user: USER, kind: 'upload', filename: f.name, data_b64: b64 });
+// One import path, whatever the source. A book this account already holds
+// comes back as a question (409 plus the copy on the shelf), never as a second
+// copy and never as a dead end: the answer re-sends the same payload with
+// replace or keep_both.
+let PENDING_IMPORT = null;
+function clearDup() { PENDING_IMPORT = null; const n = $('#dupnote'); if (n) n.hidden = true; }
+async function doImport(payload, note) {
+  clearDup();
+  if (note) busy(note);
+  try {
+    const d = await jpost('/import', Object.assign({ user: USER }, payload));
     await loadLibrary(); await openBook(d.book_id, true);
+    if (d.replaced) {
+      const kept = d.kept_renditions || 0;
+      idle('Replaced. ' + (kept ? kept + ' chapter' + (kept === 1 ? ' voice' : ' voices') + ' kept, text unchanged.'
+                                 : 'The words changed, so it needs voicing again.'));
+    } else { idle(''); }
+  } catch (e) {
+    if (e.status === 409 && e.data && e.data.existing) { askReplace(payload, e.data.existing); return; }
+    fail(e);
+  }
+}
+function askReplace(payload, ex) {
+  PENDING_IMPORT = payload;
+  const n = ex.rendered ? ' ' + ex.rendered + ' of them already voiced; a voice stays as long as its words did not change.' : '';
+  $('#duptext').textContent = 'Already on your shelf as "' + ex.title + '" (' + ex.chapters + ' chapter' + (ex.chapters === 1 ? '' : 's') + ').' + n;
+  $('#dupnote').hidden = false;
+  idle('That book is already in your library.');
+  $('#dupnote').scrollIntoView({ block: 'nearest' });
+}
+$('#dupgo').onclick = () => { if (!PENDING_IMPORT) return; const p = PENDING_IMPORT;
+  doImport(Object.assign({}, p, { replace: true }), 'Replacing it, keeping what still matches…'); };
+$('#dupkeep').onclick = () => { if (!PENDING_IMPORT) return; const p = PENDING_IMPORT;
+  doImport(Object.assign({}, p, { keep_both: true }), 'Adding a second copy…'); };
+$('#dupcancel').onclick = () => { clearDup(); idle(''); };
+async function ingestFile(f) {
+  needUser(); $('#err').textContent = '';
+  try { const b64 = await fileB64(f);
+    await doImport({ kind: 'upload', filename: f.name, data_b64: b64 }, 'Reading ' + f.name + '…');
   } catch (e) { fail(e); }
 }
 $('#loadurl').onclick = loadUrl;
 $('#url').addEventListener('keydown', e => { if (e.key === 'Enter') loadUrl(); });
 async function loadUrl() {
   const url = $('#url').value.trim(); if (!url) return; needUser(); $('#err').textContent = '';
-  busy('Fetching the page and pulling the story out…');
-  try { const d = await jpost('/import', { user: USER, kind: 'url', url });
-    await loadLibrary(); await openBook(d.book_id, true);
-  } catch (e) { fail(e); }
+  await doImport({ kind: 'url', url }, 'Fetching the page and pulling the story out…');
 }
 
 // --- library ---------------------------------------------------------------
