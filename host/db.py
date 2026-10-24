@@ -48,6 +48,12 @@ CREATE TABLE IF NOT EXISTS chapters (
     text_ref VARCHAR(255), audio_ref VARCHAR(255), audio_bytes INT, duration_s DOUBLE,
     provider VARCHAR(64), voice VARCHAR(128), model VARCHAR(128), speed DOUBLE,
     PRIMARY KEY (book_id, idx));
+CREATE TABLE IF NOT EXISTS series (
+    id VARCHAR(128) PRIMARY KEY, user_id VARCHAR(128), name VARCHAR(255),
+    created_at VARCHAR(32));
+CREATE TABLE IF NOT EXISTS series_books (
+    series_id VARCHAR(128), book_id VARCHAR(128), place INT,
+    PRIMARY KEY (series_id, book_id));
 CREATE TABLE IF NOT EXISTS render_cache (
     `key` VARCHAR(191) PRIMARY KEY, audio_ref VARCHAR(255), audio_bytes INT,
     duration_s DOUBLE, provider VARCHAR(64), voice VARCHAR(128),
@@ -250,6 +256,9 @@ _ADDED_COLUMNS = [
     ("books", "publisher", "VARCHAR(255) DEFAULT ''"),
     ("books", "published", "VARCHAR(64) DEFAULT ''"),
     ("books", "description", "TEXT"),
+    # a reader changed the looked-up metadata by hand, so a later lookup must
+    # never quietly decide it knows better.
+    ("books", "user_edited", "INT DEFAULT 0"),
     ("user_prefs", "pron", "TEXT"),
     # how the player reads along: highlight, scroll, scroll mode. JSON, because
     # it is one small bag of preferences and not a thing anything else queries.
