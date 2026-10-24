@@ -4,6 +4,6 @@
   "label": "Archive of Our Own",
   "version": "1.0",
   "entry": "plugin.py",
-  "class": "Reader",
+  "class": "Ao3",
   "order": 20
 }

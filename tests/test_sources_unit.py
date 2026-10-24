@@ -9,8 +9,11 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from sources import _backends, _fetch, ao3, describe, ingest, request_key, web
-from sources.epub import Epub
+from host import egress as _fetch, egress_backends as _backends
+from plugins.reader.ao3 import plugin as ao3
+from plugins.reader.web import plugin as web
+from sources import describe, ingest, request_key
+from plugins.reader.epub.plugin import Epub
 
 
 AO3_PAGE = """
@@ -90,10 +93,10 @@ class TestAo3Parse(unittest.TestCase):
         self.assertFalse(s.matches({"kind": "upload"}))
         book = s.read({"url": "https://archiveofourown.org/works/1"},
                       lambda url, cred=None, credential_hosts=(): AO3_PAGE)
-        self.assertEqual(book["meta"]["source"], "ao3")
+        self.assertEqual(book.meta["source"], "ao3")
         self.assertEqual(s.credential_hosts(), ["archiveofourown.org"])
         self.assertEqual(s.transport()["backend"], "browser")
-        self.assertEqual([f.key for f in s.settings()], ["cookie"])
+        self.assertEqual([f.name for f in s.settings()], ["cookie"])
 
 
 WEB_PAGE = """<html><head><title>  A Page Title </title></head><body>
@@ -152,7 +155,7 @@ class TestWebParse(unittest.TestCase):
         self.assertFalse(s.matches({"kind": "url", "url": "ftp://e.com"}))
         self.assertFalse(s.matches({"kind": "upload"}))
         book = s.read({"url": "https://e.com"}, lambda url, cred=None, credential_hosts=(): WEB_PAGE)
-        self.assertEqual(book["meta"]["url"], "https://e.com")
+        self.assertEqual(book.meta["url"], "https://e.com")
         self.assertEqual(s.settings(), [])
         self.assertEqual(s.credential_hosts(), [])
 
@@ -292,7 +295,7 @@ class TestRegistry(unittest.TestCase):
         s, key, book = ingest({"kind": "url", "url": "https://archiveofourown.org/works/9"},
                               fetcher=lambda url, cred=None, credential_hosts=(),
                               transport=None: AO3_PAGE)
-        self.assertIsInstance(s, ao3.Ao3)
+        self.assertEqual(s.id, "ao3")  # loaded by the plugin host under its own module name
         self.assertEqual(book["meta"]["source"], "ao3")
         self.assertTrue(key)
 

@@ -38,7 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
 from host import accounting, auth, billing, connections, credentials, db, erase, example, grants, jobs, library, mailer, payments, playback, plans, pron, quota, reading, stats
-from sources._fetch import fetch as _fetch
+from host.egress import fetch as _fetch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UI_DIR = os.path.join(BASE_DIR, "ui")
