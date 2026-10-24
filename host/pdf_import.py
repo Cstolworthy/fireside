@@ -179,11 +179,29 @@ def _join_lines(texts: list[str]) -> str:
     return out
 
 
+MISSING_DEPS = ("the PDF reader needs two packages that are not installed here: "
+                "run \"pip install -r requirements.txt\" (pypdf, pdfminer.six). "
+                "EPUB, DOCX and web imports do not need them.")
+
+try:
+    from host.contracts import Refused as _Refused
+except Exception:                       # contracts is always importable in-tree
+    _Refused = None
+
+
 def extract(data: bytes) -> dict:
     """Parse a PDF into the same draft shape the preview window expects."""
-    from pdfminer.high_level import extract_pages
-    from pdfminer.layout import LAParams
-    import pypdf
+    try:
+        from pdfminer.high_level import extract_pages
+        from pdfminer.layout import LAParams
+        import pypdf
+    except ImportError:
+        # A missing optional package is a refusal with a reason, not a 500.
+        # This is the only place the two are imported, so the rest of the app
+        # still boots and still reads every other format.
+        if _Refused:
+            raise _Refused("the pdf reader is not installed here", MISSING_DEPS)
+        raise ImportError(MISSING_DEPS)
 
     reader = pypdf.PdfReader(io.BytesIO(data))
     pages = list(extract_pages(io.BytesIO(data),
