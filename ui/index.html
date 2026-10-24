@@ -27,6 +27,13 @@
   header p{margin:0;color:var(--faint);font-size:13px}
   #ver{color:var(--faint);font-variant-numeric:tabular-nums;font-size:12px}
   #who{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--faint)}
+  /* the balance rides in the header so it is never a surprise: it is a button
+     because the place it acts on is Settings > Plan, not a page of its own */
+  .balchip{background:none;border:1px solid var(--line);border-radius:999px;color:var(--soft);
+    font:12px/1 var(--ui);padding:6px 10px;cursor:pointer;white-space:nowrap;
+    font-variant-numeric:tabular-nums}
+  .balchip:hover{color:var(--text);border-color:var(--flame)}
+  .balchip.zero{color:var(--warn);border-color:var(--warn)}
   nav.tabs{display:flex;gap:2px;margin-top:12px;overflow-x:auto}
   nav.tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:9px 12px;color:var(--soft);font-size:14px;cursor:pointer;white-space:nowrap}
   nav.tabs button.on{color:var(--text);border-color:var(--flame)}
@@ -342,6 +349,7 @@
     <h1>fireside</h1>
     <p>Books and web stories, voiced. <span id="ver">v__HOST_VERSION__</span></p>
     <div class="topright" id="who">
+      <button class="balchip" id="balchip" type="button" title="Characters left" hidden>—</button>
       <button class="bell" id="bell" type="button" aria-label="Alerts">🔔<span class="dot"></span></button>
       <button class="avatar" id="avatar" type="button" aria-label="Account menu">?</button>
       <div class="menu" id="usermenu" hidden>
@@ -1571,11 +1579,43 @@ async function loadCredits() {
       ? 'This voice server does not publish a rate, so the price is only known at checkout.'
       : 'Characters cost ' + money(sale.rate_per_1m_chars) + ' per million.');
   drawCreditsBuy(d);
+  drawChip(d);
 }
 function clearCredits() {
   const b = $('#creditsbuy'); if (b) b.innerHTML = '';
   const m = $('#creditsmsg'); if (m) m.textContent = '';
 }
+// --- the balance in the header ---------------------------------------------
+// One number, always where the tabs are, because a refusal you did not see
+// coming is a worse product than a number you did. It formats; it does not
+// compute. Signed out, or the request failed, it stays out of the way.
+function drawChip(d) {
+  const c = $('#balchip'); if (!c) return;
+  if (!USER) { c.hidden = true; return; }
+  c.hidden = false;
+  if (!d) { c.textContent = '\u2014 chars'; c.classList.remove('zero'); return; }
+  const avail = d.available || 0;
+  c.textContent = nchar(avail) + ' chars';
+  // Red only when characters are the currency here: nobody is selling and you
+  // still have none is not a problem, a metered voice is just not an option yet.
+  c.classList.toggle('zero', avail <= 0 && !!d.sale);
+  c.title = avail > 0 ? 'Characters left \u00b7 opens Plan & storage'
+    : d.sale ? 'No characters left \u00b7 a metered render will be refused'
+    : 'No characters here \u00b7 nothing is being sold, and your own voice servers are not metered';
+}
+let _balAt = 0;
+async function refreshBalance() {
+  if (!USER) { drawChip(null); return; }
+  _balAt = Date.now();
+  try { drawChip(await api('/credits')); }
+  catch (_) { drawChip(null); }
+}
+if ($('#balchip')) $('#balchip').onclick = () => { show('set'); setSetTab('plan'); };
+// Another tab may be rendering, which spends characters. Coming back to this
+// one is the moment worth re-asking, and no more often than once a minute.
+window.addEventListener('focus', () => {
+  if (USER && Date.now() - _balAt > 60000) refreshBalance();
+});
 function drawCreditsBuy(d) {
   const box = $('#creditsbuy'); if (!box) return;
   box.innerHTML = '';
@@ -2112,6 +2152,7 @@ async function requireSession() {
     };
     $('#lock').hidden = true;
     document.body.classList.remove('locked');
+    refreshBalance();
     return true;
   }
   AUTH.mode = AUTH.hasAccounts ? 'sign' : 'create';
@@ -3022,7 +3063,7 @@ async function runConvert(list, label) {
     idle('Converted ' + r.total + ' chapter' + (r.total === 1 ? '' : 's') + '.');
   } catch (e) { fail(e); }
   finally { RENDERJOB = null; $('#rcancel').hidden = true; SELECT.clear();
-            await openBook(book.id); renderActiveJobs(); }
+            await openBook(book.id); renderActiveJobs(); refreshBalance(); }
 }
 
 // --- cancel a conversion ---------------------------------------------------
