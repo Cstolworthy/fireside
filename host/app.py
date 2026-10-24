@@ -37,7 +37,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from host.host import Host
-from host import accounting, auth, billing, connections, credentials, db, erase, example, grants, jobs, library, mailer, payments, playback, plans, pron, quota, stats
+from host import accounting, auth, billing, connections, credentials, db, erase, example, grants, jobs, library, mailer, payments, playback, plans, pron, quota, reading, stats
 from sources._fetch import fetch as _fetch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1146,7 +1146,15 @@ class App:
         except (KeyError, ValueError):
             return 404, {"error": "no chapter"}
         rows = [c for c in library.chapters(self.conn, q["book"]) if c["idx"] == idx]
-        return 200, {"text": t, "title": rows[0]["title"] if rows else ""}
+        # Reading blocks: the same text cut into sentences, each weighted by how
+        # long the voice takes to say it, so the player can mark the one it is
+        # speaking. Weights use the pronounced text, because that is what was
+        # recorded. A client that does not know this field renders `text`.
+        uid = self._uid(q, body)
+        rules = pron.load(self.conn, uid) if uid else []
+        blocks = reading.sentences(t, weigh=lambda s: len(pron.spoken(s, rules)))
+        return 200, {"text": t, "title": rows[0]["title"] if rows else "",
+                     "sentences": blocks}
 
     def chapter(self, q, body):
         idx = int(q["idx"])
@@ -1344,7 +1352,8 @@ class App:
         prefs = connections.get_prefs(self.conn, uid)
         return 200, {"connections": out, "admin": is_admin,
                      "default_connection_id": prefs["default_connection_id"],
-                     "default_voice": prefs["default_voice"]}
+                     "default_voice": prefs["default_voice"],
+                     "reading": prefs["reading"]}
 
     def _writable_fields(self, provider, uid, is_admin):
         """The field-name -> kind map for a provider (who may write what is
@@ -1409,6 +1418,8 @@ class App:
             kw["connection_id"] = body.get("default_connection_id") or ""
         if "default_voice" in body:
             kw["voice"] = body.get("default_voice") or ""
+        if "reading" in body and isinstance(body.get("reading"), dict):
+            kw["reading"] = body.get("reading")
         connections.set_prefs(self.conn, uid, **kw)
         return 200, {"ok": True}
 
