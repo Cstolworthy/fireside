@@ -244,18 +244,47 @@ class App:
             return 400, {"error": "no reader matched"}
         cred = self._source_cred(user, plugin.id, body.get("cred"))
         book = plugin.obj.read(req, self._make_fetch(plugin.obj, cred), cred)
+        # Whatever identity the reader named, this account either already holds
+        # that work or it does not. Importing again is a replace, not a second
+        # copy: two of the same book on one shelf is a mistake, not a collection.
+        existing = library.find_same(self.conn, user,
+                                     getattr(book, "meta", None) or {}, plugin.obj)
+        if existing and _truthy(body.get("keep_both")):
+            existing = None
+        elif existing and not _truthy(body.get("replace")):
+            held = library.get_book(self.conn, existing) or {}
+            chs = library.chapters(self.conn, existing)
+            return 409, {
+                "error": "you already have this book",
+                "detail": "this is already on your shelf as \"%s\""
+                          % (held.get("title") or ""),
+                "existing": {"book_id": existing,
+                             "title": held.get("title") or "",
+                             "chapters": len(chs),
+                             "rendered": sum(1 for c in chs if c["audio_ref"])}}
         incoming = self._book_bytes(book)
+        # A replace only needs room for the difference: the chapter text and
+        # audio it is about to displace are already counted against this plan.
+        already = library.shelf_bytes(self.conn, existing) if existing else 0
         plan = (billing.get(self.conn, user) or {}).get("plan") or ""
         blocks = billing.blocks(self.conn, user)
         # The same gate every other write uses, so an admin storage grant lifts
         # an import too. Asking quota.check_room directly here skipped the grant
         # and refused a book to an account whose limit was already lifted.
-        if not self._storage_ok(user, incoming):
+        if not self._storage_ok(user, max(0, incoming - already)):
             left = max(0, quota.allowance_bytes(plan, blocks)
                        - quota.usage(self.conn, self.storage, user)["own_bytes"])
             return 507, {"error": "not enough storage",
                          "detail": "this book needs about %d bytes; %d left in your plan"
-                                   % (incoming, left)}
+                                   % (max(0, incoming - already), left)}
+        if existing:
+            swapped = library.replace_book(self.conn, self.storage, existing, book)
+            self._maybe_cover(existing, book)
+            out = {"book_id": existing, "title": getattr(book, "title", ""),
+                   "chapters": len(getattr(book, "chapters", [])),
+                   "replaced": True}
+            out.update(swapped)
+            return 200, out
         bid = library.add_book(self.conn, self.storage, user, book)
         self._maybe_cover(bid, book)
         return 200, {"book_id": bid, "title": getattr(book, "title", ""),

@@ -17,6 +17,7 @@ from host.contracts import Field, to_book
 import io
 import os
 import re
+import hashlib
 import zipfile
 
 from host.textutil import text_of
@@ -158,6 +159,14 @@ def parse_epub(data: bytes, name: str) -> dict:
     return out
 
 
+def identity_of(data: bytes, name: str = "", isbn: str = "") -> str:
+    """One book, however its file is named: the ISBN when the epub carries one
+    (a re-download off a store is the same book), else a hash of the bytes."""
+    if isbn:
+        return "epub:isbn:" + isbn
+    return "epub:sha:" + hashlib.sha256(data or b"").hexdigest()
+
+
 class Epub:
     id = "epub"
     label = "EPUB file"
@@ -170,7 +179,14 @@ class Epub:
         book["meta"] = {"source": self.id}
         if book.get("isbn"):
             book["meta"]["isbn"] = book["isbn"]
+        book["meta"]["identity"] = identity_of(
+            req.get("data") or b"", req.get("filename") or "", book.get("isbn") or "")
         return to_book(book)
+
+    def same(self, stored, incoming) -> bool:
+        a = (stored or {}).get("identity") or ""
+        b = (incoming or {}).get("identity") or ""
+        return bool(a and a == b)
 
     def settings(self):
         return []

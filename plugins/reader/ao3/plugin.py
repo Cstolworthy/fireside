@@ -31,6 +31,13 @@ _WSKIN = re.compile(r'(?is)<div\b[^>]*\bid="workskin"[^>]*>(.*)')
 _WTITLE = re.compile(r'(?is)<h2[^>]*class="[^"]*\btitle\b[^"]*"[^>]*>(.*?)</h2>')
 
 
+def work_id(url: str) -> str:
+    """The numeric work id in /works/<id>. The chapter link, a #comment anchor
+    and the full-work link are all the same work."""
+    m = re.match(r"^/works/(\d+)", urllib.parse.urlparse(url or "").path or "")
+    return m.group(1) if m else ""
+
+
 def is_work_url(url: str) -> bool:
     u = urllib.parse.urlparse(url or "")
     host = (u.hostname or "").lower()
@@ -111,7 +118,17 @@ class Ao3:
         page = fetch(full_work_url(url), cred=cred, credential_hosts=self.credential_hosts())
         book = parse_ao3(page, url)
         book["meta"] = {"source": self.id, "url": url}
+        wid = work_id(url)
+        if wid:
+            book["meta"]["identity"] = "ao3:" + wid
         return to_book(book)
+
+    def same(self, stored, incoming) -> bool:
+        a = (stored or {}).get("identity") or ""
+        b = (incoming or {}).get("identity") or ""
+        sa = a or ("ao3:" + work_id((stored or {}).get("url") or ""))
+        sb = b or ("ao3:" + work_id((incoming or {}).get("url") or ""))
+        return bool(sa != "ao3:" and sa == sb)
 
     def settings(self):
         return [Field(

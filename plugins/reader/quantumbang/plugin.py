@@ -73,6 +73,12 @@ def split_slug(slug: str):
     return slug, None, None
 
 
+def identity_of(url: str) -> str:
+    """One story, however its parts are addressed: the slug with any -N/M-
+    segment cut out. Any part page and the landing page name the same book."""
+    return "quantumbang:" + split_slug(slug_of(url))[0].strip("/-")
+
+
 def _links(page: str, base_url: str) -> list:
     """Every absolute same-host link on the page, deduped, in page order."""
     base_host = _host(base_url)
@@ -179,6 +185,7 @@ def parse_parts(pages: list):
     if not title:
         title = "Untitled"
     meta.update({"source": "quantumbang", "url": pages[0][0], "parts": len(chapters)})
+    meta["identity"] = identity_of(pages[0][0])
     return {"title": title[:200], "chapters": chapters, "meta": meta}
 
 
@@ -213,6 +220,23 @@ class Quantumbang:
         if len(book["chapters"]) > 1:
             book["meta"]["page_count"] = len(pages)
         return to_book(book)
+
+    def same(self, stored, incoming) -> bool:
+        """A story already on the shelf, from any part link, is this story.
+
+        Pieces imported before this reader existed were fetched by the generic
+        web reader one page at a time; their stored meta says source 'web' but
+        carries the same slug, so the family key still finds them.
+        """
+        a = ((stored or {}).get("url") or "")
+        b = ((incoming or {}).get("url") or "")
+        if not a or not b:
+            ia = (stored or {}).get("identity") or ""
+            ib = (incoming or {}).get("identity") or ""
+            return bool(ia and ia == ib)
+        if not is_quantumbang(a):
+            return False
+        return identity_of(a) == identity_of(b)
 
     def settings(self):
         return []
