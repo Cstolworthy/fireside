@@ -18,7 +18,7 @@ import zipfile
 from http.server import ThreadingHTTPServer
 
 from host.app import App, make_handler
-from sources.epub import parse_epub
+from plugins.reader.epub.plugin import parse_epub
 from tests.test_app import SPEECH_BODY, STORAGE_BODY
 from tests.test_pluginhost import write_plugin
 

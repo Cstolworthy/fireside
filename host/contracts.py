@@ -22,6 +22,13 @@ class Field:
     default: Any = None
     choices: Optional[List[str]] = None
     help: str = ""
+    placeholder: str = ""
+
+    def dict(self):
+        """Plain data, so the host UI never has to know a plugin's class."""
+        return {"name": self.name, "label": self.label, "kind": self.kind,
+                "default": self.default, "choices": self.choices,
+                "help": self.help, "placeholder": self.placeholder}
 
 
 @dataclass

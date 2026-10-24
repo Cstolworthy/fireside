@@ -8,8 +8,8 @@ import io
 import unittest
 import zipfile
 
-from sources._text import clean_fragment, text_of
-from sources.epub import parse_epub
+from host.textutil import clean_fragment, text_of
+from plugins.reader.epub.plugin import parse_epub
 from providers._text import chunk_text
 
 

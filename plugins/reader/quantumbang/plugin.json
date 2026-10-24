@@ -1,0 +1,9 @@
+{
+  "id": "quantumbang",
+  "kind": "reader",
+  "label": "Quantum Bang story",
+  "version": "1.0",
+  "entry": "plugin.py",
+  "class": "Quantumbang",
+  "order": 30
+}
