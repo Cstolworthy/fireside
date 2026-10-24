@@ -739,3 +739,38 @@ class TestGetStarted(unittest.TestCase):
         html = self._html()
         self.assertIn("voiced) { el.hidden = true; return; }", html)
         self.assertIn("localStorage.setItem(WELCOME_KEY, USER)", html)
+
+
+class TestBalanceInHeader(unittest.TestCase):
+    """The balance is not a place you visit, it is a number you can see. It
+    rides in the header next to the bell, it comes from /credits (the same
+    single source of truth the Plan panel reads), and pressing it lands on the
+    screen that explains it."""
+
+    def _html(self):
+        with open(os.path.join(UI_DIR, "index.html"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_the_chip_is_in_the_header(self):
+        html = self._html()
+        self.assertIn('id="balchip"', html)
+        self.assertIn("function drawChip", html)
+        self.assertIn("function refreshBalance", html)
+        self.assertIn("await api('/credits')", html)
+
+    def test_it_opens_the_plan_screen(self):
+        html = self._html()
+        self.assertIn("$('#balchip').onclick", html)
+        self.assertIn("setSetTab('plan')", html)
+
+    def test_it_refreshes_when_the_number_can_have_moved(self):
+        html = self._html()
+        # after signing in, after a conversion (a render spends characters),
+        # and when the tab regains focus (another tab may be rendering).
+        self.assertIn("    refreshBalance();\n    return true;", html)
+        self.assertIn("renderActiveJobs(); refreshBalance();", html)
+        self.assertIn("addEventListener('focus'", html)
+
+    def test_zero_does_not_read_as_a_failure_when_nothing_is_sold(self):
+        html = self._html()
+        self.assertIn("avail <= 0 && !!d.sale", html)
