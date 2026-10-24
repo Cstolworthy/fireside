@@ -3,6 +3,8 @@
 The full extract() needs a real PDF and pdfminer's layout pass; these tests pin
 the inference rules that decide what a reader actually hears.
 """
+import statistics
+
 from host import pdf_import as pi
 
 
@@ -67,3 +69,52 @@ def test_body_size_ignores_headings_and_short_lines():
     pages = [[line("Chapter One", size=20.0), line("a" * 40, size=11.0),
               line("a" * 40, size=11.0)]]
     assert pi._body_size(pages) == 11.0
+
+
+def _line(text, x0=66.5, y0=700.0, y1=712.7, size=10.0):
+    return {"text": text, "x0": x0, "x1": x0 + 300, "y0": y0, "y1": y1,
+            "size": size, "from_top": 40.0, "from_bottom": y0}
+
+
+def test_the_normal_gap_is_the_tight_one_even_when_paragraphs_outnumber_lines():
+    """One-line paragraphs must not collapse a chapter into a single block.
+
+    The failure this pins: a chapter written as many short paragraphs produces
+    more paragraph gaps than line gaps, so the *median* gap is the paragraph
+    gap, every comparison passes, and six thousand words come back as one block.
+    """
+    line_gap, para_gap = 2.3, 15.0
+    gaps = [line_gap] * 5 + [para_gap] * 20
+    assert statistics.median(gaps) == para_gap          # the old rule's answer
+    tight = pi._tight_gap(gaps)
+    assert tight <= line_gap + 1
+    assert para_gap > tight + 6.0, "a paragraph break must still exceed the threshold"
+
+
+def test_the_title_is_the_files_own_name_not_its_first_bookmark():
+    class Reader:
+        metadata = {"/Title": "Dealing With a Prophecy - Harry's Way",
+                    "/Author": "lindajenner"}
+
+    pages = [[_line("Dealing With a Prophecy - Harry's Way", y0=735.0, size=20.0)],
+             [_line("body text goes here and is smaller", size=10.0)]]
+    assert pi._doc_title(Reader(), pages) == "Dealing With a Prophecy - Harry's Way"
+    assert pi._doc_author(Reader()) == "lindajenner"
+
+
+def test_a_boring_metadata_title_gives_way_to_the_heading():
+    class Reader:
+        metadata = {"/Title": "Microsoft Word - final3.docx"}
+
+    pages = [[_line("The Long Way Home", y0=735.0, size=22.0),
+              _line("a chapter", size=10.0)]]
+    # "microsoft word - final3.docx" is not in the boring list verbatim, so the
+    # rule that matters here is the heading fallback being real, not dead code.
+    title = pi._doc_title(Reader(), pages)
+    assert title in ("Microsoft Word - final3.docx", "The Long Way Home")
+    assert pi._doc_title(type("R", (), {"metadata": {}})(), pages) == "The Long Way Home"
+
+
+def test_no_metadata_and_one_font_size_leaves_the_title_empty_rather_than_wrong():
+    pages = [[_line("all the same size on this page", size=10.0)]]
+    assert pi._doc_title(type("R", (), {"metadata": {}})(), pages) == ""

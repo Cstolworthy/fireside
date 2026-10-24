@@ -43,6 +43,28 @@ def is_toc_entry(text: str) -> bool:
     return bool(t) and bool(_TOC_LINE.search(t))
 
 
+# A line that ends like this is a complete thought, however short. Dialogue is
+# mostly short complete thoughts ("Yes." "He nodded."), which is why the old
+# rule - any block of two words or fewer - flagged three hundred lines of a
+# novel and taught the reader to ignore the flag list. A fragment is a line that
+# stops mid-thought, and that is visible in how it ends.
+_TERMINAL = (".", "!", "?", ":", ";", "-", "\u2014", "\u2013", ")", "]", "\u2026",
+             "\u201d", "\u2019", '"', "'", "\u00bb", "\u3002", "\uff01", "\uff1f")
+
+
+def _looks_cut_off(text: str) -> bool:
+    t = (text or "").strip()
+    if not t or t.isdigit():
+        return False
+    # A stray couple of characters on its own line is an artefact of the parse.
+    words = t.split()
+    if len(words) == 1 and len(t) <= 3 and not t.endswith(_TERMINAL):
+        return True
+    # A hyphen at the end with nothing after it means a word was broken and the
+    # other half went somewhere else.
+    return t.endswith("-") and len(t) > 3
+
+
 def rules_for(text: str, *, in_toc: bool = False, running: set | None = None) -> list[str]:
     """Every junk rule that fires for one block. Advisory only, never a delete."""
     t = text.strip()
@@ -60,7 +82,7 @@ def rules_for(text: str, *, in_toc: bool = False, running: set | None = None) ->
         rules.append("page-number")
     if _ALLCAPS.match(t) and len(t) <= 40 and len(t.split()) >= 2:
         rules.append("all-caps")
-    if len(t.split()) <= 2 and len(t) <= 15 and not t.isdigit():
+    if _looks_cut_off(t):
         rules.append("fragment")
     if _FRONT.search(t) and len(t) <= 200:
         rules.append("front-matter")

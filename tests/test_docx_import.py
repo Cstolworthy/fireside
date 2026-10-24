@@ -80,7 +80,9 @@ def test_nothing_is_deleted_only_flagged():
     assert rules["Chapter One ................................ 1"] == "toc"
     assert rules["3"] in ("page-number", "fragment")
     assert rules["SHE SAID NOTHING"] == "all-caps"
-    assert rules["Okay."] == "fragment"
+    # A short complete thought is prose, not an artefact. Dialogue is mostly
+    # short complete thoughts, and flagging them buried the real junk.
+    assert "Okay." not in rules
     assert "(c) 2019 Some Author. All rights reserved." in [
         f["text"] for f in d["flags"] if f["rule"] == "front-matter"]
 
@@ -147,3 +149,13 @@ def test_a_doc_that_starts_with_a_heading_keeps_flags_on_the_right_text():
     for f in d["flags"]:
         b = [b for b in d["chapters"][f["chapter"]]["blocks"] if b["id"] == f["block"]]
         assert b and b[0]["text"].strip() == f["text"]
+
+def test_fragment_means_a_line_that_stops_mid_thought():
+    from host.junkrules import rules_for
+    # complete short lines: prose and dialogue, never flagged
+    for ok in ("Okay.", "\u201cYes.\u201d", "He nodded.", "No!", "Wait\u2026",
+               "Potions E", "BEQUESTS", "4 Privet Drive,"):
+        assert "fragment" not in rules_for(ok), ok
+    # actual artefacts: a stray character, a word broken at the hyphen
+    assert "fragment" in rules_for("A")
+    assert "fragment" in rules_for("the middle of a sen-")
