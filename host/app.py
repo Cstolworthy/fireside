@@ -799,7 +799,13 @@ class App:
                     res_id = accounting.reserve(self.conn, user, price,
                                                 getattr(quote, "currency", "USD"))
                 except accounting.Insufficient as e:
-                    return 402, {"error": "insufficient balance", "detail": str(e)}
+                    # The numbers travel with the refusal. The two words on their
+                    # own leave a reader with no idea how far short they are, and
+                    # the screen can only print what it is sent.
+                    return 402, {"error": "insufficient balance",
+                                 "needed": price,
+                                 "available": accounting.available(self.conn, user),
+                                 "detail": str(e)}
         jid = jobs.start_job(self.conn, user, book_id, speech.id, voice, model,
                              total=len(todo), status="queued")
         opts = {"model": model, "speed": speed}
